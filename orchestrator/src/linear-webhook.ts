@@ -1,12 +1,15 @@
 /**
  * Linear webhook handler.
  *
- * Receives Linear webhook events, matches them to products via team ID,
- * and dispatches agent tasks for new/updated issues.
+ * All products share one Linear team ("Team Bryan"). Issues are routed
+ * to products based on their Linear project name (e.g., "Health Tool" → health-tool).
+ *
+ * Issues without a project are ignored — the agent needs to know which
+ * product/repos to work with.
  */
 
 import { Hono } from "hono";
-import { getProductByLinearTeam } from "./registry";
+import { getProductByLinearProject, isOurTeam } from "./registry";
 import type { Bindings } from "./index";
 
 const linearWebhook = new Hono<{ Bindings: Bindings }>();
@@ -23,12 +26,15 @@ interface LinearWebhookPayload {
     labelIds?: string[];
     state?: { name: string };
     assignee?: { name: string };
+    project?: { id: string; name: string };
   };
 }
 
 linearWebhook.post("/", async (c) => {
   // Verify webhook signature if configured
   const webhookSecret = c.env.LINEAR_WEBHOOK_SECRET;
+  let payload: LinearWebhookPayload;
+
   if (webhookSecret) {
     const signature = c.req.header("Linear-Signature");
     if (!signature) {
@@ -56,17 +62,16 @@ linearWebhook.post("/", async (c) => {
       return c.json({ error: "Invalid signature" }, 401);
     }
 
-    // Parse from already-read body
-    const payload = JSON.parse(rawBody) as LinearWebhookPayload;
-    return handleEvent(payload, c.env);
+    payload = JSON.parse(rawBody) as LinearWebhookPayload;
+  } else {
+    payload = await c.req.json<LinearWebhookPayload>();
   }
 
-  const payload = await c.req.json<LinearWebhookPayload>();
   return handleEvent(payload, c.env);
 });
 
 async function handleEvent(payload: LinearWebhookPayload, env: Bindings) {
-  // Only handle issue creation and updates
+  // Only handle issues
   if (payload.type !== "Issue") {
     return new Response(JSON.stringify({ ok: true, ignored: true }), {
       headers: { "Content-Type": "application/json" },
@@ -81,16 +86,45 @@ async function handleEvent(payload: LinearWebhookPayload, env: Bindings) {
 
   if (!shouldTrigger) {
     return new Response(
-      JSON.stringify({ ok: true, ignored: true, reason: "action not relevant" }),
+      JSON.stringify({
+        ok: true,
+        ignored: true,
+        reason: "action not relevant",
+      }),
       { headers: { "Content-Type": "application/json" } },
     );
   }
 
-  // Look up which product this belongs to
-  const match = getProductByLinearTeam(payload.data.teamId);
+  // Verify this is from our team
+  if (!isOurTeam(payload.data.teamId)) {
+    return new Response(
+      JSON.stringify({ ok: true, ignored: true, reason: "not our team" }),
+      { headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  // Issue must belong to a project so we know which product/repos to use
+  const projectName = payload.data.project?.name;
+  if (!projectName) {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        ignored: true,
+        reason: "no project — cannot determine product",
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  // Look up the product by project name
+  const match = getProductByLinearProject(projectName);
   if (!match) {
     return new Response(
-      JSON.stringify({ ok: true, ignored: true, reason: "unknown team" }),
+      JSON.stringify({
+        ok: true,
+        ignored: true,
+        reason: `unknown project: ${projectName}`,
+      }),
       { headers: { "Content-Type": "application/json" } },
     );
   }
@@ -115,6 +149,7 @@ async function handleEvent(payload: LinearWebhookPayload, env: Bindings) {
     JSON.stringify({
       ok: true,
       product: match.name,
+      project: projectName,
       ticketId: payload.data.id,
     }),
     { headers: { "Content-Type": "application/json" } },
