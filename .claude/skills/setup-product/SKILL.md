@@ -1,0 +1,95 @@
+---
+name: setup-product
+description: Register a new product with the Product Engineer system. Walks through repo setup, secret provisioning, trigger configuration, and testing.
+---
+
+# Setup Product
+
+Register a new product so the Product Engineer agent can work on it.
+
+## Steps
+
+### Step 1: Identify the Product
+
+Gather:
+- **Product name** — short identifier (e.g., `health-tool`, `bike-tool`)
+- **Repos** — one or more GitHub repos that make up this product (e.g., `fryanpan/health-tool` for a single repo, or `org/frontend` + `org/backend` for multi-repo)
+- **Slack channel** — where the agent communicates (e.g., `#health-tool`)
+- **Linear team ID** — if the product uses Linear for tickets
+
+### Step 2: Add to Registry
+
+Add the product to the orchestrator's registry in `orchestrator/src/registry.ts`:
+
+```typescript
+"product-name": {
+  repos: ["org/repo-name"],
+  slack_channel: "#product-channel",
+  triggers: {
+    feedback: { enabled: true, callback_url: "https://..." },  // if it has a feedback widget
+    linear: { enabled: true, team_id: "..." },                  // if it uses Linear
+    slack: { enabled: true },                                    // if it accepts Slack commands
+  },
+  secrets: {
+    GITHUB_TOKEN: "PRODUCT_NAME_GITHUB_TOKEN",
+    SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
+    SLACK_APP_TOKEN: "SLACK_APP_TOKEN",
+    LINEAR_API_KEY: "LINEAR_API_KEY",
+    ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+  },
+}
+```
+
+### Step 3: Provision Secrets
+
+For each secret in the product's config:
+
+1. Create a GitHub fine-grained PAT for the product's repo(s) with permissions: Contents (read/write), Pull requests (read/write), Issues (read)
+2. Add it to Cloudflare secrets: `wrangler secret put PRODUCT_NAME_GITHUB_TOKEN`
+3. Shared secrets (SLACK_BOT_TOKEN, ANTHROPIC_API_KEY, etc.) only need to be set once
+
+### Step 4: Configure Triggers
+
+**For Linear webhooks:**
+1. Go to Linear Settings → API → Webhooks
+2. Add webhook URL: `https://product-engineer.fryanpan.workers.dev/api/webhooks/linear`
+3. Select events: Issue created, Issue updated
+4. Set the webhook secret to match `LINEAR_WEBHOOK_SECRET`
+
+**For Slack commands:**
+1. Ensure the Slack app is installed in the product's channel
+2. The bot must be invited to the channel
+3. Enable Event Subscriptions with URL: `https://product-engineer.fryanpan.workers.dev/api/webhooks/slack/events`
+4. Subscribe to: `app_mention`
+
+**For feedback widgets (web apps only):**
+1. The product's worker dispatches to the orchestrator: `POST /api/dispatch`
+2. Include `X-API-Key` header with the orchestrator's API key
+
+**For GitHub PR merge detection:**
+1. Add webhook to the repo: `https://product-engineer.fryanpan.workers.dev/api/webhooks/github`
+2. Select events: Pull requests
+3. Set the webhook secret to match `GITHUB_WEBHOOK_SECRET`
+
+### Step 5: Verify the Product's Claude Setup
+
+The product repo should have:
+- `CLAUDE.md` — project instructions the agent will follow
+- `.claude/skills/` — any product-specific skills
+- `.claude/rules/` — always-apply rules
+- `.mcp.json` — MCP server configuration (Linear, context7, etc.)
+
+If missing, use the metaproject's `/propagate` skill to push templates.
+
+### Step 6: Test
+
+1. Create a test Linear ticket in the product's team
+2. Or mention the bot in the product's Slack channel: `@PE test: create a hello world file`
+3. Watch the Slack channel for agent notifications
+4. Verify the agent creates a PR
+
+## Principles
+
+- **One product = one registry entry.** Even multi-repo products get a single entry with multiple repos.
+- **Secrets are per-product for GitHub tokens** (different repo access), but shared for platform tokens (Slack, Linear, Anthropic).
+- **Test before shipping.** Always verify end-to-end with a throwaway task before declaring the product ready.

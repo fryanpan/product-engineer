@@ -1,0 +1,29 @@
+name = "product-engineer"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Task dispatch queue
+[[queues.producers]]
+queue = "pe-tasks"
+binding = "TASK_QUEUE"
+
+[[queues.consumers]]
+queue = "pe-tasks"
+max_batch_size = 1
+max_concurrency = 3
+
+# Sandbox containers (Cloudflare Containers)
+[[containers]]
+class_name = "Sandbox"
+image = "../Dockerfile"
+instance_type = "lite"
+max_instances = 5
+
+[[durable_objects.bindings]]
+name = "Sandbox"
+class_name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sandbox"]
