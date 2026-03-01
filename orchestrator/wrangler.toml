@@ -14,12 +14,12 @@ max_batch_size = 1
 max_concurrency = 3
 
 # Sandbox containers (Cloudflare Containers)
-# Requires Workers Paid plan ($5/mo). Uncomment after upgrading.
-# [[containers]]
-# class_name = "Sandbox"
-# image = "../Dockerfile"
-# instance_type = "lite"
-# max_instances = 5
+# Requires Workers Paid plan ($5/mo) and Docker for local deploys.
+[[containers]]
+class_name = "Sandbox"
+image = "../Dockerfile"
+instance_type = "lite"
+max_instances = 5
 
 [durable_objects]
 bindings = [

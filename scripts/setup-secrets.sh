@@ -29,6 +29,20 @@ Type 'skip' or press Enter to skip any secret.
 
 HEADER
 
+# ─── 0. Prerequisites ───────────────────────────────────────
+cat <<'STEP'
+━━━ 0. Prerequisites ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Cloudflare Workers Paid plan ($5/mo) — required for Containers.
+
+  Open: https://dash.cloudflare.com/<account-id>/workers/plans
+  Click "Purchase Workers Paid" if you're on the Free plan.
+
+  Docker Desktop — required for building sandbox container images.
+  https://www.docker.com/products/docker-desktop/
+
+STEP
+
 # ─── 1. Anthropic ────────────────────────────────────────────
 cat <<'STEP'
 ━━━ 1. ANTHROPIC_API_KEY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
