@@ -14,6 +14,7 @@ max_batch_size = 1
 max_concurrency = 3
 
 # Sandbox containers (Cloudflare Containers)
+# Image is built in CI (GitHub Actions) — no local Docker needed.
 [[containers]]
 class_name = "Sandbox"
 image = "../Dockerfile"
