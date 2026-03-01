@@ -8,10 +8,11 @@
  * 3. Cleans up on completion or failure
  */
 
+import { type Sandbox as SandboxType } from "@cloudflare/sandbox";
 import type { ProductConfig } from "./registry";
 
 export interface SandboxEnv {
-  Sandbox: DurableObjectNamespace;
+  Sandbox: DurableObjectNamespace<SandboxType>;
   [key: string]: unknown; // Secret bindings resolved at runtime
 }
 

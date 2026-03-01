@@ -3,17 +3,27 @@
     "allow": [
       "Bash(bun test*)",
       "Bash(bun run*)",
+      "Bash(npx wrangler*)",
       "Bash(wrangler*)",
       "Bash(git *)",
       "Bash(gh *)",
       "Bash(ls *)",
       "Bash(cat *)",
-      "Bash(mkdir *)"
+      "Bash(mkdir *)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs"
     ],
     "deny": [
       "Bash(rm -rf *)",
       "Bash(wrangler secret*)"
     ]
+  },
+  "enabledPlugins": {
+    "code-review@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "context7@claude-plugins-official": true
   },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"

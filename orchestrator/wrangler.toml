@@ -20,9 +20,10 @@ image = "../Dockerfile"
 instance_type = "lite"
 max_instances = 5
 
-[[durable_objects.bindings]]
-name = "Sandbox"
-class_name = "Sandbox"
+[durable_objects]
+bindings = [
+  { name = "Sandbox", class_name = "Sandbox" }
+]
 
 [[migrations]]
 tag = "v1"

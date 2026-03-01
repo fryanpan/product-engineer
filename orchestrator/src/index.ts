@@ -13,6 +13,9 @@ import { dispatch } from "./dispatch";
 import { linearWebhook } from "./linear-webhook";
 import { slackCommands } from "./slack-commands";
 import { githubWebhook } from "./github-webhook";
+
+// Sandbox Durable Object class — required by wrangler for the [[containers]] binding
+export { Sandbox } from "@cloudflare/sandbox";
 import { getProduct } from "./registry";
 import { launchSandbox, type SandboxEnv } from "./sandbox";
 
