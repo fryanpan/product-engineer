@@ -49,7 +49,7 @@ RESPONSE=$(curl -s -X POST https://api.linear.app/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: $API_KEY" \
   -d "{
-    \"query\": \"mutation { webhookCreate(input: { url: \\\"$WEBHOOK_URL\\\", resourceTypes: [\\\"Issue\\\", \\\"Comment\\\"], secret: \\\"$LINEAR_WEBHOOK_SECRET\\\", enabled: true, label: \\\"Product Engineer Orchestrator\\\" }) { success webhook { id url enabled } } }\"
+    \"query\": \"mutation { webhookCreate(input: { url: \\\"$WEBHOOK_URL\\\", resourceTypes: [\\\"Issue\\\", \\\"Comment\\\"], secret: \\\"$LINEAR_WEBHOOK_SECRET\\\", allPublicTeams: true, enabled: true, label: \\\"Product Engineer Orchestrator\\\" }) { success webhook { id url enabled } } }\"
   }")
 
 echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
