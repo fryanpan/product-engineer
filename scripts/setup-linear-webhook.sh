@@ -14,7 +14,7 @@ if [ -z "$API_KEY" ]; then
   echo ""
   echo "  This creates a webhook so Linear issue changes trigger the PE agent."
   echo ""
-  echo "  Open: https://linear.app/settings/api"
+  echo "  Open: https://linear.app/health-tool/settings/account/security"
   echo "  Copy your Personal API key (the one you just created in setup-secrets.sh)"
   echo ""
   echo -n "  Paste LINEAR_API_KEY: "

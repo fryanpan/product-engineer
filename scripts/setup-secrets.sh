@@ -134,10 +134,10 @@ echo ""
 cat <<'STEP'
 ━━━ 3. LINEAR_API_KEY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Open: https://linear.app/settings/api
+  Open: https://linear.app/health-tool/settings/account/security
 
   Steps:
-  1. Under "Personal API keys", click "Create key"
+  1. Scroll to "API keys" → click "Create key"
   2. Label: "product-engineer"
   3. Copy the key (starts with lin_api_)
 
