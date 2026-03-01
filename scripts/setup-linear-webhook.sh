@@ -1,41 +1,67 @@
 #!/bin/bash
 # Create Linear webhook for the product-engineer orchestrator.
-# Requires: LINEAR_API_KEY set as environment variable or passed as argument.
 #
-# Usage: LINEAR_API_KEY=lin_api_xxx bash scripts/setup-linear-webhook.sh
+# Usage:
+#   LINEAR_API_KEY=lin_api_xxx bash scripts/setup-linear-webhook.sh
+#
+# Or if LINEAR_API_KEY was already set via 'wrangler secret', paste it when prompted.
 
 set -e
 
 API_KEY="${LINEAR_API_KEY:-$1}"
 if [ -z "$API_KEY" ]; then
-  echo "Error: LINEAR_API_KEY not set. Pass as env var or first argument."
-  echo "Usage: LINEAR_API_KEY=lin_api_xxx bash scripts/setup-linear-webhook.sh"
-  exit 1
+  echo "━━━ Linear Webhook Setup ━━━"
+  echo ""
+  echo "  This creates a webhook so Linear issue changes trigger the PE agent."
+  echo ""
+  echo "  Open: https://linear.app/settings/api"
+  echo "  Copy your Personal API key (the one you just created in setup-secrets.sh)"
+  echo ""
+  echo -n "  Paste LINEAR_API_KEY: "
+  read -r API_KEY
+  if [ -z "$API_KEY" ]; then
+    echo "  No key provided. Exiting."
+    exit 1
+  fi
 fi
 
 WEBHOOK_URL="https://product-engineer.fryanpan.workers.dev/api/webhooks/linear"
-LINEAR_WEBHOOK_SECRET=$(cat /tmp/pe-linear-webhook-secret.txt 2>/dev/null || echo "")
+
+# Read the webhook secret that was already set in Cloudflare
+# (It was generated and set during initial deployment)
+echo ""
+echo "  The LINEAR_WEBHOOK_SECRET was set in Cloudflare during initial setup."
+echo "  If you don't remember it, you can find it in Cloudflare dashboard:"
+echo "  https://dash.cloudflare.com → Workers & Pages → product-engineer → Settings → Variables"
+echo ""
+echo -n "  Paste LINEAR_WEBHOOK_SECRET: "
+read -r LINEAR_WEBHOOK_SECRET
 
 if [ -z "$LINEAR_WEBHOOK_SECRET" ]; then
-  echo "Warning: /tmp/pe-linear-webhook-secret.txt not found."
-  echo "The LINEAR_WEBHOOK_SECRET was already set in Cloudflare. Enter it here to match:"
-  echo -n "LINEAR_WEBHOOK_SECRET: "
-  read -r LINEAR_WEBHOOK_SECRET
+  echo "  No secret provided. Creating webhook WITHOUT secret verification."
+  echo "  (You can add it later in Linear → Settings → API → Webhooks)"
+  SECRET_PART=""
+else
+  SECRET_PART=", secret: \\\"$LINEAR_WEBHOOK_SECRET\\\""
 fi
 
+echo ""
 echo "Creating Linear webhook..."
-echo "URL: $WEBHOOK_URL"
+echo "  URL: $WEBHOOK_URL"
+echo "  Events: Issue, Comment"
 echo ""
 
 RESPONSE=$(curl -s -X POST https://api.linear.app/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: $API_KEY" \
   -d "{
-    \"query\": \"mutation { webhookCreate(input: { url: \\\"$WEBHOOK_URL\\\", resourceTypes: [\\\"Issue\\\", \\\"Comment\\\"], secret: \\\"$LINEAR_WEBHOOK_SECRET\\\", enabled: true, label: \\\"Product Engineer Orchestrator\\\" }) { success webhook { id url enabled } } }\"
+    \"query\": \"mutation { webhookCreate(input: { url: \\\"$WEBHOOK_URL\\\", resourceTypes: [\\\"Issue\\\", \\\"Comment\\\"]${SECRET_PART}, enabled: true, label: \\\"Product Engineer Orchestrator\\\" }) { success webhook { id url enabled } } }\"
   }")
 
 echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
 
 echo ""
-echo "Done! The webhook will fire on issue create/update events."
-echo "Verify at: linear.app → Settings → API → Webhooks"
+echo "✅ Done!"
+echo ""
+echo "Verify at: https://linear.app/settings/api → Webhooks"
+echo ""
