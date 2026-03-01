@@ -48,66 +48,84 @@ echo ""
 cat <<'STEP'
 ━━━ 2. SLACK APP — Create "Product Engineer" app ━━━━━━━━━━━━
 
-  Open: https://api.slack.com/apps
+  Open: https://api.slack.com/apps?new_app=1
+  Choose "From an app manifest" → pick your workspace → paste this YAML:
 
-  Steps:
-  1. Click "Create New App" → "From scratch"
-  2. App Name: "Product Engineer"
-  3. Pick your workspace, click "Create App"
+  ┌──────────────────────────────────────────────────────────┐
+STEP
 
-  Then configure the app (4 sub-steps below):
+# Print the manifest (not inside a heredoc so it's easy to copy)
+cat <<'MANIFEST'
+  │  display_information:                                    │
+  │    name: Product Engineer                                │
+  │    description: Autonomous coding agent triggered by     │
+  │      Linear, GitHub, and Slack                           │
+  │    background_color: "#1a1a2e"                           │
+  │                                                          │
+  │  features:                                               │
+  │    bot_user:                                             │
+  │      display_name: product-engineer                      │
+  │      always_online: true                                 │
+  │    app_home:                                             │
+  │      home_tab_enabled: false                             │
+  │      messages_tab_enabled: false                         │
+  │      messages_tab_read_only_enabled: false               │
+  │                                                          │
+  │  oauth_config:                                           │
+  │    scopes:                                               │
+  │      bot:                                                │
+  │        - chat:write                                      │
+  │        - app_mentions:read                               │
+  │        - channels:history                                │
+  │        - channels:read                                   │
+  │                                                          │
+  │  settings:                                               │
+  │    event_subscriptions:                                  │
+  │      bot_events:                                         │
+  │        - app_mention                                     │
+  │        - message.channels                                │
+  │    socket_mode_enabled: true                             │
+  │    org_deploy_enabled: false                             │
+  │    token_rotation_enabled: false                         │
+MANIFEST
 
-  ── 2a. Bot Token Scopes ──
-  Go to: OAuth & Permissions (left sidebar)
-  Scroll to "Scopes" → "Bot Token Scopes" → "Add an OAuth Scope"
-  Add these scopes:
-    • chat:write         (post messages)
-    • app_mentions:read  (receive @mentions)
-    • channels:history   (read thread replies)
-    • channels:read      (resolve channel info)
+cat <<'STEP'
+  └──────────────────────────────────────────────────────────┘
 
-  ── 2b. Enable Socket Mode ──
-  Go to: Socket Mode (left sidebar)
-  Toggle "Enable Socket Mode" ON
+  The plain YAML (for easy copying) is also at:
+    scripts/slack-app-manifest.yaml
 
-  ── 2c. Create App-Level Token ──
-  Still on Socket Mode page (or Basic Information → App-Level Tokens):
-  Click "Generate Token and Scopes"
+  Click "Next" → review → "Create"
+
+  After creating:
+
+  ── 2a. Generate App-Level Token ──
+  You're now on the app's Basic Information page.
+  Scroll to "App-Level Tokens" → "Generate Token and Scopes"
     • Token Name: "socket"
     • Add scope: connections:write
     • Click "Generate"
     • Copy the token (starts with xapp-)
 
-  ── 2d. Subscribe to Events ──
-  Go to: Event Subscriptions (left sidebar)
-  Toggle "Enable Events" ON
-  (No Request URL needed — Socket Mode handles delivery)
-  Under "Subscribe to bot events", add:
-    • app_mention
-    • message.channels
-  Click "Save Changes"
-
-  ── 2e. Install to Workspace ──
-  Go to: Install App (left sidebar)
-  Click "Install to Workspace" → "Allow"
+  ── 2b. Install to Workspace ──
+  Left sidebar → "Install App" → "Install to Workspace" → "Allow"
   Copy the "Bot User OAuth Token" (starts with xoxb-)
 
 STEP
 
-echo "━━━ 2e. SLACK_BOT_TOKEN ━━━"
+echo "━━━ 2b. SLACK_BOT_TOKEN ━━━"
 echo "  (The xoxb- token from Install App → Bot User OAuth Token)"
 set_secret "SLACK_BOT_TOKEN"
 echo ""
 
-echo "━━━ 2f. SLACK_APP_TOKEN ━━━"
-echo "  (The xapp- token from step 2c above)"
+echo "━━━ 2c. SLACK_APP_TOKEN ━━━"
+echo "  (The xapp- token from step 2a above)"
 set_secret "SLACK_APP_TOKEN"
 echo ""
 
-echo "━━━ 2g. SLACK_SIGNING_SECRET ━━━"
+echo "━━━ 2d. SLACK_SIGNING_SECRET ━━━"
 echo ""
-echo "  Open: https://api.slack.com/apps → Product Engineer → Basic Information"
-echo "  Scroll to 'App Credentials' → 'Signing Secret' → Click 'Show'"
+echo "  On the app page → Basic Information → App Credentials → Signing Secret → 'Show'"
 echo ""
 set_secret "SLACK_SIGNING_SECRET"
 echo ""
