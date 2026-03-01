@@ -25,7 +25,14 @@ export interface LaunchOptions {
   slackThreadTs?: string;
 }
 
-export async function launchSandbox(options: LaunchOptions): Promise<void> {
+export interface SandboxResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  success: boolean;
+}
+
+export async function launchSandbox(options: LaunchOptions): Promise<SandboxResult> {
   const { taskId, product, productConfig, taskPayload, env, slackThreadTs } =
     options;
 
@@ -103,6 +110,8 @@ export async function launchSandbox(options: LaunchOptions): Promise<void> {
         `PE agent exited with code ${result.exitCode}: ${sanitized}`,
       );
     }
+
+    return result as SandboxResult;
   } finally {
     await sandbox.destroy();
   }

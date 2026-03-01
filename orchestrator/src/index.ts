@@ -116,7 +116,7 @@ export default {
 
       // Launch the sandbox
       try {
-        await launchSandbox({
+        const sandboxResult = await launchSandbox({
           taskId,
           product,
           productConfig,
@@ -125,6 +125,28 @@ export default {
           slackThreadTs: threadTs,
         });
         console.log(`[Queue] ${product}/${taskId} completed`);
+
+        // Extract session log from agent stdout
+        if (sandboxResult?.stdout) {
+          const logLine = sandboxResult.stdout
+            .split("\n")
+            .find((line: string) => line.includes("[PE Session Log]"));
+          if (logLine) {
+            const jsonStr = logLine.substring(
+              logLine.indexOf("[PE Session Log]") + "[PE Session Log] ".length,
+            );
+            try {
+              const sessionLog = JSON.parse(jsonStr);
+              console.log(
+                `[Queue] Session log: product=${sessionLog.product} ` +
+                `task=${sessionLog.taskType}/${sessionLog.taskId} ` +
+                `duration=${sessionLog.duration_ms}ms`,
+              );
+            } catch {
+              // Session log parse failed — not critical
+            }
+          }
+        }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[Queue] ${product}/${taskId} failed: ${errMsg}`);

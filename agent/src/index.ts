@@ -34,6 +34,7 @@ function userMessage(content: string): SDKUserMessage {
 const REPLY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 async function main() {
+  const startTime = Date.now();
   const config = loadConfig();
   const { tools, state } = createTools(config);
   const prompt = buildPrompt(config.taskPayload);
@@ -113,6 +114,21 @@ async function main() {
   }
 
   (slackListener as SlackListener | null)?.close();
+
+  // Log session for cross-project review
+  const sessionLog = {
+    timestamp: new Date().toISOString(),
+    product: config.taskPayload.product,
+    taskType: config.taskPayload.type,
+    taskId: config.taskPayload.type === "feedback"
+      ? (config.taskPayload.data as { id: string }).id
+      : config.taskPayload.type === "ticket"
+        ? (config.taskPayload.data as { id: string }).id
+        : `cmd-${Date.now()}`,
+    duration_ms: Date.now() - startTime,
+  };
+  console.log(`[PE Session Log] ${JSON.stringify(sessionLog)}`);
+
   console.log("[PE Agent] Done");
 }
 
