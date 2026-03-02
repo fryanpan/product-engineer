@@ -15,7 +15,11 @@
     ],
     "deny": [
       "Bash(rm -rf *)",
-      "Bash(wrangler secret*)"
+      "Bash(wrangler secret*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)"
     ]
   },
   "enabledPlugins": {

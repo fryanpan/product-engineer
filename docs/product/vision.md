@@ -29,3 +29,18 @@ A product engineer agent that turns tickets, feedback, and natural language requ
 - Not a general-purpose AI platform — specifically for turning tickets into PRs
 - Not replacing human code review — agent creates PRs, humans approve
 - Cost optimization is not a priority at this stage ($100s/mo budget)
+
+## Design Philosophy
+
+- **Slim core** — the orchestrator is ~600 lines. The agent entrypoint is ~130 lines. Decision-making lives in English skills, not code.
+- **Depend on rapidly improving components** — Claude Code, Agent SDK, and Cloudflare Sandbox evolve fast. Ride their improvements instead of reimplementing.
+- **English over code** — agent behavior is defined in SKILL.md files, not TypeScript. Changing how the agent works means editing markdown.
+- **Avoid cruft** — every abstraction earns its place. If a component can be deleted without breaking anything, delete it.
+
+## Deep Dives
+
+- [Example Workflows](workflows.md) — the 4 core workflows that define the product
+- [Implementation Phases](implementation-phases.md) — phased rollout plan
+- [Landscape Review](landscape.md) — comparison of 11 competing tools
+- [Alternative Approaches](alternatives.md) — other paths and when they're better
+- [Decisions](decisions.md) — architecture decision log
