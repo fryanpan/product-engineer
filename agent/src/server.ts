@@ -16,6 +16,7 @@ import {
 import { loadConfig, type TaskPayload } from "./config";
 import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt } from "./prompt";
+import { buildMcpServers } from "./mcp";
 import type { TicketEvent } from "./types";
 
 if (process.env.SENTRY_DSN) {
@@ -106,6 +107,7 @@ async function startSession(initialPrompt: string) {
 
   const { tools } = createTools(config);
   const toolServer = createSdkMcpServer({ name: "pe-tools", tools });
+  const externalMcpServers = buildMcpServers();
   const messages = createMessageGenerator();
 
   messageYielder!(userMessage(initialPrompt));
@@ -117,7 +119,7 @@ async function startSession(initialPrompt: string) {
       settingSources: ["project"],
       maxTurns: 200,
       permissionMode: "acceptEdits",
-      mcpServers: { "pe-tools": toolServer },
+      mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
     },
   });
 
