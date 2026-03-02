@@ -76,8 +76,9 @@ describe("buildMcpServers", () => {
     expect(Object.keys(servers)).toContain("sentry");
     expect(servers.sentry).toEqual({
       command: "npx",
-      args: ["-y", "@sentry/mcp-server@latest", "--access-token=sntrys_test_token"],
+      args: ["-y", "@sentry/mcp-server@latest"],
       env: {
+        SENTRY_AUTH_TOKEN: "sntrys_test_token",
         EMBEDDED_AGENT_PROVIDER: "anthropic",
         ANTHROPIC_API_KEY: "sk-ant-test",
       },
@@ -91,8 +92,9 @@ describe("buildMcpServers", () => {
 
     expect(servers.sentry).toEqual({
       command: "npx",
-      args: ["-y", "@sentry/mcp-server@latest", "--access-token=sntrys_test_token"],
+      args: ["-y", "@sentry/mcp-server@latest"],
       env: {
+        SENTRY_AUTH_TOKEN: "sntrys_test_token",
         EMBEDDED_AGENT_PROVIDER: "anthropic",
       },
     });

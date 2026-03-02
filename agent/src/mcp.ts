@@ -3,6 +3,9 @@
  *
  * Each external service is included only when its required env var is present.
  * The one exception is Context7, which works without a key (lower rate limits).
+ *
+ * Types mirror McpHttpServerConfig/McpStdioServerConfig from the Agent SDK
+ * (defined in coreTypes.d.ts but not re-exported from the public API).
  */
 
 type McpHttpServerConfig = {
@@ -54,13 +57,14 @@ export function buildMcpServers(): Record<string, McpServerConfig> {
     };
   }
 
-  // Sentry — stdio via npx
+  // Sentry — stdio via npx (token via env to avoid exposure in /proc/cmdline)
   const sentryToken = process.env.SENTRY_ACCESS_TOKEN;
   if (sentryToken) {
     servers.sentry = {
       command: "npx",
-      args: ["-y", "@sentry/mcp-server@latest", `--access-token=${sentryToken}`],
+      args: ["-y", "@sentry/mcp-server@latest"],
       env: {
+        SENTRY_AUTH_TOKEN: sentryToken,
         EMBEDDED_AGENT_PROVIDER: "anthropic",
         ...(process.env.ANTHROPIC_API_KEY
           ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
