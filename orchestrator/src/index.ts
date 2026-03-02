@@ -5,6 +5,7 @@
  * No queue, no sandbox launcher. All state lives in the Orchestrator.
  */
 
+import * as Sentry from "@sentry/cloudflare";
 import { Hono } from "hono";
 import { linearWebhook } from "./linear-webhook";
 import { githubWebhook } from "./github-webhook";
@@ -80,4 +81,7 @@ export function getOrchestrator(env: Bindings): DurableObjectStub {
   return env.ORCHESTRATOR.get(id);
 }
 
-export default { fetch: app.fetch };
+export default Sentry.withSentry(
+  (env: Bindings) => ({ dsn: env.SENTRY_DSN }),
+  { fetch: app.fetch },
+);

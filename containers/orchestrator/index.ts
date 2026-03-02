@@ -1,5 +1,10 @@
+import * as Sentry from "@sentry/bun";
 import { Hono } from "hono";
 import { SlackSocket } from "./slack-socket";
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN });
+}
 
 const app = new Hono();
 

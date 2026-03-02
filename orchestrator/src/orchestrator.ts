@@ -29,6 +29,7 @@ export class Orchestrator extends Container<Bindings> {
     return {
       SLACK_APP_TOKEN: this.env.SLACK_APP_TOKEN,
       SLACK_BOT_TOKEN: this.env.SLACK_BOT_TOKEN,
+      SENTRY_DSN: this.env.SENTRY_DSN || "",
     };
   }
 

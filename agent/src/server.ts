@@ -6,6 +6,7 @@
  * On subsequent events: yields new messages into the running session.
  */
 
+import * as Sentry from "@sentry/bun";
 import { Hono } from "hono";
 import {
   query,
@@ -16,6 +17,10 @@ import { loadConfig, type TaskPayload } from "./config";
 import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt } from "./prompt";
 import type { TicketEvent } from "./types";
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN });
+}
 
 function userMessage(content: string): SDKUserMessage {
   return {

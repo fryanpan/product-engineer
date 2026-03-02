@@ -12,6 +12,7 @@ export function resolveAgentEnvVars(
     REPOS: JSON.stringify(config.repos),
     SLACK_CHANNEL: config.slackChannel,
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
+    SENTRY_DSN: env.SENTRY_DSN || "",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {
