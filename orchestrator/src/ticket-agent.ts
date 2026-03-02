@@ -11,6 +11,7 @@ export function resolveAgentEnvVars(
     TICKET_ID: config.ticketId,
     REPOS: JSON.stringify(config.repos),
     SLACK_CHANNEL: config.slackChannel,
+    SLACK_THREAD_TS: "", // Populated at runtime via event.slackThreadTs
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
     SENTRY_DSN: env.SENTRY_DSN || "",
     WORKER_URL: env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
@@ -83,13 +84,21 @@ export class TicketAgent extends Container<Bindings> {
       }
       case "/event": {
         const event = await request.json<TicketEvent>();
-        const port = this.ctx.container.getTcpPort(this.defaultPort);
-        const res = await port.fetch("http://localhost/event", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(event),
-        });
-        return res;
+        try {
+          const port = this.ctx.container.getTcpPort(this.defaultPort);
+          const res = await port.fetch("http://localhost/event", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(event),
+          });
+          return res;
+        } catch (err) {
+          console.error("[TicketAgent] Container not ready, event may be lost:", err);
+          return Response.json(
+            { error: "Container not ready", detail: String(err) },
+            { status: 503 },
+          );
+        }
       }
       case "/health": {
         return Response.json({ ok: true, service: "ticket-agent-do" });

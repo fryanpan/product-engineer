@@ -136,6 +136,11 @@ app.post("/event", async (c) => {
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
 
   try {
+    // Capture thread_ts from event so Slack tools reply in-thread
+    if (event.slackThreadTs) {
+      config.slackThreadTs = event.slackThreadTs;
+    }
+
     await cloneRepos();
 
     if (!sessionActive) {

@@ -45,6 +45,7 @@ export interface AgentConfig {
   githubToken: string;
   slackBotToken: string;
   slackChannel: string;
+  slackThreadTs: string;
   linearApiKey: string;
   workerUrl: string;
 }
@@ -64,6 +65,7 @@ export function loadConfig(): AgentConfig {
     githubToken: required("GITHUB_TOKEN"),
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackChannel: process.env.SLACK_CHANNEL || "#general",
+    slackThreadTs: process.env.SLACK_THREAD_TS || "",
     linearApiKey: process.env.LINEAR_API_KEY || "",
     workerUrl: process.env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
   };

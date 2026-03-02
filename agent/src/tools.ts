@@ -25,7 +25,11 @@ export function createTools(config: AgentConfig) {
           Authorization: `Bearer ${slackBotToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ channel: slackChannel, text: message }),
+        body: JSON.stringify({
+          channel: slackChannel,
+          text: message,
+          ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
+        }),
       });
 
       if (!res.ok) {
@@ -73,6 +77,7 @@ export function createTools(config: AgentConfig) {
         body: JSON.stringify({
           channel: slackChannel,
           text: `*Agent question:*\n${question}`,
+          ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
         }),
       });
 
@@ -116,9 +121,12 @@ export function createTools(config: AgentConfig) {
     {
       status: z
         .enum([
-          "implementing",
-          "implemented",
+          "in_progress",
+          "pr_open",
           "in_review",
+          "needs_revision",
+          "merged",
+          "closed",
           "deferred",
           "failed",
           "asking",
