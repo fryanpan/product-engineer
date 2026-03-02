@@ -1,0 +1,47 @@
+import { describe, test, expect } from "bun:test";
+import { resolveAgentEnvVars } from "./ticket-agent";
+
+describe("resolveAgentEnvVars", () => {
+  test("resolves secrets from env bindings", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {
+        GITHUB_TOKEN: "HEALTH_TOOL_GITHUB_TOKEN",
+        ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+      },
+    };
+    const env = {
+      HEALTH_TOOL_GITHUB_TOKEN: "ghp_abc123",
+      ANTHROPIC_API_KEY: "sk-ant-xyz",
+      SLACK_BOT_TOKEN: "xoxb-slack",
+    } as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.GITHUB_TOKEN).toBe("ghp_abc123");
+    expect(vars.ANTHROPIC_API_KEY).toBe("sk-ant-xyz");
+    expect(vars.PRODUCT).toBe("health-tool");
+    expect(vars.REPOS).toBe(JSON.stringify(["fryanpan/health-tool"]));
+    expect(vars.TICKET_ID).toBe("LIN-123");
+    expect(vars.SLACK_CHANNEL).toBe("#health-tool");
+    expect(vars.SLACK_BOT_TOKEN).toBe("xoxb-slack");
+  });
+
+  test("warns on missing secret binding", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {
+        GITHUB_TOKEN: "MISSING_TOKEN",
+      },
+    };
+    const env = {} as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.GITHUB_TOKEN).toBe("");
+  });
+});
