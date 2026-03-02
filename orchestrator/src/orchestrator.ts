@@ -2,6 +2,10 @@ import { Container } from "@cloudflare/containers";
 import { getProduct, getProducts } from "./registry";
 import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
 
+function sanitizeTicketId(id: string): string {
+  return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
+}
+
 // Pure helper — exported for testing
 export function buildTicketEvent(
   source: string,
@@ -11,7 +15,7 @@ export function buildTicketEvent(
   return {
     type,
     source,
-    ticketId: (data.ticketId || data.id || `${source}-${Date.now()}`) as string,
+    ticketId: sanitizeTicketId((data.ticketId || data.id || `${source}-${Date.now()}`) as string),
     product: data.product as string,
     payload: data,
     slackThreadTs: data.threadTs as string | undefined,
@@ -74,6 +78,7 @@ export class Orchestrator extends Container<Bindings> {
 
   private async handleEvent(request: Request): Promise<Response> {
     const event = await request.json<TicketEvent>();
+    event.ticketId = sanitizeTicketId(event.ticketId);
 
     // Upsert ticket
     this.ctx.storage.sql.exec(
@@ -224,7 +229,7 @@ export class Orchestrator extends Container<Bindings> {
       return Response.json({ error: "no product for channel" }, { status: 404 });
     }
 
-    const ticketId = `slack-${slackEvent.ts || Date.now()}`;
+    const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
     const event: TicketEvent = {
       type: "slack_mention",
       source: "slack",

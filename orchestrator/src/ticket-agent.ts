@@ -23,7 +23,7 @@ export function resolveAgentEnvVars(
     if (value) {
       vars[logicalName] = value;
     } else {
-      console.warn(`[TicketAgent] Secret ${logicalName} (binding: ${bindingName}) not found`);
+      console.warn(`[TicketAgent] Secret not found: ${logicalName}`);
       vars[logicalName] = "";
     }
   }

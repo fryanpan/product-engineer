@@ -73,6 +73,9 @@ async function cloneRepos() {
 
   for (const repo of config.repos) {
     const repoName = repo.split("/").pop()!;
+    if (!/^[a-zA-Z0-9._-]+$/.test(repoName)) {
+      throw new Error(`Invalid repo name: ${repoName}`);
+    }
     console.log(`[Agent] Cloning ${repo}...`);
     const proc = Bun.spawn([
       "git",
@@ -88,6 +91,9 @@ async function cloneRepos() {
 
   // Set working directory to the first repo so Agent SDK tools operate on it
   const primaryRepo = config.repos[0].split("/").pop()!;
+  if (!/^[a-zA-Z0-9._-]+$/.test(primaryRepo)) {
+    throw new Error(`Invalid repo name: ${primaryRepo}`);
+  }
   process.chdir(`/workspace/${primaryRepo}`);
   console.log(`[Agent] Working directory: /workspace/${primaryRepo}`);
 
