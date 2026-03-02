@@ -135,11 +135,25 @@ export function createTools(config: AgentConfig) {
         .describe("ID of the created or referenced Linear ticket"),
     },
     async ({ status, reason, pr_url, linear_ticket_id }) => {
-      // The TicketAgent DO tracks status separately — just log here
       console.log(
         `[Agent] Status update: ${status}`,
         JSON.stringify({ reason, pr_url, linear_ticket_id }),
       );
+
+      try {
+        await fetch(`${config.workerUrl}/api/internal/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ticketId: config.ticketId,
+            status,
+            pr_url,
+            branch_name: undefined,
+          }),
+        });
+      } catch (err) {
+        console.error("[Agent] Failed to update status:", err);
+      }
 
       return {
         content: [

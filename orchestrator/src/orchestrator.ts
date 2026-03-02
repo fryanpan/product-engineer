@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import { getProduct } from "./registry";
+import { getProduct, getProducts } from "./registry";
 import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
 
 // Pure helper — exported for testing
@@ -30,6 +30,7 @@ export class Orchestrator extends Container<Bindings> {
       SLACK_APP_TOKEN: this.env.SLACK_APP_TOKEN,
       SLACK_BOT_TOKEN: this.env.SLACK_BOT_TOKEN,
       SENTRY_DSN: this.env.SENTRY_DSN || "",
+      WORKER_URL: this.env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
     };
   }
 
@@ -64,6 +65,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.listTickets();
       case "/ticket/status":
         return this.handleStatusUpdate(request);
+      case "/slack-event":
+        return this.handleSlackEvent(request);
       default:
         return Response.json({ error: "not found" }, { status: 404 });
     }
@@ -152,5 +155,72 @@ export class Orchestrator extends Container<Bindings> {
       "SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 50",
     ).toArray();
     return Response.json({ tickets: rows });
+  }
+
+  private async handleSlackEvent(request: Request): Promise<Response> {
+    const slackEvent = await request.json<{
+      type: string;
+      text?: string;
+      user?: string;
+      channel?: string;
+      thread_ts?: string;
+      ts?: string;
+    }>();
+
+    // If it's a thread reply, look up existing ticket by thread_ts
+    if (slackEvent.thread_ts) {
+      const rows = this.ctx.storage.sql.exec(
+        "SELECT id, product FROM tickets WHERE slack_thread_ts = ?",
+        slackEvent.thread_ts,
+      ).toArray() as { id: string; product: string }[];
+
+      if (rows.length > 0) {
+        const ticket = rows[0];
+        const event: TicketEvent = {
+          type: "slack_reply",
+          source: "slack",
+          ticketId: ticket.id,
+          product: ticket.product,
+          payload: slackEvent,
+          slackThreadTs: slackEvent.thread_ts,
+          slackChannel: slackEvent.channel,
+        };
+        await this.routeToAgent(event);
+        return Response.json({ ok: true, ticketId: ticket.id });
+      }
+    }
+
+    // New mention — resolve product from channel
+    const product = this.resolveProductFromChannel(slackEvent.channel || "");
+    if (!product) {
+      console.warn(`[Orchestrator] No product mapped to channel ${slackEvent.channel}`);
+      return Response.json({ error: "no product for channel" }, { status: 404 });
+    }
+
+    const ticketId = `slack-${slackEvent.ts || Date.now()}`;
+    const event: TicketEvent = {
+      type: "slack_mention",
+      source: "slack",
+      ticketId,
+      product,
+      payload: slackEvent,
+      slackThreadTs: slackEvent.ts, // Use the message ts as thread ts for future replies
+      slackChannel: slackEvent.channel,
+    };
+
+    // Use handleEvent which does upsert + route
+    return this.handleEvent(new Request("http://internal/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }));
+  }
+
+  private resolveProductFromChannel(channel: string): string | null {
+    const products = getProducts();
+    for (const [name, config] of Object.entries(products)) {
+      if (config.slack_channel === channel) return name;
+    }
+    return null;
   }
 }

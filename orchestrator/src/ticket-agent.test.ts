@@ -27,6 +27,23 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.TICKET_ID).toBe("LIN-123");
     expect(vars.SLACK_CHANNEL).toBe("#health-tool");
     expect(vars.SLACK_BOT_TOKEN).toBe("xoxb-slack");
+    expect(vars.WORKER_URL).toBe("https://product-engineer.fryanpan.workers.dev");
+  });
+
+  test("uses WORKER_URL from env when provided", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {},
+    };
+    const env = {
+      WORKER_URL: "https://custom-worker.example.com",
+    } as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.WORKER_URL).toBe("https://custom-worker.example.com");
   });
 
   test("warns on missing secret binding", () => {

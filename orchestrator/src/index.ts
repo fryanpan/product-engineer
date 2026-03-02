@@ -71,6 +71,16 @@ app.post("/api/internal/slack-event", async (c) => {
   }));
 });
 
+// Internal: status updates from agent containers
+app.post("/api/internal/status", async (c) => {
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/ticket/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
 app.get("/api/orchestrator/tickets", async (c) => {
   const orchestrator = getOrchestrator(c.env);
   return orchestrator.fetch(new Request("http://internal/tickets"));

@@ -34,6 +34,10 @@ export function getProduct(name: string): ProductConfig | null {
   return registry.products[name] || null;
 }
 
+export function getProducts(): Record<string, ProductConfig> {
+  return registry.products;
+}
+
 /**
  * Look up a product by Linear project name or ID.
  * Linear webhooks include project.name and project.id — we match on name

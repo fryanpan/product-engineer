@@ -32,6 +32,9 @@ export interface Bindings {
   ORCHESTRATOR: DurableObjectNamespace;
   TICKET_AGENT: DurableObjectNamespace;
 
+  // Config vars
+  WORKER_URL: string;
+
   // Secrets
   API_KEY: string;
   SLACK_BOT_TOKEN: string;

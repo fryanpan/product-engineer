@@ -13,6 +13,7 @@ export function resolveAgentEnvVars(
     SLACK_CHANNEL: config.slackChannel,
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
     SENTRY_DSN: env.SENTRY_DSN || "",
+    WORKER_URL: env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {

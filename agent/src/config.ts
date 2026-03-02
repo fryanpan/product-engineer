@@ -46,6 +46,7 @@ export interface AgentConfig {
   slackBotToken: string;
   slackChannel: string;
   linearApiKey: string;
+  workerUrl: string;
 }
 
 export function loadConfig(): AgentConfig {
@@ -64,5 +65,6 @@ export function loadConfig(): AgentConfig {
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackChannel: process.env.SLACK_CHANNEL || "#general",
     linearApiKey: process.env.LINEAR_API_KEY || "",
+    workerUrl: process.env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
   };
 }
