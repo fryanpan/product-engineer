@@ -34,8 +34,15 @@ githubWebhook.post("/", async (c) => {
     ["verify"],
   );
   const receivedHex = signature.replace("sha256=", "");
+  if (!receivedHex) {
+    return c.json({ error: "Malformed signature" }, 401);
+  }
+  const hexPairs = receivedHex.match(/.{2}/g);
+  if (!hexPairs) {
+    return c.json({ error: "Malformed signature" }, 401);
+  }
   const receivedBytes = new Uint8Array(
-    receivedHex.match(/.{2}/g)!.map((b) => parseInt(b, 16)),
+    hexPairs.map((b) => parseInt(b, 16)),
   );
   const valid = await crypto.subtle.verify(
     "HMAC",

@@ -89,14 +89,17 @@ export class TicketAgent extends Container<Bindings> {
           const port = this.ctx.container.getTcpPort(this.defaultPort);
           const res = await port.fetch("http://localhost/event", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-Internal-Key": (this.env.API_KEY as string) || "",
+            },
             body: JSON.stringify(event),
           });
           return res;
         } catch (err) {
           console.error("[TicketAgent] Container not ready, event may be lost:", err);
           return Response.json(
-            { error: "Container not ready", detail: String(err) },
+            { error: "Container not ready" },
             { status: 503 },
           );
         }

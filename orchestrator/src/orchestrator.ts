@@ -110,15 +110,37 @@ export class Orchestrator extends Container<Bindings> {
       secrets: productConfig.secrets,
     };
 
-    await agent.fetch(new Request("http://internal/initialize", {
+    const initRes = await agent.fetch(new Request("http://internal/initialize", {
       method: "POST",
       body: JSON.stringify(config),
     }));
 
-    await agent.fetch(new Request("http://internal/event", {
-      method: "POST",
-      body: JSON.stringify(event),
-    }));
+    if (!initRes.ok) {
+      console.error(`[Orchestrator] Failed to initialize agent for ${event.ticketId}: ${initRes.status}`);
+      return;
+    }
+
+    // Retry event delivery with backoff for cold starts
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const eventRes = await agent.fetch(new Request("http://internal/event", {
+        method: "POST",
+        body: JSON.stringify(event),
+      }));
+      lastStatus = eventRes.status;
+
+      if (eventRes.ok) return;
+      if (eventRes.status !== 503) {
+        console.error(`[Orchestrator] Agent event delivery failed for ${event.ticketId}: ${eventRes.status}`);
+        return;
+      }
+
+      // Container not ready, wait and retry
+      console.warn(`[Orchestrator] Agent container not ready for ${event.ticketId}, retrying (${attempt + 1}/3)...`);
+      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+
+    console.error(`[Orchestrator] Agent event delivery failed after retries for ${event.ticketId}: ${lastStatus}`);
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
@@ -188,6 +210,11 @@ export class Orchestrator extends Container<Bindings> {
         await this.routeToAgent(event);
         return Response.json({ ok: true, ticketId: ticket.id });
       }
+    }
+
+    // Only create tickets from app_mention events
+    if (slackEvent.type !== "app_mention") {
+      return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
     }
 
     // New mention — resolve product from channel

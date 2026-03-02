@@ -49,8 +49,12 @@ linearWebhook.post("/", async (c) => {
       false,
       ["verify"],
     );
+    const hexPairs = signature.match(/.{2}/g);
+    if (!hexPairs) {
+      return c.json({ error: "Malformed signature" }, 401);
+    }
     const receivedBytes = new Uint8Array(
-      signature.match(/.{2}/g)!.map((b) => parseInt(b, 16)),
+      hexPairs.map((b) => parseInt(b, 16)),
     );
     const valid = await crypto.subtle.verify(
       "HMAC",
@@ -64,7 +68,7 @@ linearWebhook.post("/", async (c) => {
 
     payload = JSON.parse(rawBody) as LinearWebhookPayload;
   } else {
-    payload = await c.req.json<LinearWebhookPayload>();
+    return c.json({ error: "Webhook not configured" }, 500);
   }
 
   return handleEvent(payload, c.env);

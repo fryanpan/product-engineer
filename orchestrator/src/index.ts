@@ -15,6 +15,14 @@ import type { Bindings } from "./types";
 export { Orchestrator } from "./orchestrator";
 export { TicketAgent } from "./ticket-agent";
 
+function timingSafeEqual(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  if (bufA.byteLength !== bufB.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(bufA, bufB);
+}
+
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.get("/health", (c) => c.json({ ok: true, service: "product-engineer-worker" }));
@@ -25,7 +33,7 @@ app.route("/api/webhooks/github", githubWebhook);
 // Dispatch API — programmatic trigger
 app.post("/api/dispatch", async (c) => {
   const apiKey = c.req.header("X-API-Key");
-  if (!apiKey || apiKey !== c.env.API_KEY) {
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -58,7 +66,7 @@ app.post("/api/dispatch", async (c) => {
 // Internal: Slack events from orchestrator container's Socket Mode
 app.post("/api/internal/slack-event", async (c) => {
   const key = c.req.header("X-Internal-Key");
-  if (!key || key !== c.env.SLACK_APP_TOKEN) {
+  if (!key || !timingSafeEqual(key, c.env.SLACK_APP_TOKEN)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -74,7 +82,7 @@ app.post("/api/internal/slack-event", async (c) => {
 // Internal: status updates from agent containers
 app.post("/api/internal/status", async (c) => {
   const key = c.req.header("X-Internal-Key");
-  if (!key || key !== c.env.API_KEY) {
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -87,6 +95,10 @@ app.post("/api/internal/status", async (c) => {
 });
 
 app.get("/api/orchestrator/tickets", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
   const orchestrator = getOrchestrator(c.env);
   return orchestrator.fetch(new Request("http://internal/tickets"));
 });

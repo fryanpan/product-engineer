@@ -137,6 +137,11 @@ async function startSession(initialPrompt: string) {
 }
 
 app.post("/event", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || key !== config.apiKey) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
   const event = await c.req.json<TicketEvent>();
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
 
@@ -175,13 +180,7 @@ app.post("/event", async (c) => {
 });
 
 app.get("/health", (c) =>
-  c.json({
-    ok: true,
-    service: "ticket-agent-container",
-    sessionActive,
-    product: config.product,
-    ticketId: config.ticketId,
-  }),
+  c.json({ ok: true, service: "ticket-agent-container" }),
 );
 
 export default {

@@ -24,6 +24,8 @@ function makeApp() {
   return app;
 }
 
+const TEST_WEBHOOK_SECRET = "test-linear-webhook-secret";
+
 function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
   return {
     ORCHESTRATOR: mockOrchestratorNamespace as unknown as DurableObjectNamespace,
@@ -33,7 +35,7 @@ function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
     SLACK_APP_TOKEN: "test",
     SLACK_SIGNING_SECRET: "test",
     LINEAR_API_KEY: "test",
-    LINEAR_WEBHOOK_SECRET: "", // empty = skip signature verification
+    LINEAR_WEBHOOK_SECRET: TEST_WEBHOOK_SECRET,
     GITHUB_WEBHOOK_SECRET: "test",
     ANTHROPIC_API_KEY: "test",
     HEALTH_TOOL_GITHUB_TOKEN: "test",
@@ -42,13 +44,32 @@ function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
   };
 }
 
-function postWebhook(app: ReturnType<typeof makeApp>, body: unknown, env: Bindings) {
+async function hmacSign(body: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function postWebhook(app: ReturnType<typeof makeApp>, body: unknown, env: Bindings) {
+  const rawBody = JSON.stringify(body);
+  const signature = await hmacSign(rawBody, env.LINEAR_WEBHOOK_SECRET);
   return app.request(
     "/",
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      headers: {
+        "Content-Type": "application/json",
+        "Linear-Signature": signature,
+      },
+      body: rawBody,
     },
     env,
   );
