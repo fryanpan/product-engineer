@@ -155,7 +155,21 @@ These are known risks we've evaluated and accepted, with mitigations noted:
 
 **Alternative considered:** Cloudflare AI Gateway for outbound traffic control. Evaluated and found unsuitable — AI Gateway only proxies AI/LLM provider APIs (Anthropic, OpenAI, etc.), not general HTTP APIs like Slack or GitHub.
 
-### 4. Slack Channel ID Population (Low)
+### 4. Shared Secrets Across Products (Low)
+
+**Risk:** Platform secrets (`SLACK_BOT_TOKEN`, `LINEAR_API_KEY`, `ANTHROPIC_API_KEY`) and MCP secrets (`NOTION_TOKEN`, `SENTRY_ACCESS_TOKEN`, `CONTEXT7_API_KEY`) are shared across all products. A compromised agent for one product could use another product's MCP access.
+
+**Current state:** GitHub tokens are already per-product (`HEALTH_TOOL_GITHUB_TOKEN`, `BIKE_TOOL_GITHUB_TOKEN`). Other secrets are shared because they access the same platform accounts.
+
+**Mitigation:** The registry's `secrets` map controls which env vars each product's agent receives. Products that don't need a specific MCP can omit its secret from their registry entry — `buildMcpServers()` only includes an MCP server when its auth token is present.
+
+**Future tightening (no code changes needed):**
+1. Create per-product binding names (e.g., `HEALTH_TOOL_NOTION_TOKEN`)
+2. Provision separate tokens with scoped access per product
+3. Update the registry `secrets` map to point to the product-specific binding
+4. The agent code handles this automatically — `resolveAgentEnvVars()` already resolves per-product bindings
+
+### 5. Slack Channel ID Population (Low)
 
 **Risk:** The registry has `slack_channel_id` fields for matching Socket Mode events, but actual channel IDs haven't been populated yet. Until populated, Slack `@product-engineer` mentions in channels won't resolve to a product.
 
@@ -180,3 +194,7 @@ These are known risks we've evaluated and accepted, with mitigations noted:
 | Secret binding name redaction | **Implemented** | `orchestrator/src/ticket-agent.ts` |
 | Empty signature crash protection | **Implemented** | Both webhook handlers |
 | Fail-closed on missing webhook secret | **Implemented** | Both webhook handlers |
+| Per-product secret scoping (GitHub) | **Implemented** | `orchestrator/src/registry.ts` |
+| Conditional MCP server inclusion | **Implemented** | `agent/src/mcp.ts` |
+| GH_TOKEN headless auth (no .netrc for gh) | **Implemented** | `orchestrator/src/ticket-agent.ts` |
+| MCP auth via env vars (not CLI args) | **Implemented** | `agent/src/mcp.ts` |
