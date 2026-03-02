@@ -10,7 +10,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "^0.7.8",
+    "@cloudflare/containers": "^0.1.1",
+    "@sentry/cloudflare": "^10.40.0",
     "hono": "^4.0.0"
   },
   "devDependencies": {

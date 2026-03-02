@@ -1,0 +1,8 @@
+{
+  "name": "pe-orchestrator-container",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "hono": "^4.0.0"
+  }
+}
