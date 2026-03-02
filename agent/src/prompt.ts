@@ -106,7 +106,7 @@ export function buildEventPrompt(event: TicketEvent): string {
 
   switch (event.type) {
     case "pr_review":
-      return `A PR review was submitted:\n\n**State:** ${payload.state}\n**Body:** ${payload.body || "(no comment)"}\n\nRespond to the review. If changes are requested, make them, push, and notify Slack.`;
+      return `A PR review was submitted:\n\n**State:** ${payload.review_state || payload.state}\n**Body:** ${payload.review_body || payload.body || "(no comment)"}\n**Reviewer:** ${payload.reviewer || "unknown"}\n\nRespond to the review. If changes are requested, make them, push, and notify Slack.`;
     case "pr_merged":
       return `The PR has been merged. Update the task status, notify Slack, and do a brief retro.`;
     case "ci_status":

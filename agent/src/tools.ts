@@ -151,7 +151,10 @@ export function createTools(config: AgentConfig) {
       try {
         await fetch(`${config.workerUrl}/api/internal/status`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": config.apiKey,
+          },
           body: JSON.stringify({
             ticketId: config.ticketId,
             status,

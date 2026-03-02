@@ -11,7 +11,8 @@
 
 export interface ProductConfig {
   repos: string[];
-  slack_channel: string;
+  slack_channel: string;     // Human-readable name (e.g., "#health-tool") — used for Slack API posts
+  slack_channel_id?: string; // Slack channel ID (e.g., "C06ABC123") — used for matching Socket Mode events
   triggers: {
     feedback?: { enabled: boolean; callback_url?: string };
     linear?: { enabled: boolean; project_name: string };

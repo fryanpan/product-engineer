@@ -48,6 +48,7 @@ export interface AgentConfig {
   slackThreadTs: string;
   linearApiKey: string;
   workerUrl: string;
+  apiKey: string;
 }
 
 export function loadConfig(): AgentConfig {
@@ -68,5 +69,6 @@ export function loadConfig(): AgentConfig {
     slackThreadTs: process.env.SLACK_THREAD_TS || "",
     linearApiKey: process.env.LINEAR_API_KEY || "",
     workerUrl: process.env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
+    apiKey: process.env.API_KEY || "",
   };
 }

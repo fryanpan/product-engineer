@@ -219,7 +219,10 @@ export class Orchestrator extends Container<Bindings> {
   private resolveProductFromChannel(channel: string): string | null {
     const products = getProducts();
     for (const [name, config] of Object.entries(products)) {
-      if (config.slack_channel === channel) return name;
+      // Match on channel ID (from Socket Mode events) or channel name
+      if (config.slack_channel_id === channel || config.slack_channel === channel) {
+        return name;
+      }
     }
     return null;
   }

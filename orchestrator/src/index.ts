@@ -73,6 +73,11 @@ app.post("/api/internal/slack-event", async (c) => {
 
 // Internal: status updates from agent containers
 app.post("/api/internal/status", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || key !== c.env.API_KEY) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
   const orchestrator = getOrchestrator(c.env);
   return orchestrator.fetch(new Request("http://internal/ticket/status", {
     method: "POST",

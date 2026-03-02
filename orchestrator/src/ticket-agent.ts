@@ -15,6 +15,7 @@ export function resolveAgentEnvVars(
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
     SENTRY_DSN: env.SENTRY_DSN || "",
     WORKER_URL: env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
+    API_KEY: env.API_KEY || "",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {

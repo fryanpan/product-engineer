@@ -86,6 +86,11 @@ async function cloneRepos() {
     }
   }
 
+  // Set working directory to the first repo so Agent SDK tools operate on it
+  const primaryRepo = config.repos[0].split("/").pop()!;
+  process.chdir(`/workspace/${primaryRepo}`);
+  console.log(`[Agent] Working directory: /workspace/${primaryRepo}`);
+
   repoCloned = true;
 }
 
