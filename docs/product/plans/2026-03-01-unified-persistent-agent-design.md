@@ -216,3 +216,17 @@ Sentry integrated across all components:
 | `.claude/skills/product-engineer/SKILL.md` | Rewrite — decision framework |
 | `docs/product/implementation-phases.md` | Rewrite — unified system, no Phase 4 |
 | **Delete:** `orchestrator/src/dispatch.ts`, `orchestrator/src/sandbox.ts`, `orchestrator/src/slack-commands.ts`, `agent/src/slack-listener.ts`, `Dockerfile` (root) | |
+
+## Key Decisions
+
+| Decision | Choice | Why |
+|----------|--------|-----|
+| Build all 3 phases as one system | Yes | Phases 1-3 are the same architecture at different event scopes. Building incrementally would mean rewriting the same code 3 times. |
+| Drop Phase 4 (GitHub Action fallback) | Yes | Premature optimization for a risk that hasn't materialized. Can revisit if needed. |
+| TicketAgent: filesystem over DO SQLite | Filesystem for working state, minimal SQLite for config only | Simpler. Orchestrator is the single source of truth. Agent doesn't need its own persistent state — it gets context from events. |
+| 4-day sleep timeout for TicketAgent | `sleepAfter = "4d"` | Most ticket lifecycles complete within days. Generous timeout avoids unnecessary cold starts during active work. |
+| No custom event log | Use Sentry + Cloudflare Gateway | Avoid building observability infrastructure. Sentry is already integrated with other services. |
+| Agent SDK over Claude Code CLI | Agent SDK | More flexible for event-driven architecture. Can yield new messages into an active session. CLI is designed for one-shot interactions. |
+| Slack Socket Mode over Events API | Socket Mode | Already designed, provides real-time bidirectional communication. Events API would require separate webhook URLs and doesn't support thread reply listening as cleanly. |
+| Decision framework: reversible=autonomous, irreversible=batch+ask | Encoded in product-engineer skill | Minimizes human interaction without sacrificing safety. Agent makes most decisions itself, only pauses for genuinely consequential choices. |
+| Permission engineering via .claude/settings.json templates | Per-product repo settings | Agent runs Agent SDK with `settingSources: ["project"]`. Product repo settings control what the agent can do. Avoids `--dangerously-skip-permissions`. |
