@@ -45,6 +45,9 @@ export interface Bindings {
   GITHUB_WEBHOOK_SECRET: string;
   ANTHROPIC_API_KEY: string;
   SENTRY_DSN: string;
+  NOTION_TOKEN: string;
+  SENTRY_ACCESS_TOKEN: string;
+  CONTEXT7_API_KEY: string;
 
   // Per-product GitHub tokens
   HEALTH_TOOL_GITHUB_TOKEN: string;

@@ -46,6 +46,42 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.WORKER_URL).toBe("https://custom-worker.example.com");
   });
 
+  test("sets GH_TOKEN alias when GITHUB_TOKEN is resolved", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {
+        GITHUB_TOKEN: "HEALTH_TOOL_GITHUB_TOKEN",
+      },
+    };
+    const env = {
+      HEALTH_TOOL_GITHUB_TOKEN: "ghp_abc123",
+    } as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.GH_TOKEN).toBe("ghp_abc123");
+    expect(vars.GH_TOKEN).toBe(vars.GITHUB_TOKEN);
+  });
+
+  test("does not set GH_TOKEN when GITHUB_TOKEN is missing", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {
+        GITHUB_TOKEN: "MISSING_BINDING",
+      },
+    };
+    const env = {} as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.GITHUB_TOKEN).toBe("");
+    expect(vars.GH_TOKEN).toBeUndefined();
+  });
+
   test("warns on missing secret binding", () => {
     const config = {
       ticketId: "LIN-123",

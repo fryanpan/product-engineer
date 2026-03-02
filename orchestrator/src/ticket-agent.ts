@@ -28,6 +28,11 @@ export function resolveAgentEnvVars(
     }
   }
 
+  // gh CLI reads GH_TOKEN for headless auth
+  if (vars.GITHUB_TOKEN) {
+    vars.GH_TOKEN = vars.GITHUB_TOKEN;
+  }
+
   return vars;
 }
 
