@@ -13,7 +13,7 @@ graph TB
     subgraph "Internet"
         Linear[Linear Webhooks]
         GitHub[GitHub Webhooks]
-        Slack[Slack Socket Mode]
+        SlackAPI[Slack API]
     end
 
     subgraph "Cloudflare Edge"
@@ -32,7 +32,7 @@ graph TB
     Linear -->|HMAC-SHA256| Worker
     GitHub -->|HMAC-SHA256| Worker
     Worker -->|Internal| OrcDO
-    OrcContainer -->|Socket Mode WSS| Slack
+    OrcContainer <-->|Socket Mode WSS| SlackAPI
     OrcContainer -->|X-Internal-Key| Worker
     OrcDO -->|getTcpPort| OrcContainer
     OrcDO -->|DO RPC| TA1
@@ -41,7 +41,15 @@ graph TB
     TA2 -->|getTcpPort + X-Internal-Key| TA2C
     TA1C -->|X-Internal-Key| Worker
     TA2C -->|X-Internal-Key| Worker
+    TA1C -->|notify_slack / ask_question| SlackAPI
+    TA2C -->|notify_slack / ask_question| SlackAPI
 ```
+
+### Slack Message Flow
+
+**Inbound (user → agent):** Slack → Socket Mode WSS → Orchestrator Container → Worker → Orchestrator DO → TicketAgent DO → Agent Container → SDK session continuation
+
+**Outbound (agent → user):** Agent SDK calls `notify_slack`/`ask_question` tools → direct HTTP POST to Slack Web API → message appears in product channel thread
 
 ## Layer 1: Platform Isolation (Cloudflare Containers)
 
