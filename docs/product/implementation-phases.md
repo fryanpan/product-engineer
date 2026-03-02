@@ -1,79 +1,53 @@
 # Implementation Phases
 
-Phased rollout from what we have today to a fully autonomous product engineer.
+## Unified System
 
-## What We Have Today
+All capabilities are built as a single persistent agent architecture. There are no separate phases — this is one coherent system.
+
+### What We Built
 
 | Component | Implementation | Status |
 |-----------|---------------|--------|
-| Trigger | Feedback widget → Turso DB → Cloudflare Queue | Built |
-| Isolation | Cloudflare Sandbox (ephemeral container) | Built |
-| Agent | Claude Agent SDK with streaming input | Built |
-| Communication | Slack Socket Mode (bidirectional) | Built |
-| Tools | Custom MCP (update_status, notify_slack, ask_question) | Built |
-| Context | CLAUDE.md + skills + Linear MCP + Context7 | Built |
-| Linear webhook + shared orchestrator | Worker + Queue + registry dispatch | Built |
-| GitHub PR merge detection | Webhook handler | Built |
-| Deploy + secrets + webhook configuration | Cloudflare Workers | Done |
+| Trigger: Linear webhooks | Worker verifies HMAC, proxies to Orchestrator DO | Built |
+| Trigger: GitHub webhooks | Worker verifies signature, proxies PR review/merge events | Built |
+| Trigger: Slack Socket Mode | Orchestrator container maintains persistent WebSocket | Built |
+| Orchestrator | Durable Object (singleton), SQLite ticket tracking, event routing | Built |
+| TicketAgent | Container class per ticket, 4-day sleep timeout, Agent SDK | Built |
+| Agent decision framework | product-engineer skill: reversible=autonomous, irreversible=batch+ask | Built |
+| Communication | Slack (notify_slack, ask_question tools) | Built |
+| Observability | Sentry across Worker, Orchestrator, and Agent containers | Built |
+| Permission engineering | .claude/settings.json template for product repos | Built |
 
-## Phase 1: End-to-End Pipeline (NOW)
+### Architecture
 
-**Goal:** Linear ticket → agent → PR → Slack updates. The basic pipeline works.
+See `docs/product/plans/2026-03-01-unified-persistent-agent-design.md` for the full design.
 
-**What to do:**
-- Verify the Linear webhook trigger works end-to-end
-- Ensure agent posts to the correct product Slack channel (#health-tool, etc.)
-- Ensure one thread per ticket in Slack
-- Agent prompt handles "implement ticket" (not just "evaluate feedback")
+```
+Webhooks (Linear, GitHub)     Slack Socket Mode
+         |                            |
+         v                            v
+Worker (stateless) ──> Orchestrator DO (singleton, always-on)
+                         | SQLite: tickets, metadata
+                         |
+         ┌───────────────┼───────────────┐
+         v               v               v
+   TicketAgent #1   TicketAgent #2   TicketAgent #3
+   (4-day sleep)    (4-day sleep)    (4-day sleep)
+   Agent SDK        Agent SDK        Agent SDK
+```
 
-**Effort:** Hours. 80% is already built.
+### Capabilities
 
-**Key outcome:** Feedback → ticket → agent → PR pipeline works end-to-end.
+1. **Linear ticket -> agent -> PR** — Linear issue creation triggers agent via webhook. Agent implements, creates PR, posts to Slack.
 
-## Phase 2: Coordinator Slack Bot (NEXT)
+2. **Slack mention -> agent** — `@product-engineer fix the login bug in health-tool` triggers agent via Socket Mode. Agent works in a Slack thread.
 
-**Goal:** Non-technical users can trigger agents by messaging Slack.
-
-**What to build:**
-- A persistent Slack listener (coordinator) that parses natural language commands
-- A dispatch layer that looks up repos in the registry and triggers the Worker
-- Status dashboard (Slack channel with threads per agent)
-
-**Effort:** Days.
-
-**Key outcome:** "Fix the login bug in health-tool" on Slack → agent starts working.
-
-## Phase 3: Persistent Agents (FUTURE)
-
-**Goal:** Agents that stay alive through the full ticket lifecycle.
-
-**When to build:** After Phase 1 and 2 are working and we understand the limitations of one-shot agents. The current one-shot model may be sufficient for most tasks — persistent agents add complexity and cost.
-
-**What it enables:**
-- Agent responds to PR review comments without restarting
-- Agent tracks CI status and responds to failures
-- Agent handles ticket lifecycle: creation → PR → review → revision → merge → deploy → close
-- No context loss between events
-
-**Architecture:** Cloudflare Durable Objects + Containers. See `fryanpan/product-engineer/docs/plans/2026-03-01-persistent-agent-architecture.md` for the design doc.
-
-**Note:** This was designed in a previous session but should NOT be built before Phase 1 and 2 are working. The persistent agent architecture is weeks of work; Phases 1 and 2 are hours/days and deliver most of the value.
-
-## Phase 4: GitHub Action Fallback (SCALE)
-
-**Goal:** Every repo has an agent available. Simple tasks use GH Action; complex ones use Sandbox.
-
-**What to do:**
-- Add `.github/workflows/linear-agent.yml` per repo using `anthropics/claude-code-action`
-- Triage step routes tickets to right agent based on complexity
-
-**Effort:** Hours per repo.
+3. **Persistent lifecycle** — Agent stays alive for 4 days. Responds to PR reviews, CI failures, and Slack replies without context loss. Full ticket lifecycle: creation -> implementation -> PR -> review -> revision -> merge.
 
 ## What to Watch
 
 | Development | Impact |
 |-------------|--------|
-| Claude Code native Linear integration ([#12925](https://github.com/anthropics/claude-code/issues/12925), 57 upvotes) | Would eliminate custom webhook bridge |
-| GitHub Agentic Workflows GA | Could simplify per-repo agent setup |
-| Cloudflare Sandbox resource upgrades | More CPU/RAM eliminates self-hosted option |
-| Linear Agent Protocol adoption | Only Cursor has built against it so far |
+| Claude Code native Linear integration | Would eliminate custom webhook bridge |
+| Cloudflare Containers GA + resource upgrades | More CPU/RAM, better stability |
+| Agent SDK improvements | Better streaming, tool handling |
