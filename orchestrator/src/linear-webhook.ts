@@ -10,7 +10,7 @@
 
 import { Hono } from "hono";
 import { getProductByLinearProject, isOurTeam } from "./registry";
-import type { Bindings } from "./index";
+import type { Bindings } from "./types";
 
 const linearWebhook = new Hono<{ Bindings: Bindings }>();
 
@@ -129,21 +129,26 @@ async function handleEvent(payload: LinearWebhookPayload, env: Bindings) {
     );
   }
 
-  // Enqueue the task
-  const taskMessage = {
-    type: "ticket" as const,
-    product: match.name,
-    data: {
-      id: payload.data.id,
-      title: payload.data.title,
-      description: payload.data.description || "",
-      priority: payload.data.priority,
-      labels: payload.data.labelIds || [],
-    },
-  };
-
-  const queue = env.TASK_QUEUE;
-  await queue.send(taskMessage);
+  // Forward to Orchestrator DO
+  const id = env.ORCHESTRATOR.idFromName("main");
+  const orchestrator = env.ORCHESTRATOR.get(id);
+  await orchestrator.fetch(new Request("http://internal/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "ticket_created",
+      source: "linear",
+      ticketId: payload.data.id,
+      product: match.name,
+      payload: {
+        id: payload.data.id,
+        title: payload.data.title,
+        description: payload.data.description || "",
+        priority: payload.data.priority,
+        labels: payload.data.labelIds || [],
+      },
+    }),
+  }));
 
   return new Response(
     JSON.stringify({

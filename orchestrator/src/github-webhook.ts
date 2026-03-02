@@ -1,13 +1,16 @@
 /**
- * GitHub webhook handler for PR merge detection.
+ * GitHub webhook handler for PR events.
  *
- * When a PR on a feedback/* or ticket/* branch is merged,
- * updates the task status via the orchestrator and notifies Slack.
+ * Handles:
+ * - PR merge: forwards pr_merged event to Orchestrator DO
+ * - PR review: forwards pr_review event to Orchestrator DO
+ *
+ * All Slack notifications are handled by the agent, not here.
  */
 
 import { Hono } from "hono";
 import { loadRegistry } from "./registry";
-import type { Bindings } from "./index";
+import type { Bindings } from "./types";
 
 const githubWebhook = new Hono<{ Bindings: Bindings }>();
 
@@ -45,10 +48,19 @@ githubWebhook.post("/", async (c) => {
   }
 
   const event = c.req.header("X-GitHub-Event");
-  if (event !== "pull_request") {
-    return c.json({ ok: true, ignored: true });
+
+  if (event === "pull_request") {
+    return handlePullRequest(rawBody, c.env);
   }
 
+  if (event === "pull_request_review") {
+    return handlePullRequestReview(rawBody, c.env);
+  }
+
+  return c.json({ ok: true, ignored: true });
+});
+
+async function handlePullRequest(rawBody: string, env: Bindings) {
   const payload = JSON.parse(rawBody) as {
     action: string;
     pull_request: {
@@ -62,7 +74,7 @@ githubWebhook.post("/", async (c) => {
   };
 
   if (payload.action !== "closed" || !payload.pull_request.merged) {
-    return c.json({ ok: true, ignored: true });
+    return Response.json({ ok: true, ignored: true });
   }
 
   // Extract task ID from branch name: feedback/<id> or ticket/<id>
@@ -72,43 +84,120 @@ githubWebhook.post("/", async (c) => {
   const taskId = feedbackMatch?.[1] || ticketMatch?.[1];
 
   if (!taskId) {
-    return c.json({ ok: true, ignored: true, reason: "not a task branch" });
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
   // Find which product this repo belongs to
   const repoName = payload.repository.full_name;
   const registry = loadRegistry();
   let productName: string | null = null;
-  let slackChannel: string | null = null;
 
   for (const [name, config] of Object.entries(registry.products)) {
     if (config.repos.includes(repoName)) {
       productName = name;
-      slackChannel = config.slack_channel;
       break;
     }
   }
 
-  // Best-effort Slack notification
-  if (slackChannel && c.env.SLACK_BOT_TOKEN) {
-    try {
-      await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${c.env.SLACK_BOT_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: slackChannel,
-          text: `✅ PR merged for ${productName || repoName}: ${payload.pull_request.html_url}`,
-        }),
-      });
-    } catch {
-      // Best-effort
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  // Forward to Orchestrator DO
+  const id = env.ORCHESTRATOR.idFromName("main");
+  const orchestrator = env.ORCHESTRATOR.get(id);
+  await orchestrator.fetch(new Request("http://internal/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "pr_merged",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        branch: branch,
+        repo: repoName,
+      },
+    }),
+  }));
+
+  return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+}
+
+async function handlePullRequestReview(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    review: {
+      state: string; // "approved", "changes_requested", "commented"
+      body: string | null;
+      user: { login: string };
+      html_url: string;
+    };
+    pull_request: {
+      head: { ref: string };
+      html_url: string;
+    };
+    repository: {
+      full_name: string;
+    };
+  };
+
+  // Only handle submitted reviews
+  if (payload.action !== "submitted") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  // Extract task ID from branch name
+  const branch = payload.pull_request.head.ref;
+  const feedbackMatch = branch.match(/^feedback\/(.+)$/);
+  const ticketMatch = branch.match(/^ticket\/(.+)$/);
+  const taskId = feedbackMatch?.[1] || ticketMatch?.[1];
+
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  // Find which product this repo belongs to
+  const repoName = payload.repository.full_name;
+  const registry = loadRegistry();
+  let productName: string | null = null;
+
+  for (const [name, config] of Object.entries(registry.products)) {
+    if (config.repos.includes(repoName)) {
+      productName = name;
+      break;
     }
   }
 
-  return c.json({ ok: true, product: productName, taskId, status: "implemented" });
-});
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  // Forward to Orchestrator DO
+  const id = env.ORCHESTRATOR.idFromName("main");
+  const orchestrator = env.ORCHESTRATOR.get(id);
+  await orchestrator.fetch(new Request("http://internal/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "pr_review",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        review_url: payload.review.html_url,
+        review_state: payload.review.state,
+        review_body: payload.review.body || "",
+        reviewer: payload.review.user.login,
+        branch: branch,
+        repo: repoName,
+      },
+    }),
+  }));
+
+  return Response.json({ ok: true, product: productName, taskId, reviewState: payload.review.state });
+}
 
 export { githubWebhook };
