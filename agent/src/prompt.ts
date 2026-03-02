@@ -15,6 +15,7 @@ import type {
   TicketData,
   CommandData,
 } from "./config";
+import type { TicketEvent } from "./types";
 
 export function buildPrompt(task: TaskPayload): string {
   const header = `You are a Product Engineer agent working on **${task.product}**.
@@ -98,4 +99,21 @@ function formatCommand(data: CommandData): string {
     `**Message:** "${data.text}"`,
     `**Channel:** ${data.channel}`,
   ].join("\n");
+}
+
+export function buildEventPrompt(event: TicketEvent): string {
+  const payload = event.payload as Record<string, unknown>;
+
+  switch (event.type) {
+    case "pr_review":
+      return `A PR review was submitted:\n\n**State:** ${payload.state}\n**Body:** ${payload.body || "(no comment)"}\n\nRespond to the review. If changes are requested, make them, push, and notify Slack.`;
+    case "pr_merged":
+      return `The PR has been merged. Update the task status, notify Slack, and do a brief retro.`;
+    case "ci_status":
+      return `CI status update:\n\n**Status:** ${payload.status}\n**Description:** ${payload.description || ""}\n\nIf CI failed, investigate and fix. If it passed, continue with the workflow.`;
+    case "slack_reply":
+      return `The user replied via Slack:\n\n"${payload.text}"\n\nContinue processing with this information.`;
+    default:
+      return `New event: ${event.type}\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
+  }
 }

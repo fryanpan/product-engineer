@@ -1,8 +1,7 @@
 /**
  * Agent configuration from environment variables.
  *
- * The orchestrator injects these into the sandbox container.
- * Secret names are resolved per-product by the orchestrator.
+ * The TicketAgent DO injects these into the sandbox container via envVars.
  */
 
 export type TaskType = "feedback" | "ticket" | "command";
@@ -39,16 +38,14 @@ export interface CommandData {
 }
 
 export interface AgentConfig {
-  taskPayload: TaskPayload;
+  ticketId: string;
+  product: string;
+  repos: string[];
   anthropicApiKey: string;
   githubToken: string;
   slackBotToken: string;
   slackChannel: string;
-  slackAppToken: string;
-  slackThreadTs: string;
   linearApiKey: string;
-  orchestratorUrl: string;
-  orchestratorApiKey: string;
 }
 
 export function loadConfig(): AgentConfig {
@@ -59,15 +56,13 @@ export function loadConfig(): AgentConfig {
   };
 
   return {
-    taskPayload: JSON.parse(required("TASK_PAYLOAD")),
+    ticketId: required("TICKET_ID"),
+    product: required("PRODUCT"),
+    repos: JSON.parse(required("REPOS")),
     anthropicApiKey: required("ANTHROPIC_API_KEY"),
     githubToken: required("GITHUB_TOKEN"),
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackChannel: process.env.SLACK_CHANNEL || "#general",
-    slackAppToken: required("SLACK_APP_TOKEN"),
-    slackThreadTs: process.env.SLACK_THREAD_TS || "",
-    linearApiKey: required("LINEAR_API_KEY"),
-    orchestratorUrl: process.env.ORCHESTRATOR_URL || "",
-    orchestratorApiKey: process.env.ORCHESTRATOR_API_KEY || "",
+    linearApiKey: process.env.LINEAR_API_KEY || "",
   };
 }
