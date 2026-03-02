@@ -25,6 +25,16 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+// Reject oversized request bodies (1MB limit)
+const MAX_BODY_SIZE = 1024 * 1024;
+app.use("*", async (c, next) => {
+  const contentLength = c.req.header("Content-Length");
+  if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+    return c.json({ error: "Request body too large" }, 413);
+  }
+  await next();
+});
+
 app.get("/health", (c) => c.json({ ok: true, service: "product-engineer-worker" }));
 
 app.route("/api/webhooks/linear", linearWebhook);
