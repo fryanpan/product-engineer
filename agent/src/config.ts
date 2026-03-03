@@ -78,7 +78,7 @@ export function loadConfig(): AgentConfig {
     slackChannel: process.env.SLACK_CHANNEL || "#general",
     slackThreadTs: process.env.SLACK_THREAD_TS || "",
     linearApiKey: process.env.LINEAR_API_KEY || "",
-    workerUrl: process.env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
+    workerUrl: required("WORKER_URL"),
     apiKey: process.env.API_KEY || "",
   };
 }

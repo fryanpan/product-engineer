@@ -15,7 +15,11 @@ if (slackAppToken) {
   const socket = new SlackSocket(slackAppToken, async (event) => {
     try {
       console.log(`[Orchestrator Container] Slack event: ${event.type} from ${event.user || "unknown"}`);
-      const workerUrl = process.env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev";
+      const workerUrl = process.env.WORKER_URL;
+      if (!workerUrl) {
+        console.error("[Orchestrator Container] WORKER_URL not set — cannot forward Slack events");
+        return;
+      }
       await fetch(`${workerUrl}/api/internal/slack-event`, {
         method: "POST",
         headers: {

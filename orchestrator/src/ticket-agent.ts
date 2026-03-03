@@ -14,7 +14,7 @@ export function resolveAgentEnvVars(
     SLACK_THREAD_TS: "", // Populated at runtime via event.slackThreadTs
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
     SENTRY_DSN: env.SENTRY_DSN || "",
-    WORKER_URL: env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
+    WORKER_URL: env.WORKER_URL || "",
     API_KEY: env.API_KEY || "",
   };
 
