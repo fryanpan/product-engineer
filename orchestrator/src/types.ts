@@ -52,6 +52,7 @@ export interface Bindings {
   // Per-product GitHub tokens
   HEALTH_TOOL_GITHUB_TOKEN: string;
   BIKE_TOOL_GITHUB_TOKEN: string;
+  PRODUCT_ENGINEER_GITHUB_TOKEN: string;
 
   [key: string]: unknown;
 }

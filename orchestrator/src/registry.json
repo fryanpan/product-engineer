@@ -1,5 +1,7 @@
 {
   "linear_team_id": "01328a7f-d761-4176-8bbf-004a397dc6f7",
+  "agent_linear_email": "bcagent13@gmail.com",
+  "agent_linear_name": "BC Agent",
   "products": {
     "health-tool": {
       "repos": ["fryanpan/health-tool"],
@@ -39,6 +41,27 @@
       },
       "secrets": {
         "GITHUB_TOKEN": "BIKE_TOOL_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
+    },
+    "product-engineer": {
+      "repos": ["fryanpan/product-engineer"],
+      "slack_channel": "#product-engineer",
+      "slack_channel_id": "C0AJ3ETD0QN",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Product Engineer"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "PRODUCT_ENGINEER_GITHUB_TOKEN",
         "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
         "LINEAR_API_KEY": "LINEAR_API_KEY",
         "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",

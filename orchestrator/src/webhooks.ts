@@ -5,7 +5,7 @@
  */
 
 import { Hono } from "hono";
-import { getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
+import { getAgentIdentity, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
 
 // --- Shared helpers (exported for testing) ---
@@ -57,6 +57,42 @@ function forwardToOrchestrator(env: Bindings, event: Record<string, unknown>) {
   }));
 }
 
+// --- Linear API helpers ---
+
+async function linearGraphQL(apiKey: string, query: string, variables: Record<string, unknown>) {
+  const res = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: apiKey },
+    body: JSON.stringify({ query, variables }),
+  });
+  return res.json() as Promise<Record<string, unknown>>;
+}
+
+/** Best-effort: look up agent's Linear user ID by email, then assign the issue. */
+export async function assignTicketToAgent(apiKey: string, issueId: string, agentEmail: string) {
+  try {
+    const userData = await linearGraphQL(
+      apiKey,
+      `query($email: String!) { users(filter: { email: { eq: $email } }) { nodes { id } } }`,
+      { email: agentEmail },
+    ) as { data?: { users?: { nodes?: { id: string }[] } } };
+
+    const userId = userData.data?.users?.nodes?.[0]?.id;
+    if (!userId) {
+      console.warn(`[Linear] Could not find user with email ${agentEmail}`);
+      return;
+    }
+
+    await linearGraphQL(
+      apiKey,
+      `mutation($id: String!, $assigneeId: String!) { issueUpdate(id: $id, input: { assigneeId: $assigneeId }) { success } }`,
+      { id: issueId, assigneeId: userId },
+    );
+  } catch (err) {
+    console.error("[Linear] Failed to assign ticket:", err);
+  }
+}
+
 // --- Linear webhook ---
 
 interface LinearWebhookPayload {
@@ -70,7 +106,7 @@ interface LinearWebhookPayload {
     teamId: string;
     labelIds?: string[];
     state?: { name: string };
-    assignee?: { name: string };
+    assignee?: { id: string; name: string; email?: string };
     project?: { id: string; name: string };
   };
 }
@@ -100,16 +136,6 @@ linearWebhook.post("/", async (c) => {
     return c.json({ ok: true, ignored: true });
   }
 
-  // Only trigger on create or status changes to "In Progress"
-  const shouldTrigger =
-    payload.action === "create" ||
-    (payload.action === "update" &&
-      payload.data.state?.name === "In Progress");
-
-  if (!shouldTrigger) {
-    return c.json({ ok: true, ignored: true, reason: "action not relevant" });
-  }
-
   if (!isOurTeam(payload.data.teamId)) {
     return c.json({ ok: true, ignored: true, reason: "not our team" });
   }
@@ -132,6 +158,20 @@ linearWebhook.post("/", async (c) => {
     });
   }
 
+  // Trigger conditions: create or assigned to agent
+  const agent = getAgentIdentity();
+  const isAssignedToAgent =
+    payload.data.assignee?.email === agent.linear_email ||
+    payload.data.assignee?.name === agent.linear_name;
+
+  const shouldTrigger =
+    payload.action === "create" ||
+    (payload.action === "update" && isAssignedToAgent);
+
+  if (!shouldTrigger) {
+    return c.json({ ok: true, ignored: true, reason: "action not relevant" });
+  }
+
   await forwardToOrchestrator(c.env, {
     type: "ticket_created",
     source: "linear",
@@ -145,6 +185,11 @@ linearWebhook.post("/", async (c) => {
       labels: payload.data.labelIds || [],
     },
   });
+
+  // Self-assign in Linear if not already assigned to agent
+  if (!isAssignedToAgent) {
+    assignTicketToAgent(c.env.LINEAR_API_KEY, payload.data.id, agent.linear_email);
+  }
 
   return c.json({
     ok: true,
