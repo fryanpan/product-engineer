@@ -34,7 +34,13 @@ app.use("*", async (c, next) => {
   await next();
 });
 
-app.get("/health", (c) => c.json({ ok: true, service: "product-engineer-worker" }));
+app.get("/health", async (c) => {
+  // Wake the Orchestrator DO so its Socket Mode container stays alive
+  const orchestrator = getOrchestrator(c.env);
+  const doHealth = await orchestrator.fetch(new Request("http://internal/health"));
+  const doStatus = await doHealth.json<{ ok: boolean }>();
+  return c.json({ ok: true, service: "product-engineer-worker", orchestrator: doStatus });
+});
 
 app.route("/api/webhooks/linear", linearWebhook);
 app.route("/api/webhooks/github", githubWebhook);

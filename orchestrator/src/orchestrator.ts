@@ -74,9 +74,21 @@ export class Orchestrator extends Container<Bindings> {
     return super.alarm(alarmProps);
   }
 
-  // Start the Slack Socket Mode container on first request (and after crashes)
+  // Start the Slack Socket Mode container on first request (and after crashes/deploys).
+  // Verifies the container is actually responsive — the in-memory flag alone isn't
+  // reliable across deploys (the flag survives but the container gets replaced).
   private async ensureContainerRunning() {
-    if (this.containerStarted) return;
+    if (this.containerStarted) {
+      try {
+        // Container handle exists at runtime (from Container SDK) but isn't in Workers types
+        const port = (this.ctx as any).container.getTcpPort(this.defaultPort);
+        const res = await port.fetch("http://localhost/health", { signal: AbortSignal.timeout(2000) }) as Response;
+        if (res.ok) return;
+      } catch {
+        console.warn("[Orchestrator] Container flag was set but container is not responsive — restarting");
+        this.containerStarted = false;
+      }
+    }
 
     console.log("[Orchestrator] Starting container (deployment or first start)...");
     try {
@@ -101,14 +113,19 @@ export class Orchestrator extends Container<Bindings> {
         pr_url TEXT,
         branch_name TEXT,
         created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
+        updated_at TEXT DEFAULT (datetime('now')),
+        agent_active INTEGER NOT NULL DEFAULT 1
       )
     `);
-    // Add agent_active column if it doesn't exist (for deployment safety)
+    // Migration: add agent_active column for existing deployments
     try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER DEFAULT 1`);
-    } catch {
-      // Column already exists
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER NOT NULL DEFAULT 1`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (!message.includes("duplicate column") && !message.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add agent_active column:", err);
+        throw err;
+      }
     }
     this.dbInitialized = true;
   }
