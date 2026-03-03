@@ -18,6 +18,12 @@ jobs:
       - name: Install agent dependencies
         run: cd agent && bun install
 
+      - name: Typecheck orchestrator
+        run: cd orchestrator && bun run typecheck
+
+      - name: Typecheck agent
+        run: cd agent && bun run typecheck
+
       - name: Run orchestrator tests
         run: cd orchestrator && bun test
 
