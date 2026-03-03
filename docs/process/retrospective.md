@@ -1,3 +1,73 @@
 # Retrospectives
 
 Session retrospectives and process improvements.
+
+## 2026-03-03 - Product Engineer: From Zero to Working Agent
+
+Full build-out of the Product Engineer system: orchestrator, agent, containers, deployment, and first successful autonomous ticket completion.
+
+### Time Breakdown
+
+| Started (PT) | Phase | 👤 Hands-On | 🤖 Agent | Problems |
+|---------|-------|------------|----------|----------|
+| Mar 1 6:30pm | Architecture & plan (design, write plan, dispatch subagents) | ████ 32m | ██████████████████████████████ ~5h | |
+| Mar 2 9:58am | Security review (Codex, Cloudflare research, hardening) | ███ 24m | ███ 30m | |
+| Mar 2 11:29am | Features & config (Slack flow, MCP, permissions, security docs) | ████ 32m | ██████ 60m | ⚠ Missing Slack integration discovered late |
+| Mar 2 8:37pm | Secrets & setup (provision keys, Notion page, channel IDs, cleanup) | ███ 24m | ███ 30m | ⚠ 7 tool errors (Notion MCP flaky) |
+| Mar 2 9:42pm | Deploy & initial debug (Docker, container startup, envVars) | ██████ 55m | ██████ 60m | ⚠ 6 distinct bugs: sleepAfter, Docker paths, container start, envVars shadowing, merge conflicts |
+| Mar 2 11:11pm | Overnight autonomous debug (root user, plan mode, e2e verify) | ██ 15m | ██████████████████ ~3h | ⚠ Root blocks bypassPermissions, plan mode hangs headless |
+| Mar 3 9:42am | PR review & polish (soften rules, Copilot feedback, fix tests) | █ 9m | █ 8m | |
+
+### Metrics
+
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~39 hours (Mar 1 6:30pm → Mar 3 9:53am PT) |
+| Hands-on | ~3.2 hours (8%) |
+| Agent autonomous | ~10 hours (26%) |
+| Idle/away/sleeping | ~26 hours (66%) |
+| Sessions | 6 (across 4 worktrees) |
+| PRs created | 7 (#2, #11, #12, #13, #14, #15, #16) |
+| Agent-created PRs | 1 (health-tool #56 — BC-66 rename) |
+
+### Key Observations
+
+**1. The deploy-debug cycle consumed the most effort (55m hands-on, 6 distinct bugs)**
+Each bug was a different layer: Cloudflare Container SDK quirks (`sleepAfter` format, `envVars` class field shadowing), Docker build context paths, container lifecycle (`startAndWaitForPorts` vs `start`). These were all discoverable only at deploy time — no local dev environment for Cloudflare Containers.
+
+**2. The overnight autonomous session was highly effective**
+User said "keep working overnight" and walked away. The agent:
+- Investigated SDK source code to understand `query()` internals
+- Discovered root cause (root user blocks `bypassPermissions`) by adding `stderr` callback
+- Fixed Dockerfile, redeployed, verified
+- Discovered second issue (plan mode hangs headless), fixed prompt
+- Triggered a fresh run and watched the agent complete BC-66 end-to-end
+- Created the PR with full observability data
+All with ~15 minutes of human setup.
+
+**3. The Cloudflare Container SDK has sharp edges that aren't well-documented**
+- `envVars` as a class field that shadows getters (JavaScript class semantics)
+- `sleepAfter` only accepts hours, not days
+- `alarm()` requires `{ isRetry, retryCount }` argument
+- Container SDK docs are thin — had to read source code
+
+**4. Security review was proactive and caught real issues**
+Used Codex CLI + manual review in parallel. Caught: no auth on internal routes, unsanitized ticket IDs, exposed status data. Most were addressed immediately.
+
+**5. Friction from context window exhaustion**
+The main build session (56 turns) hit context limits and required a continuation session. The continuation lost some context and had to re-read files.
+
+**6. Git workflow was messy in the deploy phase**
+14+ errors from merge conflicts, wrong branches, cherry-pick issues. Multiple "please merge" user messages. The rush to fix deploy bugs while keeping PRs clean caused thrash.
+
+### Actions Taken
+
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Plan mode hangs headless agent | Prompt update | Added "NEVER use plan mode" rule to `agent/src/prompt.ts` |
+| AskUserQuestion hangs headless | Prompt update | Redirected to `ask_question` MCP tool (posts to Slack) |
+| Root user blocks bypassPermissions | Dockerfile fix | Run agent container as non-root `agent` user |
+| envVars getter shadowed by class field | Code fix | Replaced getter with constructor assignment in both DOs |
+| Phone-home overwrites branch_name | Code fix | Stopped sending diagnostics via `branch_name` field |
+| No observability into container crashes | Code fix | Added `onStop`/`onError` lifecycle hooks, stderr callback |
+| Disabled MCP servers breaking tests | Test fix | Skipped Notion/Sentry tests (npx hangs in containers) |
