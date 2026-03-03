@@ -10,86 +10,79 @@ import {
 
 describe("getProduct", () => {
   it("returns correct config for known products", () => {
-    const health = getProduct("health-tool");
-    expect(health).not.toBeNull();
-    expect(health!.repos).toEqual(["fryanpan/health-tool"]);
-    expect(health!.slack_channel).toBe("#health-tool");
-    expect(health!.triggers.linear?.project_name).toBe("Health Tool");
+    const myApp = getProduct("my-app");
+    expect(myApp).not.toBeNull();
+    expect(myApp!.repos).toEqual(["your-org/my-app"]);
+    expect(myApp!.slack_channel).toBe("#my-app");
+    expect(myApp!.triggers.linear?.project_name).toBe("My App");
+    expect(myApp!.triggers.feedback?.enabled).toBe(true);
+    expect(myApp!.triggers.feedback?.callback_url).toBe(
+      "https://my-app-api.example.com",
+    );
 
-    const bike = getProduct("bike-tool");
-    expect(bike).not.toBeNull();
-    expect(bike!.repos).toEqual(["fryanpan/bike-tool"]);
-
-    const pe = getProduct("product-engineer");
-    expect(pe).not.toBeNull();
-    expect(pe!.repos).toEqual(["fryanpan/product-engineer"]);
-    expect(pe!.slack_channel).toBe("#product-engineer");
-    expect(pe!.triggers.linear?.project_name).toBe("Product Engineer");
+    const myOther = getProduct("my-other-app");
+    expect(myOther).not.toBeNull();
+    expect(myOther!.repos).toEqual(["your-org/my-other-app"]);
+    expect(myOther!.triggers.feedback).toBeUndefined();
   });
 
   it("returns null for unknown products", () => {
     expect(getProduct("nonexistent")).toBeNull();
     expect(getProduct("")).toBeNull();
-    expect(getProduct("HEALTH-TOOL")).toBeNull(); // case-sensitive
+    expect(getProduct("MY-APP")).toBeNull(); // case-sensitive
   });
 });
 
 describe("getProductByLinearProject", () => {
   it("matches case-insensitively", () => {
-    const result1 = getProductByLinearProject("Health Tool");
+    const result1 = getProductByLinearProject("My App");
     expect(result1).not.toBeNull();
-    expect(result1!.name).toBe("health-tool");
-    expect(result1!.config.repos).toEqual(["fryanpan/health-tool"]);
+    expect(result1!.name).toBe("my-app");
+    expect(result1!.config.repos).toEqual(["your-org/my-app"]);
 
-    const result2 = getProductByLinearProject("health tool");
+    const result2 = getProductByLinearProject("my app");
     expect(result2).not.toBeNull();
-    expect(result2!.name).toBe("health-tool");
+    expect(result2!.name).toBe("my-app");
 
-    const result3 = getProductByLinearProject("HEALTH TOOL");
+    const result3 = getProductByLinearProject("MY APP");
     expect(result3).not.toBeNull();
-    expect(result3!.name).toBe("health-tool");
+    expect(result3!.name).toBe("my-app");
 
-    const result4 = getProductByLinearProject("bike tool");
+    const result4 = getProductByLinearProject("My Other App");
     expect(result4).not.toBeNull();
-    expect(result4!.name).toBe("bike-tool");
-
-    const result5 = getProductByLinearProject("Product Engineer");
-    expect(result5).not.toBeNull();
-    expect(result5!.name).toBe("product-engineer");
+    expect(result4!.name).toBe("my-other-app");
   });
 
   it("returns null for unknown projects", () => {
     expect(getProductByLinearProject("Unknown Project")).toBeNull();
     expect(getProductByLinearProject("")).toBeNull();
-    expect(getProductByLinearProject("health-tool")).toBeNull(); // slug, not project name
+    expect(getProductByLinearProject("my-app")).toBeNull(); // slug, not project name
   });
 });
 
 describe("getProducts", () => {
   it("returns all products", () => {
     const products = getProducts();
-    expect(Object.keys(products)).toContain("health-tool");
-    expect(Object.keys(products)).toContain("bike-tool");
-    expect(Object.keys(products)).toContain("product-engineer");
-    expect(products["health-tool"].slack_channel).toBe("#health-tool");
-    expect(products["bike-tool"].slack_channel).toBe("#bike-tool");
-    expect(products["product-engineer"].slack_channel).toBe("#product-engineer");
+    expect(Object.keys(products)).toContain("my-app");
+    expect(Object.keys(products)).toContain("my-other-app");
+    expect(products["my-app"].slack_channel).toBe("#my-app");
+    expect(products["my-other-app"].slack_channel).toBe("#my-other-app");
   });
 });
 
 describe("getAgentIdentity", () => {
   it("returns configured agent identity", () => {
     const identity = getAgentIdentity();
-    expect(identity.linear_email).toBe("bcagent13@gmail.com");
-    expect(identity.linear_name).toBe("BC Agent");
+    expect(identity.linear_email).toBe("agent@example.com");
+    expect(identity.linear_name).toBe("My Agent");
   });
 });
 
 describe("isOurTeam", () => {
-  it("returns true for Team Bryan's ID", () => {
+  it("returns true for configured team ID", () => {
     const registry = loadRegistry();
     expect(isOurTeam(registry.linear_team_id)).toBe(true);
-    expect(isOurTeam("01328a7f-d761-4176-8bbf-004a397dc6f7")).toBe(true);
+    expect(isOurTeam("00000000-0000-0000-0000-000000000001")).toBe(true);
   });
 
   it("returns false for other team IDs", () => {

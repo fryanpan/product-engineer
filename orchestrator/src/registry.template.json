@@ -1,0 +1,53 @@
+{
+  "linear_team_id": "00000000-0000-0000-0000-000000000001",
+  "agent_linear_email": "agent@example.com",
+  "agent_linear_name": "My Agent",
+  "products": {
+    "my-app": {
+      "repos": ["your-org/my-app"],
+      "slack_channel": "#my-app",
+      "slack_channel_id": "C000000APP1",
+      "triggers": {
+        "feedback": {
+          "enabled": true,
+          "callback_url": "https://my-app-api.example.com"
+        },
+        "linear": {
+          "enabled": true,
+          "project_name": "My App"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "MY_APP_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
+    },
+    "my-other-app": {
+      "repos": ["your-org/my-other-app"],
+      "slack_channel": "#my-other-app",
+      "slack_channel_id": "C000000APP2",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "My Other App"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "MY_OTHER_APP_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
+    }
+  }
+}
