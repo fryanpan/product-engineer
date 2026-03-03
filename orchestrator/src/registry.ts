@@ -72,6 +72,7 @@ const registry: Registry = {
     "health-tool": {
       repos: ["fryanpan/health-tool"],
       slack_channel: "#health-tool",
+      slack_channel_id: "C0AHQK8LB34",
       triggers: {
         feedback: {
           enabled: true,
@@ -97,6 +98,7 @@ const registry: Registry = {
     "bike-tool": {
       repos: ["fryanpan/bike-tool"],
       slack_channel: "#bike-tool",
+      slack_channel_id: "C0AHVFLB15G",
       triggers: {
         linear: {
           enabled: true,
