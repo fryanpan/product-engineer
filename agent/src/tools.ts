@@ -43,7 +43,7 @@ export function createTools(config: AgentConfig) {
         };
       }
 
-      const data = (await res.json()) as { ok: boolean; error?: string };
+      const data = (await res.json()) as { ok: boolean; error?: string; ts?: string };
       if (!data.ok) {
         return {
           content: [
@@ -53,6 +53,25 @@ export function createTools(config: AgentConfig) {
             },
           ],
         };
+      }
+
+      // If this is the first Slack message (no thread_ts yet), persist it back
+      // so future messages thread correctly and Slack replies route to this ticket.
+      if (!config.slackThreadTs && data.ts) {
+        config.slackThreadTs = data.ts;
+        fetch(`${config.workerUrl}/api/internal/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": config.apiKey,
+          },
+          body: JSON.stringify({
+            ticketId: config.ticketId,
+            slack_thread_ts: data.ts,
+          }),
+        }).catch((err) =>
+          console.error("[Agent] Failed to persist slack_thread_ts:", err),
+        );
       }
 
       return {

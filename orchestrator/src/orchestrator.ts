@@ -152,16 +152,21 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
-    const { ticketId, status, pr_url, branch_name } = await request.json<{
+    const { ticketId, status, pr_url, branch_name, slack_thread_ts } = await request.json<{
       ticketId: string;
-      status: string;
+      status?: string;
       pr_url?: string;
       branch_name?: string;
+      slack_thread_ts?: string;
     }>();
 
-    const updates: string[] = ["status = ?", "updated_at = datetime('now')"];
-    const values: (string | null)[] = [status];
+    const updates: string[] = ["updated_at = datetime('now')"];
+    const values: (string | null)[] = [];
 
+    if (status) {
+      updates.push("status = ?");
+      values.push(status);
+    }
     if (pr_url) {
       updates.push("pr_url = ?");
       values.push(pr_url);
@@ -169,6 +174,10 @@ export class Orchestrator extends Container<Bindings> {
     if (branch_name) {
       updates.push("branch_name = ?");
       values.push(branch_name);
+    }
+    if (slack_thread_ts) {
+      updates.push("slack_thread_ts = ?");
+      values.push(slack_thread_ts);
     }
 
     values.push(ticketId);
