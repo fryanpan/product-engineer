@@ -84,7 +84,10 @@ export class Orchestrator extends Container<Bindings> {
     this.ctx.storage.sql.exec(
       `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel)
        VALUES (?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')`,
+       ON CONFLICT(id) DO UPDATE SET
+         slack_thread_ts = COALESCE(excluded.slack_thread_ts, tickets.slack_thread_ts),
+         slack_channel = COALESCE(excluded.slack_channel, tickets.slack_channel),
+         updated_at = datetime('now')`,
       event.ticketId,
       event.product,
       event.slackThreadTs || null,
