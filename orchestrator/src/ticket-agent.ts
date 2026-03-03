@@ -80,13 +80,6 @@ export class TicketAgent extends Container<Bindings> {
     return resolveAgentEnvVars(config, this.env as unknown as Record<string, string>);
   }
 
-  private async ensureRunning() {
-    if (!this.ctx.container!.running) {
-      console.log("[TicketAgent] Starting container...");
-      await this.ctx.container!.start();
-    }
-  }
-
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -94,23 +87,22 @@ export class TicketAgent extends Container<Bindings> {
       case "/initialize": {
         const config = await request.json<TicketAgentConfig>();
         this.setConfig(config);
-        await this.ensureRunning();
+        // Start container and wait for the HTTP port to be ready
+        await this.startAndWaitForPorts(this.defaultPort);
         return Response.json({ ok: true });
       }
       case "/event": {
         const event = await request.json<TicketEvent>();
         try {
-          await this.ensureRunning();
-          const port = this.ctx.container!.getTcpPort(this.defaultPort);
-          const res = await port.fetch("http://localhost/event", {
+          // containerFetch starts the container if needed and waits for port readiness
+          return await this.containerFetch("http://localhost/event", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "X-Internal-Key": (this.env.API_KEY as string) || "",
             },
             body: JSON.stringify(event),
-          });
-          return res;
+          }, this.defaultPort);
         } catch (err) {
           console.error("[TicketAgent] Container not ready, event may be lost:", err);
           return Response.json(
