@@ -30,6 +30,3 @@ WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
 tag = "v2"
 new_sqlite_classes = ["Orchestrator", "TicketAgent"]
 
-[[migrations]]
-tag = "v3"
-deleted_classes = ["Sandbox"]
