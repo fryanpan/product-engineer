@@ -26,6 +26,11 @@ bindings = [
 [vars]
 WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
 
+# v1 was the original queue-based architecture (now replaced)
+[[migrations]]
+tag = "v1"
+new_classes = ["Sandbox"]
+
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["Orchestrator", "TicketAgent"]
