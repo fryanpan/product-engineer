@@ -103,12 +103,13 @@ async function cloneRepos() {
 
 async function startSession(initialPrompt: string) {
   if (sessionActive) return;
-  sessionActive = true;
 
   const { tools } = createTools(config);
   const toolServer = createSdkMcpServer({ name: "pe-tools", tools });
   const externalMcpServers = buildMcpServers();
   const messages = createMessageGenerator();
+  // messageYielder is now assigned — safe to mark session active
+  sessionActive = true;
 
   messageYielder!(userMessage(initialPrompt));
 
@@ -162,13 +163,16 @@ app.post("/event", async (c) => {
     await cloneRepos();
 
     if (!sessionActive) {
+      const taskType: TaskPayload["type"] =
+        event.type === "ticket_created"
+          ? "ticket"
+          : event.type === "slack_mention"
+            ? "command"
+            : event.type === "feedback"
+              ? "feedback"
+              : "ticket";
       const taskPayload: TaskPayload = {
-        type:
-          event.type === "ticket_created"
-            ? "ticket"
-            : event.type === "slack_mention"
-              ? "command"
-              : "ticket",
+        type: taskType,
         product: config.product,
         repos: config.repos,
         data: event.payload as TaskPayload["data"],
