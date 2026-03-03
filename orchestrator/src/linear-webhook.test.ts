@@ -156,6 +156,7 @@ describe("linear webhook handler", () => {
       type: "Issue",
       data: {
         id: "issue-123",
+        identifier: "HT-42",
         title: "Fix the login bug",
         description: "Users cannot log in",
         priority: 2,
@@ -180,6 +181,7 @@ describe("linear webhook handler", () => {
     expect(event.product).toBe("health-tool");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.id).toBe("issue-123");
+    expect(payload.identifier).toBe("HT-42");
     expect(payload.title).toBe("Fix the login bug");
     expect(payload.labels).toEqual(["label-a"]);
   });

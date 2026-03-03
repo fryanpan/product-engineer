@@ -100,6 +100,7 @@ interface LinearWebhookPayload {
   type: string;
   data: {
     id: string;
+    identifier: string;
     title: string;
     description: string;
     priority: number;
@@ -183,6 +184,7 @@ linearWebhook.post("/", async (c) => {
     product: match.name,
     payload: {
       id: payload.data.id,
+      identifier: payload.data.identifier,
       title: payload.data.title,
       description: payload.data.description || "",
       priority: payload.data.priority,
