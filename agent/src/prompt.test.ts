@@ -1,7 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { buildPrompt, buildEventPrompt } from "./prompt";
-import type { TaskPayload } from "./config";
-import type { TicketEvent } from "./types";
+import type { TaskPayload, TicketEvent } from "./config";
 
 describe("buildPrompt", () => {
   it("builds correct prompt for feedback tasks", () => {

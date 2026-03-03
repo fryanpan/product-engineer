@@ -14,8 +14,8 @@ import type {
   FeedbackData,
   TicketData,
   CommandData,
+  TicketEvent,
 } from "./config";
-import type { TicketEvent } from "./types";
 
 export function buildPrompt(task: TaskPayload): string {
   const header = `You are a Product Engineer agent working on **${task.product}**.

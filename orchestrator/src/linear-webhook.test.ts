@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { Hono } from "hono";
-import { linearWebhook } from "./linear-webhook";
+import { linearWebhook } from "./webhooks";
 import type { Bindings } from "./types";
 
 // Mock orchestrator DO that captures events sent to it

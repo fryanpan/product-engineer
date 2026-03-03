@@ -1,0 +1,285 @@
+/**
+ * Webhook handlers for Linear and GitHub events.
+ *
+ * Shared HMAC verification. Per-source event parsing and routing.
+ */
+
+import { Hono } from "hono";
+import { getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
+import type { Bindings } from "./types";
+
+// --- Shared helpers (exported for testing) ---
+
+export async function verifyHmac(
+  body: string,
+  secret: string,
+  signatureHex: string,
+): Promise<boolean> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const hexPairs = signatureHex.match(/.{2}/g);
+  if (!hexPairs) return false;
+  const receivedBytes = new Uint8Array(
+    hexPairs.map((b) => parseInt(b, 16)),
+  );
+  return crypto.subtle.verify(
+    "HMAC",
+    key,
+    receivedBytes,
+    new TextEncoder().encode(body),
+  );
+}
+
+export function extractTaskId(branch: string): string | null {
+  return branch.match(/^(?:feedback|ticket)\/(.+)$/)?.[1] ?? null;
+}
+
+export function resolveProductByRepo(repoFullName: string): string | null {
+  const registry = loadRegistry();
+  for (const [name, config] of Object.entries(registry.products)) {
+    if (config.repos.includes(repoFullName)) return name;
+  }
+  return null;
+}
+
+function forwardToOrchestrator(env: Bindings, event: Record<string, unknown>) {
+  const id = env.ORCHESTRATOR.idFromName("main");
+  const orchestrator = env.ORCHESTRATOR.get(id);
+  return orchestrator.fetch(new Request("http://internal/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(event),
+  }));
+}
+
+// --- Linear webhook ---
+
+interface LinearWebhookPayload {
+  action: string;
+  type: string;
+  data: {
+    id: string;
+    title: string;
+    description: string;
+    priority: number;
+    teamId: string;
+    labelIds?: string[];
+    state?: { name: string };
+    assignee?: { name: string };
+    project?: { id: string; name: string };
+  };
+}
+
+const linearWebhook = new Hono<{ Bindings: Bindings }>();
+
+linearWebhook.post("/", async (c) => {
+  const webhookSecret = c.env.LINEAR_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    return c.json({ error: "Webhook not configured" }, 500);
+  }
+
+  const signature = c.req.header("Linear-Signature");
+  if (!signature) {
+    return c.json({ error: "Missing signature" }, 401);
+  }
+
+  const rawBody = await c.req.text();
+  if (!(await verifyHmac(rawBody, webhookSecret, signature))) {
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  const payload = JSON.parse(rawBody) as LinearWebhookPayload;
+
+  // Only handle issues
+  if (payload.type !== "Issue") {
+    return c.json({ ok: true, ignored: true });
+  }
+
+  // Only trigger on create or status changes to "In Progress"
+  const shouldTrigger =
+    payload.action === "create" ||
+    (payload.action === "update" &&
+      payload.data.state?.name === "In Progress");
+
+  if (!shouldTrigger) {
+    return c.json({ ok: true, ignored: true, reason: "action not relevant" });
+  }
+
+  if (!isOurTeam(payload.data.teamId)) {
+    return c.json({ ok: true, ignored: true, reason: "not our team" });
+  }
+
+  const projectName = payload.data.project?.name;
+  if (!projectName) {
+    return c.json({
+      ok: true,
+      ignored: true,
+      reason: "no project — cannot determine product",
+    });
+  }
+
+  const match = getProductByLinearProject(projectName);
+  if (!match) {
+    return c.json({
+      ok: true,
+      ignored: true,
+      reason: `unknown project: ${projectName}`,
+    });
+  }
+
+  await forwardToOrchestrator(c.env, {
+    type: "ticket_created",
+    source: "linear",
+    ticketId: payload.data.id,
+    product: match.name,
+    payload: {
+      id: payload.data.id,
+      title: payload.data.title,
+      description: payload.data.description || "",
+      priority: payload.data.priority,
+      labels: payload.data.labelIds || [],
+    },
+  });
+
+  return c.json({
+    ok: true,
+    product: match.name,
+    project: projectName,
+    ticketId: payload.data.id,
+  });
+});
+
+// --- GitHub webhook ---
+
+const githubWebhook = new Hono<{ Bindings: Bindings }>();
+
+githubWebhook.post("/", async (c) => {
+  const secret = c.env.GITHUB_WEBHOOK_SECRET;
+  if (!secret) {
+    return c.json({ error: "Webhook not configured" }, 500);
+  }
+
+  const signature = c.req.header("X-Hub-Signature-256");
+  if (!signature) {
+    return c.json({ error: "Missing signature" }, 401);
+  }
+
+  const rawBody = await c.req.text();
+  const signatureHex = signature.replace("sha256=", "");
+  if (!signatureHex) {
+    return c.json({ error: "Malformed signature" }, 401);
+  }
+
+  if (!(await verifyHmac(rawBody, secret, signatureHex))) {
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  const event = c.req.header("X-GitHub-Event");
+
+  if (event === "pull_request") {
+    return handlePullRequest(rawBody, c.env);
+  }
+  if (event === "pull_request_review") {
+    return handlePullRequestReview(rawBody, c.env);
+  }
+
+  return c.json({ ok: true, ignored: true });
+});
+
+async function handlePullRequest(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    pull_request: {
+      merged: boolean;
+      head: { ref: string };
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  if (payload.action !== "closed" || !payload.pull_request.merged) {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const branch = payload.pull_request.head.ref;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const productName = resolveProductByRepo(payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "pr_merged",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      pr_url: payload.pull_request.html_url,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+}
+
+async function handlePullRequestReview(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    review: {
+      state: string;
+      body: string | null;
+      user: { login: string };
+      html_url: string;
+    };
+    pull_request: {
+      head: { ref: string };
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  if (payload.action !== "submitted") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const branch = payload.pull_request.head.ref;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const productName = resolveProductByRepo(payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "pr_review",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      pr_url: payload.pull_request.html_url,
+      review_url: payload.review.html_url,
+      review_state: payload.review.state,
+      review_body: payload.review.body || "",
+      reviewer: payload.review.user.login,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId, reviewState: payload.review.state });
+}
+
+export { linearWebhook, githubWebhook };

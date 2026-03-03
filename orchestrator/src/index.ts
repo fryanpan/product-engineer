@@ -7,8 +7,7 @@
 
 import * as Sentry from "@sentry/cloudflare";
 import { Hono } from "hono";
-import { linearWebhook } from "./linear-webhook";
-import { githubWebhook } from "./github-webhook";
+import { linearWebhook, githubWebhook } from "./webhooks";
 import type { Bindings } from "./types";
 
 // Export DO classes for wrangler
