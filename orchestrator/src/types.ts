@@ -49,8 +49,10 @@ export interface Bindings {
   SENTRY_ACCESS_TOKEN: string;
   CONTEXT7_API_KEY: string;
 
-  // Per-product GitHub tokens (add your own here, e.g., MY_APP_GITHUB_TOKEN)
-  // These are resolved dynamically via registry secrets config + [key: string] index signature
+  // Per-product GitHub tokens
+  HEALTH_TOOL_GITHUB_TOKEN: string;
+  BIKE_TOOL_GITHUB_TOKEN: string;
+  PRODUCT_ENGINEER_GITHUB_TOKEN: string;
 
   [key: string]: unknown;
 }

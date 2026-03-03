@@ -49,10 +49,7 @@ The pitch: this is a small, understandable repo that does something ambitious.
 **Prerequisites:** [Cloudflare account](https://dash.cloudflare.com/sign-up), [Anthropic API key](https://console.anthropic.com/), Slack workspace, Linear workspace.
 
 1. Fork/clone the repo
-2. Copy the registry template and fill in your product config:
-   ```bash
-   cp orchestrator/src/registry.template.json orchestrator/src/registry.json
-   ```
+2. Edit `orchestrator/src/registry.json` with your product config (see `registry.template.json` for a clean starting point)
 3. Run the interactive setup script — it walks through every external service with direct links and prompts:
    ```bash
    bash scripts/setup.sh
@@ -96,6 +93,10 @@ End-to-end: create a test Linear ticket or Slack mention and watch the Slack cha
 - [`CLAUDE.md`](CLAUDE.md) — detailed architecture and conventions
 - [`docs/product/security.md`](docs/product/security.md) — security architecture and accepted risks
 - [`docs/deploy.md`](docs/deploy.md) — deployment details and debugging
+
+## Future Work
+
+- **Runtime registry** — move product config from a build-time JSON file to a runtime store (Cloudflare KV or D1) so the registry can be updated without redeploying, and personal config doesn't need to live in the repo. `registry.template.json` would become the sole checked-in reference.
 
 ## License
 

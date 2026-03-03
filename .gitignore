@@ -6,9 +6,6 @@ dist/
 .env
 .env.*
 
-# Private config (use registry.template.json as a starting point)
-orchestrator/src/registry.json
-
 # OS
 .DS_Store
 Thumbs.db

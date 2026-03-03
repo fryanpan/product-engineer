@@ -38,8 +38,9 @@ function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
     LINEAR_WEBHOOK_SECRET: TEST_WEBHOOK_SECRET,
     GITHUB_WEBHOOK_SECRET: "test",
     ANTHROPIC_API_KEY: "test",
-    MY_APP_GITHUB_TOKEN: "test",
-    MY_OTHER_APP_GITHUB_TOKEN: "test",
+    HEALTH_TOOL_GITHUB_TOKEN: "test",
+    BIKE_TOOL_GITHUB_TOKEN: "test",
+    PRODUCT_ENGINEER_GITHUB_TOKEN: "test",
     ...overrides,
   };
 }
@@ -91,7 +92,7 @@ describe("linear webhook handler", () => {
         title: "test",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
       },
     }, env);
 
@@ -113,7 +114,7 @@ describe("linear webhook handler", () => {
         description: "",
         priority: 1,
         teamId: "unknown-team-id",
-        project: { id: "p1", name: "My App" },
+        project: { id: "p1", name: "Health Tool" },
       },
     }, env);
 
@@ -135,7 +136,7 @@ describe("linear webhook handler", () => {
         title: "test",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
         // no project field
       },
     }, env);
@@ -158,17 +159,17 @@ describe("linear webhook handler", () => {
         title: "Fix the login bug",
         description: "Users cannot log in",
         priority: 2,
-        teamId: "00000000-0000-0000-0000-000000000001",
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
         labelIds: ["label-a"],
-        project: { id: "p1", name: "My App" },
+        project: { id: "p1", name: "Health Tool" },
       },
     }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.product).toBe("my-app");
-    expect(json.project).toBe("My App");
+    expect(json.product).toBe("health-tool");
+    expect(json.project).toBe("Health Tool");
     expect(json.ticketId).toBe("issue-123");
 
     expect(sentEvents).toHaveLength(1);
@@ -176,7 +177,7 @@ describe("linear webhook handler", () => {
     expect(event.type).toBe("ticket_created");
     expect(event.source).toBe("linear");
     expect(event.ticketId).toBe("issue-123");
-    expect(event.product).toBe("my-app");
+    expect(event.product).toBe("health-tool");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.id).toBe("issue-123");
     expect(payload.title).toBe("Fix the login bug");
@@ -196,8 +197,8 @@ describe("linear webhook handler", () => {
         title: "Progress issue",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
-        project: { id: "p1", name: "My App" },
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
         state: { name: "In Progress" },
       },
     }, env);
@@ -217,8 +218,8 @@ describe("linear webhook handler", () => {
         title: "Done issue",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
-        project: { id: "p1", name: "My App" },
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
         state: { name: "Done" },
       },
     }, env);
@@ -238,8 +239,8 @@ describe("linear webhook handler", () => {
         title: "Removed issue",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
-        project: { id: "p1", name: "My App" },
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
       },
     }, env);
 
@@ -260,16 +261,16 @@ describe("linear webhook handler", () => {
         title: "Assigned to agent",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
-        project: { id: "p1", name: "My App" },
-        assignee: { id: "user-1", name: "My Agent", email: "agent@example.com" },
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
+        assignee: { id: "user-1", name: "BC Agent", email: "bcagent13@gmail.com" },
       },
     }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.product).toBe("my-app");
+    expect(json.product).toBe("health-tool");
     expect(sentEvents).toHaveLength(1);
   });
 
@@ -284,16 +285,16 @@ describe("linear webhook handler", () => {
         title: "Assigned by name",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
-        project: { id: "p1", name: "My App" },
-        assignee: { id: "user-1", name: "My Agent" },
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
+        assignee: { id: "user-1", name: "BC Agent" },
       },
     }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.product).toBe("my-app");
+    expect(json.product).toBe("health-tool");
     expect(sentEvents).toHaveLength(1);
   });
 
@@ -308,8 +309,8 @@ describe("linear webhook handler", () => {
         title: "Assigned to someone else",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
-        project: { id: "p1", name: "My App" },
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
         assignee: { id: "user-2", name: "Someone Else", email: "other@example.com" },
       },
     }, env);
@@ -332,7 +333,7 @@ describe("linear webhook handler", () => {
         title: "Unknown project issue",
         description: "",
         priority: 1,
-        teamId: "00000000-0000-0000-0000-000000000001",
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
         project: { id: "p99", name: "Unknown Product" },
       },
     }, env);

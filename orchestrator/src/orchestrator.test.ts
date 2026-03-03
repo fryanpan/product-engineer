@@ -51,20 +51,20 @@ describe("buildTicketEvent", () => {
 });
 
 describe("resolveProductFromChannel", () => {
-  test("returns product name when channel ID matches my-app", () => {
-    expect(resolveProductFromChannel("C000000APP1")).toBe("my-app");
+  test("returns product name when channel ID matches health-tool", () => {
+    expect(resolveProductFromChannel("C0AHQK8LB34")).toBe("health-tool");
   });
 
-  test("returns product name when channel ID matches my-other-app", () => {
-    expect(resolveProductFromChannel("C000000APP2")).toBe("my-other-app");
+  test("returns product name when channel ID matches bike-tool", () => {
+    expect(resolveProductFromChannel("C0AHVFLB15G")).toBe("bike-tool");
   });
 
-  test("returns product name when channel name matches my-app", () => {
-    expect(resolveProductFromChannel("#my-app")).toBe("my-app");
+  test("returns product name when channel name matches health-tool", () => {
+    expect(resolveProductFromChannel("#health-tool")).toBe("health-tool");
   });
 
-  test("returns product name when channel name matches my-other-app", () => {
-    expect(resolveProductFromChannel("#my-other-app")).toBe("my-other-app");
+  test("returns product name when channel name matches bike-tool", () => {
+    expect(resolveProductFromChannel("#bike-tool")).toBe("bike-tool");
   });
 
   test("returns null for unknown channel ID", () => {
