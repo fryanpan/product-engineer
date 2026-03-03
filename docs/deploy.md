@@ -75,7 +75,7 @@ curl -s -H "Authorization: Bearer xoxb-YOUR-BOT-TOKEN" \
   | jq '.channels[] | select(.name | test("your-channel")) | {name, id}'
 ```
 
-Then update `orchestrator/src/registry.ts` — add `slack_channel_id` for each product:
+Then update `orchestrator/src/registry.json` — add `slack_channel_id` for each product:
 
 ```typescript
 "your-app": {

@@ -404,7 +404,12 @@ echo "    CONTEXT7_API_KEY (optional)"
 echo ""
 echo "  Checking GitHub Actions secrets..."
 echo ""
-gh secret list --repo "<your-org>/product-engineer" 2>&1 | head -10 || echo "  (install gh CLI or check manually)"
+GITHUB_REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||' | sed 's|\.git$||')
+if [ -n "$GITHUB_REPO" ]; then
+  gh secret list --repo "$GITHUB_REPO" 2>&1 | head -10 || echo "  (install gh CLI or check manually)"
+else
+  echo "  (could not detect GitHub repo from git remote — check manually)"
+fi
 
 cat <<'DONE'
 
