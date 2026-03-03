@@ -2,6 +2,8 @@
 
 Last updated: 2026-03-03
 
+For deployment safety and zero-disruption updates, see [deployment-safety.md](./deployment-safety.md).
+
 ## Prerequisites
 
 - Cloudflare account with Workers and Containers enabled

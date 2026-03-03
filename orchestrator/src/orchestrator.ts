@@ -77,8 +77,16 @@ export class Orchestrator extends Container<Bindings> {
   // Start the Slack Socket Mode container on first request (and after crashes)
   private async ensureContainerRunning() {
     if (this.containerStarted) return;
-    await this.startAndWaitForPorts(this.defaultPort);
-    this.containerStarted = true;
+
+    console.log("[Orchestrator] Starting container (deployment or first start)...");
+    try {
+      await this.startAndWaitForPorts(this.defaultPort);
+      this.containerStarted = true;
+      console.log("[Orchestrator] Container started successfully");
+    } catch (err) {
+      console.error("[Orchestrator] Container start failed:", err);
+      throw err;
+    }
   }
 
   private initDb() {
@@ -96,6 +104,12 @@ export class Orchestrator extends Container<Bindings> {
         updated_at TEXT DEFAULT (datetime('now'))
       )
     `);
+    // Add agent_active column if it doesn't exist (for deployment safety)
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER DEFAULT 1`);
+    } catch {
+      // Column already exists
+    }
     this.dbInitialized = true;
   }
 
@@ -146,6 +160,17 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async routeToAgent(event: TicketEvent) {
+    // Check if agent is still active (not in terminal state)
+    const ticket = this.ctx.storage.sql.exec(
+      "SELECT agent_active, status FROM tickets WHERE id = ?",
+      event.ticketId,
+    ).toArray()[0] as { agent_active: number; status: string } | undefined;
+
+    if (ticket && ticket.agent_active === 0) {
+      console.log(`[Orchestrator] Skipping inactive agent for ${event.ticketId} (status: ${ticket.status})`);
+      return;
+    }
+
     const productConfig = getProduct(event.product);
     if (!productConfig) {
       console.error(`[Orchestrator] Unknown product: ${event.product}`);
@@ -214,6 +239,14 @@ export class Orchestrator extends Container<Bindings> {
     if (status) {
       updates.push("status = ?");
       values.push(status);
+
+      // Terminal states: mark agent as inactive so we don't spawn new agents
+      // on deployment-triggered events
+      const terminalStates = ["merged", "closed", "deferred", "failed"];
+      if (terminalStates.includes(status)) {
+        updates.push("agent_active = 0");
+        console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
+      }
     }
     if (pr_url) {
       updates.push("pr_url = ?");
