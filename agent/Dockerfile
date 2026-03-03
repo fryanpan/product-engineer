@@ -13,10 +13,13 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Non-root user — Claude Code refuses bypassPermissions as root
+RUN useradd -m -s /bin/bash agent
+RUN mkdir -p /workspace && chown agent:agent /workspace
+
 COPY . /app/
 WORKDIR /app
 RUN bun install
 
-RUN mkdir -p /workspace
-WORKDIR /app
+USER agent
 CMD ["bun", "run", "src/server.ts"]

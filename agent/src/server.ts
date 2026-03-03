@@ -32,11 +32,58 @@ function userMessage(content: string): SDKUserMessage {
 }
 
 const app = new Hono();
+
+console.log("[Agent] Starting server...");
+console.log(`[Agent] Running as: uid=${process.getuid?.()} gid=${process.getgid?.()} HOME=${process.env.HOME}`);
+console.log(`[Agent] Env check: ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
+console.log(`[Agent] Env check: GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? "SET" : "MISSING"}`);
+console.log(`[Agent] Env check: TICKET_ID=${process.env.TICKET_ID || "MISSING"}`);
+console.log(`[Agent] Env check: PRODUCT=${process.env.PRODUCT || "MISSING"}`);
+console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
+
 const config = loadConfig();
+console.log(`[Agent] Config loaded: ticket=${config.ticketId} product=${config.product} repos=${config.repos.join(",")}`);
+
+// Phone-home: report lifecycle events to the worker so they appear in wrangler tail.
+// Only set branch_name when we actually have a git branch (not diagnostic detail).
+function phoneHome(phase: string, detail?: string) {
+  const body: Record<string, unknown> = {
+    ticketId: config.ticketId,
+    status: `agent:${phase}`,
+  };
+  // Log detail locally, but don't send it as branch_name (avoids overwriting real git branch)
+  if (detail) console.log(`[Agent] phoneHome: ${phase} ${detail}`);
+  else console.log(`[Agent] phoneHome: ${phase}`);
+  fetch(`${config.workerUrl}/api/internal/status`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Key": config.apiKey,
+    },
+    body: JSON.stringify(body),
+  }).catch((err) => console.error("[Agent] phoneHome failed:", err));
+}
+
+phoneHome("server_started", `uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
+
+// Heartbeat every 2 minutes while the session is active
+const heartbeatInterval = setInterval(() => {
+  if (sessionStatus === "completed" || sessionStatus === "error") {
+    clearInterval(heartbeatInterval);
+    return;
+  }
+  phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount}`);
+}, 120_000);
 
 let sessionActive = false;
 let messageYielder: ((msg: SDKUserMessage) => void) | null = null;
 let repoCloned = false;
+let sessionStatus = "idle";
+let lastToolCall = "";
+let lastAssistantText = "";
+let sessionMessageCount = 0;
+let sessionError = "";
+let lastStderr = "";
 
 function createMessageGenerator(): AsyncGenerator<SDKUserMessage> {
   const queue: SDKUserMessage[] = [];
@@ -65,10 +112,13 @@ function createMessageGenerator(): AsyncGenerator<SDKUserMessage> {
 
 async function cloneRepos() {
   if (repoCloned) return;
+  sessionStatus = "cloning";
 
+  console.log("[Agent] Setting up .netrc for GitHub auth...");
+  const home = process.env.HOME || "/home/agent";
   const netrc = `machine github.com\nlogin x-access-token\npassword ${config.githubToken}\n`;
-  await Bun.write("/root/.netrc", netrc);
-  const chmod = Bun.spawn(["chmod", "600", "/root/.netrc"]);
+  await Bun.write(`${home}/.netrc`, netrc);
+  const chmod = Bun.spawn(["chmod", "600", `${home}/.netrc`]);
   await chmod.exited;
 
   for (const repo of config.repos) {
@@ -85,8 +135,12 @@ async function cloneRepos() {
     ]);
     const exitCode = await proc.exited;
     if (exitCode !== 0) {
-      throw new Error(`Failed to clone ${repo}: exit code ${exitCode}`);
+      const stderr = proc.stderr ? await new Response(proc.stderr).text() : "no stderr";
+      console.error(`[Agent] Clone failed: ${stderr}`);
+      throw new Error(`Failed to clone ${repo}: exit code ${exitCode} — ${stderr}`);
     }
+    console.log(`[Agent] Cloned ${repo} successfully`);
+    phoneHome("clone_done", repoName);
   }
 
   // Set working directory to the first repo so Agent SDK tools operate on it
@@ -102,44 +156,79 @@ async function cloneRepos() {
 
 async function startSession(initialPrompt: string) {
   if (sessionActive) return;
+  sessionStatus = "starting_session";
 
+  console.log("[Agent] Creating tools and MCP servers...");
   const { tools } = createTools(config);
   const toolServer = createSdkMcpServer({ name: "pe-tools", tools });
   const externalMcpServers = buildMcpServers();
+  console.log(`[Agent] MCP servers: ${Object.keys(externalMcpServers).join(", ")}`);
+
   const messages = createMessageGenerator();
   // messageYielder is now assigned — safe to mark session active
   sessionActive = true;
 
   messageYielder!(userMessage(initialPrompt));
+  console.log(`[Agent] Initial prompt queued (${initialPrompt.length} chars)`);
 
+  phoneHome("session_starting", `prompt_chars=${initialPrompt.length}`);
+  console.log("[Agent] Starting Agent SDK query()...");
   const session = query({
     prompt: messages,
     options: {
       systemPrompt: { type: "preset", preset: "claude_code" },
       settingSources: ["project"],
       maxTurns: 200,
-      permissionMode: "acceptEdits",
+      permissionMode: "bypassPermissions",
       mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
+      // Force node runtime — cli.js is a Node bundle, Bun may have compat issues
+      executable: "node",
+      stderr: (data: string) => {
+        lastStderr = data.slice(0, 500);
+        console.error(`[Agent][SDK stderr] ${data.slice(0, 300)}`);
+        // Don't phone home every stderr chunk — it's available via /status
+      },
     },
   });
+  console.log("[Agent] query() returned, starting consumption loop...");
 
   (async () => {
     try {
+      sessionStatus = "running";
+      phoneHome("session_running");
       for await (const message of session) {
+        sessionMessageCount++;
+        if (sessionMessageCount === 1) phoneHome("first_message");
         if (message.type === "assistant" && message.message?.content) {
           for (const block of message.message.content) {
             if (block.type === "text") {
+              lastAssistantText = block.text.slice(0, 500);
               console.log(`[Agent] ${block.text.slice(0, 200)}`);
             }
             if (block.type === "tool_use") {
+              lastToolCall = `${block.name}(${JSON.stringify(block.input).slice(0, 100)})`;
               console.log(`[Agent] Tool: ${block.name}`);
             }
           }
+        } else if (message.type === "result") {
+          const result = message as Record<string, unknown>;
+          console.log(`[Agent] Result message: ${JSON.stringify(result).slice(0, 300)}`);
+          phoneHome("result", JSON.stringify(result).slice(0, 200));
+        }
+        // Periodic phone-home every 5th message so we can track progress
+        if (sessionMessageCount % 5 === 0) {
+          phoneHome("progress", `msgs=${sessionMessageCount} tool=${lastToolCall.slice(0, 80)}`);
         }
       }
+      console.log("[Agent] Session ended normally");
+      sessionStatus = "completed";
+      phoneHome("session_completed", `msgs=${sessionMessageCount}`);
     } catch (err) {
       console.error("[Agent] Session error:", err);
+      sessionError = String(err);
+      sessionStatus = "error";
       sessionActive = false;
+      phoneHome("session_error", `${String(err).slice(0, 150)} | stderr=${lastStderr.slice(0, 100)}`);
     }
   })();
 }
@@ -188,12 +277,26 @@ app.post("/event", async (c) => {
     return c.json({ ok: true });
   } catch (err) {
     console.error("[Agent] Event handling error:", err);
+    phoneHome("event_error", String(err).slice(0, 200));
     return c.json({ error: String(err) }, 500);
   }
 });
 
 app.get("/health", (c) =>
   c.json({ ok: true, service: "ticket-agent-container" }),
+);
+
+app.get("/status", (c) =>
+  c.json({
+    service: "ticket-agent-container",
+    ticketId: config.ticketId,
+    product: config.product,
+    sessionActive,
+    sessionStatus,
+    sessionMessageCount,
+    sessionError,
+    repoCloned,
+  }),
 );
 
 export default {
