@@ -322,6 +322,55 @@ describe("linear webhook handler", () => {
     expect(sentEvents).toHaveLength(0);
   });
 
+  it("ignores terminal states even when assigned to agent", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+
+    // Moving to Done state should not trigger, even if assigned to agent
+    const res1 = await postWebhook(app, {
+      action: "update",
+      type: "Issue",
+      data: {
+        id: "issue-500",
+        title: "Completed task",
+        description: "",
+        priority: 1,
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
+        state: { name: "Done" },
+        assignee: { id: "user-1", name: "BC Agent", email: "bcagent13@gmail.com" },
+      },
+    }, env);
+
+    expect(res1.status).toBe(200);
+    const json1 = await res1.json() as Record<string, unknown>;
+    expect(json1.ignored).toBe(true);
+    expect(json1.reason).toBe("action not relevant");
+    expect(sentEvents).toHaveLength(0);
+
+    // Canceled state should also be ignored
+    const res2 = await postWebhook(app, {
+      action: "update",
+      type: "Issue",
+      data: {
+        id: "issue-501",
+        title: "Canceled task",
+        description: "",
+        priority: 1,
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
+        state: { name: "Canceled" },
+        assignee: { id: "user-1", name: "BC Agent", email: "bcagent13@gmail.com" },
+      },
+    }, env);
+
+    expect(res2.status).toBe(200);
+    const json2 = await res2.json() as Record<string, unknown>;
+    expect(json2.ignored).toBe(true);
+    expect(json2.reason).toBe("action not relevant");
+    expect(sentEvents).toHaveLength(0);
+  });
+
   it("ignores issues from unknown Linear projects", async () => {
     const app = makeApp();
     const env = makeEnv();
