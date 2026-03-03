@@ -13,10 +13,10 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-COPY agent/ /app/agent/
-WORKDIR /app/agent
+COPY . /app/
+WORKDIR /app
 RUN bun install
 
 RUN mkdir -p /workspace
-WORKDIR /app/agent
+WORKDIR /app
 CMD ["bun", "run", "src/server.ts"]
