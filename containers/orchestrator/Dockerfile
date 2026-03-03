@@ -1,5 +1,5 @@
 FROM oven/bun:latest
-COPY containers/orchestrator/ /app/
+COPY . /app/
 WORKDIR /app
 RUN bun install
 CMD ["bun", "run", "index.ts"]

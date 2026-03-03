@@ -13,7 +13,7 @@ max_instances = 1
 # Per-ticket agents — one per active ticket, runs Claude Agent SDK
 [[containers]]
 class_name = "TicketAgent"
-image = "../containers/agent/Dockerfile"
+image = "../agent/Dockerfile"
 instance_type = "basic"
 max_instances = 10
 
