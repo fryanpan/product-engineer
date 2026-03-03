@@ -29,4 +29,5 @@ WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["Orchestrator", "TicketAgent"]
+deleted_classes = ["Sandbox"]
 
