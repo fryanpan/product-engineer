@@ -50,7 +50,17 @@ override onStop(params: { exitCode: number; reason: string }) {
 }
 
 private async ensureContainerRunning() {
-  if (this.containerStarted) return; // Already running
+  if (this.containerStarted) {
+    try {
+      // Verify container is actually responsive (flag can go stale across deploys)
+      const port = (this.ctx as any).container.getTcpPort(this.defaultPort);
+      const res = await port.fetch("http://localhost/health", { signal: AbortSignal.timeout(2000) });
+      if (res.ok) return;
+    } catch {
+      console.warn("[Orchestrator] Container not responsive — restarting");
+      this.containerStarted = false;
+    }
+  }
   await this.startAndWaitForPorts(this.defaultPort);
   this.containerStarted = true;
 }
@@ -100,18 +110,28 @@ private async routeToAgent(event: TicketEvent) {
 
 **Problem:** Moving a Linear ticket to "Done" or "Canceled" should not spawn an agent.
 
-**Solution:** Webhook handler checks for terminal states before forwarding:
+**Solution:** Webhook handler checks for terminal states before forwarding (on both `create` and `update` actions):
 ```typescript
 // orchestrator/src/webhooks.ts
-const terminalStates = ["Done", "Canceled"];
-const isTerminalState = terminalStates.includes(payload.data.state?.name || "");
+const TERMINAL_STATES = ["Done", "Canceled", "Cancelled"];
+const stateName = payload.data.state?.name ?? "";
+const isTerminal = TERMINAL_STATES.includes(stateName);
 
-if (isTerminalState) {
-  return c.json({ ok: true, ignored: true, reason: "terminal state" });
+const shouldTrigger =
+  !isTerminal && (
+    payload.action === "create" ||
+    (payload.action === "update" && isAssignedToAgent)
+  );
+
+if (!shouldTrigger) {
+  const reason = isTerminal
+    ? `issue in terminal state: ${stateName}`
+    : "action not relevant";
+  return c.json({ ok: true, ignored: true, reason });
 }
 ```
 
-**Result:** Completed tickets don't trigger agent spawning.
+**Result:** Completed tickets don't trigger agent spawning. Terminal state check applies to both new and updated issues.
 
 ## Deployment Process
 
@@ -224,7 +244,7 @@ Tickets with `agent_active: 0` have finished.
 
 The deployment safety logic is tested via:
 - `orchestrator/src/orchestrator.test.ts` — unit tests for `buildTicketEvent`, `resolveProductFromChannel`
-- `orchestrator/src/linear-webhook.test.ts` — webhook terminal state filtering
+- `orchestrator/src/linear-webhook.test.ts` — webhook handling including terminal state filtering (Done, Canceled, Cancelled), agent assignment triggers, and unknown project rejection
 - Manual smoke tests (above)
 
 Full integration tests require a deployed Cloudflare environment and are beyond the scope of the test suite.
