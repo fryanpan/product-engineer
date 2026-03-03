@@ -27,7 +27,7 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.TICKET_ID).toBe("LIN-123");
     expect(vars.SLACK_CHANNEL).toBe("#health-tool");
     expect(vars.SLACK_BOT_TOKEN).toBe("xoxb-slack");
-    expect(vars.WORKER_URL).toBe("https://product-engineer.fryanpan.workers.dev");
+    expect(vars.WORKER_URL).toBe("");
   });
 
   test("uses WORKER_URL from env when provided", () => {

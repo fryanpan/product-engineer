@@ -2,6 +2,12 @@
 
 Shared orchestrator and autonomous agent for processing tasks (feedback, Linear tickets, Slack commands) across multiple products.
 
+## What is this?
+
+Product Engineer is an autonomous agent that turns Linear tickets, Slack messages, and feedback into shipped code — PRs that are ready for human review. For small teams, the bottleneck isn't coding; it's the coordination overhead of context-switching into a repo, understanding the codebase, implementing, testing, and communicating progress. This agent handles that entire loop: minutes for simple changes, under an hour for complex features, with human involvement only at the moments it matters.
+
+The core is intentionally tiny (~600-line orchestrator, ~130-line agent entrypoint). All decision-making lives in English skill files, not TypeScript, so changing how the agent behaves means editing markdown. It runs on Cloudflare Workers + Containers, scaling to dozens of parallel agents across multiple repos.
+
 ## Design Philosophy
 
 **Minimal, auditable, easy to customize.** Deliver the most possible value with the least custom code.

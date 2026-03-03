@@ -13,7 +13,7 @@ Register a new product so the Product Engineer agent can work on it.
 
 Gather:
 - **Product name** — short identifier (e.g., `health-tool`, `bike-tool`)
-- **Repos** — one or more GitHub repos that make up this product (e.g., `fryanpan/health-tool` for a single repo, or `org/frontend` + `org/backend` for multi-repo)
+- **Repos** — one or more GitHub repos that make up this product (e.g., `your-org/your-app` for a single repo, or `org/frontend` + `org/backend` for multi-repo)
 - **Slack channel** — where the agent communicates (e.g., `#health-tool`)
 - **Linear team ID** — if the product uses Linear for tickets
 
@@ -52,14 +52,14 @@ For each secret in the product's config:
 
 **For Linear webhooks:**
 1. Go to Linear Settings → API → Webhooks
-2. Add webhook URL: `https://product-engineer.fryanpan.workers.dev/api/webhooks/linear`
+2. Add webhook URL: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/linear`
 3. Select events: Issue created, Issue updated
 4. Set the webhook secret to match `LINEAR_WEBHOOK_SECRET`
 
 **For Slack commands:**
 1. Ensure the Slack app is installed in the product's channel
 2. The bot must be invited to the channel
-3. Enable Event Subscriptions with URL: `https://product-engineer.fryanpan.workers.dev/api/webhooks/slack/events`
+3. Enable Event Subscriptions with URL: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/slack/events`
 4. Subscribe to: `app_mention`
 
 **For feedback widgets (web apps only):**
@@ -67,7 +67,7 @@ For each secret in the product's config:
 2. Include `X-API-Key` header with the orchestrator's API key
 
 **For GitHub PR merge detection:**
-1. Add webhook to the repo: `https://product-engineer.fryanpan.workers.dev/api/webhooks/github`
+1. Add webhook to the repo: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/github`
 2. Select events: Pull requests
 3. Set the webhook secret to match `GITHUB_WEBHOOK_SECRET`
 
