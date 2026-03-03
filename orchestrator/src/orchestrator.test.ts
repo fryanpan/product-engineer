@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { buildTicketEvent } from "./orchestrator";
+import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
 
 describe("buildTicketEvent", () => {
   test("creates event from Linear webhook data", () => {
@@ -35,5 +35,47 @@ describe("buildTicketEvent", () => {
     });
     expect(event.type).toBe("slack_mention");
     expect(event.slackThreadTs).toBe("1234567890.123456");
+    expect(event.slackChannel).toBe("C12345");
+  });
+
+  test("includes channel in Slack event", () => {
+    const event = buildTicketEvent("slack", "slack_mention", {
+      product: "health-tool",
+      text: "deploy to prod",
+      channel: "C0AHQK8LB34",
+      threadTs: "1234567890.999999",
+    });
+    expect(event.slackChannel).toBe("C0AHQK8LB34");
+    expect(event.slackThreadTs).toBe("1234567890.999999");
+  });
+});
+
+describe("resolveProductFromChannel", () => {
+  test("returns product name when channel ID matches health-tool", () => {
+    expect(resolveProductFromChannel("C0AHQK8LB34")).toBe("health-tool");
+  });
+
+  test("returns product name when channel ID matches bike-tool", () => {
+    expect(resolveProductFromChannel("C0AHVFLB15G")).toBe("bike-tool");
+  });
+
+  test("returns product name when channel name matches health-tool", () => {
+    expect(resolveProductFromChannel("#health-tool")).toBe("health-tool");
+  });
+
+  test("returns product name when channel name matches bike-tool", () => {
+    expect(resolveProductFromChannel("#bike-tool")).toBe("bike-tool");
+  });
+
+  test("returns null for unknown channel ID", () => {
+    expect(resolveProductFromChannel("C9999999999")).toBeNull();
+  });
+
+  test("returns null for unknown channel name", () => {
+    expect(resolveProductFromChannel("#nonexistent")).toBeNull();
+  });
+
+  test("returns null for empty string", () => {
+    expect(resolveProductFromChannel("")).toBeNull();
   });
 });
