@@ -87,7 +87,6 @@ const registry: Registry = {
       secrets: {
         GITHUB_TOKEN: "HEALTH_TOOL_GITHUB_TOKEN",
         SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
-        SLACK_APP_TOKEN: "SLACK_APP_TOKEN",
         LINEAR_API_KEY: "LINEAR_API_KEY",
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
         NOTION_TOKEN: "NOTION_TOKEN",
@@ -109,7 +108,6 @@ const registry: Registry = {
       secrets: {
         GITHUB_TOKEN: "BIKE_TOOL_GITHUB_TOKEN",
         SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
-        SLACK_APP_TOKEN: "SLACK_APP_TOKEN",
         LINEAR_API_KEY: "LINEAR_API_KEY",
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
         NOTION_TOKEN: "NOTION_TOKEN",
