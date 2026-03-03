@@ -112,6 +112,18 @@ app.get("/api/orchestrator/tickets", async (c) => {
   return orchestrator.fetch(new Request("http://internal/tickets"));
 });
 
+// Debug: query a specific ticket agent's container status
+app.get("/api/agent/:ticketId/status", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const ticketId = c.req.param("ticketId");
+  const id = c.env.TICKET_AGENT.idFromName(ticketId);
+  const agent = c.env.TICKET_AGENT.get(id);
+  return agent.fetch(new Request("http://internal/status"));
+});
+
 export function getOrchestrator(env: Bindings): DurableObjectStub {
   const id = env.ORCHESTRATOR.idFromName("main");
   return env.ORCHESTRATOR.get(id);

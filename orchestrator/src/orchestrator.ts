@@ -206,6 +206,9 @@ export class Orchestrator extends Container<Bindings> {
       slack_thread_ts?: string;
     }>();
 
+    // Log phone-home payloads so they appear in wrangler tail
+    console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""}`);
+
     const updates: string[] = ["updated_at = datetime('now')"];
     const values: (string | null)[] = [];
 

@@ -131,6 +131,15 @@ export class TicketAgent extends Container<Bindings> {
       case "/health": {
         return Response.json({ ok: true, service: "ticket-agent-do" });
       }
+      case "/status": {
+        try {
+          return await this.containerFetch("http://localhost/status", {
+            method: "GET",
+          }, this.defaultPort);
+        } catch (err) {
+          return Response.json({ error: "Container not reachable", details: String(err) }, { status: 503 });
+        }
+      }
       default:
         return Response.json({ error: "not found" }, { status: 404 });
     }
