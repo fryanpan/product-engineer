@@ -19,8 +19,15 @@ export interface ProductConfig {
   secrets: Record<string, string>;
 }
 
+export interface AgentIdentity {
+  linear_email: string;
+  linear_name: string;
+}
+
 export interface Registry {
   linear_team_id: string;
+  agent_linear_email: string;
+  agent_linear_name: string;
   products: Record<string, ProductConfig>;
 }
 
@@ -55,4 +62,11 @@ export function getProductByLinearProject(
 
 export function isOurTeam(teamId: string): boolean {
   return registry.linear_team_id === teamId;
+}
+
+export function getAgentIdentity(): AgentIdentity {
+  return {
+    linear_email: registry.agent_linear_email,
+    linear_name: registry.agent_linear_name,
+  };
 }

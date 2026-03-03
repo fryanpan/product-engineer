@@ -1,5 +1,7 @@
 {
   "linear_team_id": "01328a7f-d761-4176-8bbf-004a397dc6f7",
+  "agent_linear_email": "bcagent13@gmail.com",
+  "agent_linear_name": "BC Agent",
   "products": {
     "health-tool": {
       "repos": ["fryanpan/health-tool"],

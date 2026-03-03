@@ -40,6 +40,7 @@ function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
     ANTHROPIC_API_KEY: "test",
     HEALTH_TOOL_GITHUB_TOKEN: "test",
     BIKE_TOOL_GITHUB_TOKEN: "test",
+    PRODUCT_ENGINEER_GITHUB_TOKEN: "test",
     ...overrides,
   };
 }
@@ -251,6 +252,78 @@ describe("linear webhook handler", () => {
     expect(res3.status).toBe(200);
     const json3 = await res3.json() as Record<string, unknown>;
     expect(json3.ignored).toBe(true);
+    expect(sentEvents).toHaveLength(0);
+  });
+
+  it("triggers when ticket is assigned to agent identity", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "update",
+      type: "Issue",
+      data: {
+        id: "issue-400",
+        title: "Assigned to agent",
+        description: "",
+        priority: 1,
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
+        assignee: { id: "user-1", name: "BC Agent", email: "bcagent13@gmail.com" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ok).toBe(true);
+    expect(json.product).toBe("health-tool");
+    expect(sentEvents).toHaveLength(1);
+  });
+
+  it("triggers when assigned to agent by name (no email in payload)", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "update",
+      type: "Issue",
+      data: {
+        id: "issue-401",
+        title: "Assigned by name",
+        description: "",
+        priority: 1,
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
+        assignee: { id: "user-1", name: "BC Agent" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ok).toBe(true);
+    expect(json.product).toBe("health-tool");
+    expect(sentEvents).toHaveLength(1);
+  });
+
+  it("ignores assignment to other users", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "update",
+      type: "Issue",
+      data: {
+        id: "issue-402",
+        title: "Assigned to someone else",
+        description: "",
+        priority: 1,
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        project: { id: "p1", name: "Health Tool" },
+        assignee: { id: "user-2", name: "Someone Else", email: "other@example.com" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ignored).toBe(true);
+    expect(json.reason).toBe("action not relevant");
     expect(sentEvents).toHaveLength(0);
   });
 

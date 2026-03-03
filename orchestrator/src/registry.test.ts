@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import {
+  getAgentIdentity,
   getProduct,
   getProducts,
   getProductByLinearProject,
@@ -73,6 +74,14 @@ describe("getProducts", () => {
     expect(products["health-tool"].slack_channel).toBe("#health-tool");
     expect(products["bike-tool"].slack_channel).toBe("#bike-tool");
     expect(products["product-engineer"].slack_channel).toBe("#product-engineer");
+  });
+});
+
+describe("getAgentIdentity", () => {
+  it("returns configured agent identity", () => {
+    const identity = getAgentIdentity();
+    expect(identity.linear_email).toBe("bcagent13@gmail.com");
+    expect(identity.linear_name).toBe("BC Agent");
   });
 });
 
