@@ -158,15 +158,19 @@ linearWebhook.post("/", async (c) => {
     });
   }
 
-  // Trigger conditions: create or assigned to agent
+  // Trigger conditions: create or assigned to agent (but not if already in terminal state)
   const agent = getAgentIdentity();
   const isAssignedToAgent =
     payload.data.assignee?.email === agent.linear_email ||
     payload.data.assignee?.name === agent.linear_name;
 
+  // Ignore terminal states even if assigned to agent
+  const terminalStates = ["Done", "Canceled", "Cancelled"];
+  const isTerminal = payload.data.state?.name && terminalStates.includes(payload.data.state.name);
+
   const shouldTrigger =
     payload.action === "create" ||
-    (payload.action === "update" && isAssignedToAgent);
+    (payload.action === "update" && isAssignedToAgent && !isTerminal);
 
   if (!shouldTrigger) {
     return c.json({ ok: true, ignored: true, reason: "action not relevant" });
