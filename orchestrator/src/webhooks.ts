@@ -158,7 +158,7 @@ linearWebhook.post("/", async (c) => {
     });
   }
 
-  // Trigger conditions: create, "In Progress" status, or assigned to agent
+  // Trigger conditions: create or assigned to agent
   const agent = getAgentIdentity();
   const isAssignedToAgent =
     payload.data.assignee?.email === agent.linear_email ||
@@ -166,7 +166,6 @@ linearWebhook.post("/", async (c) => {
 
   const shouldTrigger =
     payload.action === "create" ||
-    (payload.action === "update" && payload.data.state?.name === "In Progress") ||
     (payload.action === "update" && isAssignedToAgent);
 
   if (!shouldTrigger) {

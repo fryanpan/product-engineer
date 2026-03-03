@@ -184,13 +184,11 @@ describe("linear webhook handler", () => {
     expect(payload.labels).toEqual(["label-a"]);
   });
 
-  it("only triggers on create or 'In Progress' status changes", async () => {
+  it("ignores status changes that aren't agent assignment", async () => {
     const app = makeApp();
     const env = makeEnv();
 
-    // "create" should trigger — tested above
-
-    // "update" with state "In Progress" should trigger
+    // "update" with state "In Progress" (no assignment) should be ignored
     const res1 = await postWebhook(app, {
       action: "update",
       type: "Issue",
@@ -207,12 +205,9 @@ describe("linear webhook handler", () => {
 
     expect(res1.status).toBe(200);
     const json1 = await res1.json() as Record<string, unknown>;
-    expect(json1.ok).toBe(true);
-    expect(json1.product).toBe("health-tool");
-    expect(sentEvents).toHaveLength(1);
-
-    // Reset
-    sentEvents = [];
+    expect(json1.ignored).toBe(true);
+    expect(json1.reason).toBe("action not relevant");
+    expect(sentEvents).toHaveLength(0);
 
     // "update" with state "Done" should be ignored
     const res2 = await postWebhook(app, {
