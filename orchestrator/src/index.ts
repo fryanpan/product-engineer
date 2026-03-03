@@ -119,5 +119,9 @@ export function getOrchestrator(env: Bindings): DurableObjectStub {
 
 export default Sentry.withSentry(
   (env: Bindings) => ({ dsn: env.SENTRY_DSN }),
-  { fetch: app.fetch },
+  {
+    fetch: app.fetch,
+    // No-op: absorbs any lingering cron triggers during rollout transitions
+    async scheduled() {},
+  },
 );

@@ -118,7 +118,7 @@ async function startSession(initialPrompt: string) {
       systemPrompt: { type: "preset", preset: "claude_code" },
       settingSources: ["project"],
       maxTurns: 200,
-      permissionMode: "acceptEdits",
+      permissionMode: "bypassPermissions",
       mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
     },
   });
