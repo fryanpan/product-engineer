@@ -6,14 +6,14 @@ compatibility_flags = ["nodejs_compat"]
 # Orchestrator — always-on, Slack Socket Mode, event routing
 [[containers]]
 class_name = "Orchestrator"
-image = "../containers/orchestrator"
+image = "../containers/orchestrator/Dockerfile"
 instance_type = "lite"
 max_instances = 1
 
 # Per-ticket agents — one per active ticket, runs Claude Agent SDK
 [[containers]]
 class_name = "TicketAgent"
-image = "../containers/agent"
+image = "../containers/agent/Dockerfile"
 instance_type = "basic"
 max_instances = 10
 
