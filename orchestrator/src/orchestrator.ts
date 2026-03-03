@@ -69,10 +69,9 @@ export class Orchestrator extends Container<Bindings> {
   // Always-on: when the SDK's alarm loop fires and the container is dead,
   // restart it before handing control to the base class. This ensures the
   // Slack Socket Mode container self-heals after crashes or deployments.
-  override async alarm(...args: unknown[]) {
+  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
     await this.ensureContainerRunning();
-    // @ts-expect-error — pass alarm props through to Container base class
-    return super.alarm(...args);
+    return super.alarm(alarmProps);
   }
 
   // Start the Slack Socket Mode container on first request (and after crashes)

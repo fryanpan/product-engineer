@@ -54,67 +54,22 @@ describe("buildMcpServers", () => {
     });
   });
 
-  it("includes notion when NOTION_TOKEN is set", () => {
-    process.env.NOTION_TOKEN = "ntn_test_token";
+  // Notion and Sentry stdio servers are disabled (npx hangs in containers).
+  // These tests are skipped until we pre-install MCP server packages in the Dockerfile.
+  it.skip("includes notion when NOTION_TOKEN is set", () => {});
+  it.skip("includes sentry when SENTRY_ACCESS_TOKEN is set", () => {});
+  it.skip("includes sentry without ANTHROPIC_API_KEY in env", () => {});
 
-    const servers = buildMcpServers();
-
-    expect(Object.keys(servers)).toContain("notion");
-    expect(servers.notion).toEqual({
-      command: "npx",
-      args: ["-y", "@notionhq/notion-mcp-server"],
-      env: { NOTION_TOKEN: "ntn_test_token" },
-    });
-  });
-
-  it("includes sentry when SENTRY_ACCESS_TOKEN is set", () => {
-    process.env.SENTRY_ACCESS_TOKEN = "sntrys_test_token";
-    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
-
-    const servers = buildMcpServers();
-
-    expect(Object.keys(servers)).toContain("sentry");
-    expect(servers.sentry).toEqual({
-      command: "npx",
-      args: ["-y", "@sentry/mcp-server@latest"],
-      env: {
-        SENTRY_AUTH_TOKEN: "sntrys_test_token",
-        EMBEDDED_AGENT_PROVIDER: "anthropic",
-        ANTHROPIC_API_KEY: "sk-ant-test",
-      },
-    });
-  });
-
-  it("includes sentry without ANTHROPIC_API_KEY in env", () => {
-    process.env.SENTRY_ACCESS_TOKEN = "sntrys_test_token";
-
-    const servers = buildMcpServers();
-
-    expect(servers.sentry).toEqual({
-      command: "npx",
-      args: ["-y", "@sentry/mcp-server@latest"],
-      env: {
-        SENTRY_AUTH_TOKEN: "sntrys_test_token",
-        EMBEDDED_AGENT_PROVIDER: "anthropic",
-      },
-    });
-  });
-
-  it("includes all servers when all env vars are set", () => {
+  it("includes all HTTP servers when all env vars are set", () => {
     process.env.LINEAR_API_KEY = "lin_key";
     process.env.CONTEXT7_API_KEY = "c7_key";
-    process.env.NOTION_TOKEN = "ntn_token";
-    process.env.SENTRY_ACCESS_TOKEN = "sntrys_token";
-    process.env.ANTHROPIC_API_KEY = "sk-ant-key";
 
     const servers = buildMcpServers();
 
     const keys = Object.keys(servers);
     expect(keys).toContain("linear");
     expect(keys).toContain("context7");
-    expect(keys).toContain("notion");
-    expect(keys).toContain("sentry");
-    expect(keys).toHaveLength(4);
+    expect(keys).toHaveLength(2);
   });
 
   it("produces correct types for http configs", () => {
@@ -133,21 +88,6 @@ describe("buildMcpServers", () => {
     expect(typeof context7.url).toBe("string");
   });
 
-  it("produces correct types for stdio configs", () => {
-    process.env.NOTION_TOKEN = "ntn_token";
-    process.env.SENTRY_ACCESS_TOKEN = "sntrys_token";
-
-    const servers = buildMcpServers();
-
-    // Stdio configs must have command and args
-    const notion = servers.notion as { command: string; args?: string[]; env?: Record<string, string> };
-    expect(typeof notion.command).toBe("string");
-    expect(Array.isArray(notion.args)).toBe(true);
-    expect(notion.env).toBeDefined();
-
-    const sentry = servers.sentry as { command: string; args?: string[]; env?: Record<string, string> };
-    expect(typeof sentry.command).toBe("string");
-    expect(Array.isArray(sentry.args)).toBe(true);
-    expect(sentry.env).toBeDefined();
-  });
+  // Stdio config type tests skipped — Notion/Sentry disabled (npx hangs in containers)
+  it.skip("produces correct types for stdio configs", () => {});
 });

@@ -137,7 +137,7 @@ export class TicketAgent extends Container<Bindings> {
             method: "GET",
           }, this.defaultPort);
         } catch (err) {
-          return Response.json({ error: "Container not reachable", details: String(err) }, { status: 503 });
+          return Response.json({ error: "Container not reachable" }, { status: 503 });
         }
       }
       default:

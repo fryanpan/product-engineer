@@ -44,14 +44,16 @@ console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 const config = loadConfig();
 console.log(`[Agent] Config loaded: ticket=${config.ticketId} product=${config.product} repos=${config.repos.join(",")}`);
 
-// Phone-home: report lifecycle events to the worker so they appear in wrangler tail
+// Phone-home: report lifecycle events to the worker so they appear in wrangler tail.
+// Only set branch_name when we actually have a git branch (not diagnostic detail).
 function phoneHome(phase: string, detail?: string) {
-  const body = {
+  const body: Record<string, unknown> = {
     ticketId: config.ticketId,
     status: `agent:${phase}`,
-    branch_name: detail || undefined,
   };
-  console.log(`[Agent] phoneHome: ${phase} ${detail || ""}`);
+  // Log detail locally, but don't send it as branch_name (avoids overwriting real git branch)
+  if (detail) console.log(`[Agent] phoneHome: ${phase} ${detail}`);
+  else console.log(`[Agent] phoneHome: ${phase}`);
   fetch(`${config.workerUrl}/api/internal/status`, {
     method: "POST",
     headers: {
@@ -64,9 +66,13 @@ function phoneHome(phase: string, detail?: string) {
 
 phoneHome("server_started", `uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 
-// Heartbeat every 2 minutes so we know the container is alive
-setInterval(() => {
-  phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount} tool=${lastToolCall.slice(0, 60)}`);
+// Heartbeat every 2 minutes while the session is active
+const heartbeatInterval = setInterval(() => {
+  if (sessionStatus === "completed" || sessionStatus === "error") {
+    clearInterval(heartbeatInterval);
+    return;
+  }
+  phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount}`);
 }, 120_000);
 
 let sessionActive = false;
@@ -180,7 +186,7 @@ async function startSession(initialPrompt: string) {
       stderr: (data: string) => {
         lastStderr = data.slice(0, 500);
         console.error(`[Agent][SDK stderr] ${data.slice(0, 300)}`);
-        phoneHome("sdk_stderr", data.slice(0, 200));
+        // Don't phone home every stderr chunk — it's available via /status
       },
     },
   });
@@ -288,10 +294,7 @@ app.get("/status", (c) =>
     sessionActive,
     sessionStatus,
     sessionMessageCount,
-    lastToolCall,
-    lastAssistantText: lastAssistantText.slice(0, 300),
     sessionError,
-    lastStderr,
     repoCloned,
   }),
 );
