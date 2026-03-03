@@ -12,6 +12,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - name: Set up registry from template
+        run: cp orchestrator/src/registry.template.json orchestrator/src/registry.json
+
       - name: Install orchestrator dependencies
         run: cd orchestrator && bun install
 
