@@ -187,20 +187,14 @@ echo ""
 echo "  ── 4b. Linear Webhook ──"
 cat <<'STEP'
 
-  You can set this up automatically or manually.
-
-  Option A — Automatic (requires LINEAR_API_KEY):
-    Run: bash scripts/setup-linear-webhook.sh
-
-  Option B — Manual:
-    1. Open: https://linear.app/settings/api
-    2. Scroll to "Webhooks" → "New webhook"
-    3. Label: "Product Engineer"
-    4. URL: https://product-engineer.fryanpan.workers.dev/api/webhooks/linear
-    5. Events: check "Issues" (creates, updates)
-    6. Secret: use the LINEAR_WEBHOOK_SECRET generated in step 1
-       (run: cd orchestrator && npx wrangler secret list  to verify it's set)
-    7. Click "Create webhook"
+  1. Open: https://linear.app/settings/api
+  2. Scroll to "Webhooks" → "New webhook"
+  3. Label: "Product Engineer"
+  4. URL: https://product-engineer.fryanpan.workers.dev/api/webhooks/linear
+  5. Events: check "Issues" (creates, updates)
+  6. Secret: use the LINEAR_WEBHOOK_SECRET generated in step 1
+     (run: cd orchestrator && npx wrangler secret list  to verify it's set)
+  7. Click "Create webhook"
 
 STEP
 pause
