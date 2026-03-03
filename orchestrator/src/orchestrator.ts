@@ -74,9 +74,20 @@ export class Orchestrator extends Container<Bindings> {
     return super.alarm(alarmProps);
   }
 
-  // Start the Slack Socket Mode container on first request (and after crashes)
+  // Start the Slack Socket Mode container on first request (and after crashes/deploys).
+  // Verifies the container is actually responsive — the in-memory flag alone isn't
+  // reliable across deploys (the flag survives but the container gets replaced).
   private async ensureContainerRunning() {
-    if (this.containerStarted) return;
+    if (this.containerStarted) {
+      try {
+        const port = this.ctx.container.getTcpPort(this.defaultPort);
+        const res = await port.fetch("http://localhost/health", { signal: AbortSignal.timeout(2000) });
+        if (res.ok) return;
+      } catch {
+        console.warn("[Orchestrator] Container flag was set but container is not responsive — restarting");
+        this.containerStarted = false;
+      }
+    }
 
     console.log("[Orchestrator] Starting container (deployment or first start)...");
     try {
