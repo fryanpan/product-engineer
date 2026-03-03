@@ -10,6 +10,7 @@ interface SlackEnvelope {
       thread_ts?: string;
       ts: string;
       bot_id?: string;
+      subtype?: string;
     };
   };
 }
@@ -58,7 +59,10 @@ export class SlackSocket {
 
         const slackEvent = envelope.payload?.event;
         if (slackEvent && !slackEvent.bot_id) {
-          if (slackEvent.type === "app_mention" || slackEvent.type === "message") {
+          if (slackEvent.type === "app_mention") {
+            this.onEvent(slackEvent);
+          } else if (slackEvent.type === "message" && slackEvent.thread_ts && !slackEvent.subtype) {
+            // Only forward thread replies (not top-level messages, edits, joins, etc.)
             this.onEvent(slackEvent);
           }
         }
