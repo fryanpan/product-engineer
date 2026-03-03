@@ -47,31 +47,33 @@ export function buildMcpServers(): Record<string, McpServerConfig> {
   }
   servers.context7 = context7;
 
-  // Notion — stdio via npx
-  const notionToken = process.env.NOTION_TOKEN;
-  if (notionToken) {
-    servers.notion = {
-      command: "npx",
-      args: ["-y", "@notionhq/notion-mcp-server"],
-      env: { NOTION_TOKEN: notionToken },
-    };
-  }
+  // Notion — stdio via npx (disabled: npx download can hang in containers)
+  // TODO: Re-enable once we pre-install MCP server packages in the Dockerfile
+  // const notionToken = process.env.NOTION_TOKEN;
+  // if (notionToken) {
+  //   servers.notion = {
+  //     command: "npx",
+  //     args: ["-y", "@notionhq/notion-mcp-server"],
+  //     env: { NOTION_TOKEN: notionToken },
+  //   };
+  // }
 
-  // Sentry — stdio via npx (token via env to avoid exposure in /proc/cmdline)
-  const sentryToken = process.env.SENTRY_ACCESS_TOKEN;
-  if (sentryToken) {
-    servers.sentry = {
-      command: "npx",
-      args: ["-y", "@sentry/mcp-server@latest"],
-      env: {
-        SENTRY_AUTH_TOKEN: sentryToken,
-        EMBEDDED_AGENT_PROVIDER: "anthropic",
-        ...(process.env.ANTHROPIC_API_KEY
-          ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
-          : {}),
-      },
-    };
-  }
+  // Sentry — stdio via npx (disabled: npx download can hang in containers)
+  // TODO: Re-enable once we pre-install MCP server packages in the Dockerfile
+  // const sentryToken = process.env.SENTRY_ACCESS_TOKEN;
+  // if (sentryToken) {
+  //   servers.sentry = {
+  //     command: "npx",
+  //     args: ["-y", "@sentry/mcp-server@latest"],
+  //     env: {
+  //       SENTRY_AUTH_TOKEN: sentryToken,
+  //       EMBEDDED_AGENT_PROVIDER: "anthropic",
+  //       ...(process.env.ANTHROPIC_API_KEY
+  //         ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
+  //         : {}),
+  //     },
+  //   };
+  // }
 
   return servers;
 }
