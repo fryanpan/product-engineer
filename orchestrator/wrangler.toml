@@ -27,7 +27,7 @@ bindings = [
 ]
 
 [vars]
-WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
+WORKER_URL = "https://product-engineer.<your-subdomain>.workers.dev"
 
 # v1 was the original queue-based architecture (now replaced)
 [[migrations]]

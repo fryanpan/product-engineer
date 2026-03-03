@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Last updated: 2026-03-02
+Last updated: 2026-03-03
 
 ## Prerequisites
 
@@ -11,11 +11,7 @@ Last updated: 2026-03-02
 - Notion internal integration token (for Notion MCP)
 - Sentry User Auth Token (for Sentry MCP)
 
-## Step 1: Merge PR
-
-Merge PR #2 (`persistent-agent` branch) to `main`, or deploy from the branch.
-
-## Step 2: Deploy
+## Step 1: Deploy
 
 ```bash
 cd orchestrator
@@ -24,7 +20,7 @@ wrangler deploy
 
 This deploys the Worker + Durable Objects and builds both container images (orchestrator + agent). First deploy may take several minutes for image builds.
 
-## Step 3: Provision Secrets
+## Step 2: Provision Secrets
 
 ### Platform secrets (shared, set once)
 
@@ -61,25 +57,28 @@ wrangler secret put CONTEXT7_API_KEY      # Context7 API key (optional — works
 
 ### Per-product GitHub tokens
 
+Each product in the registry needs its own fine-grained PAT. The naming convention is `<PRODUCT>_GITHUB_TOKEN`, where `<PRODUCT>` matches the uppercased, underscored product key from the registry.
+
 ```bash
-wrangler secret put HEALTH_TOOL_GITHUB_TOKEN  # Fine-grained PAT for fryanpan/health-tool
-wrangler secret put BIKE_TOOL_GITHUB_TOKEN    # Fine-grained PAT for fryanpan/bike-tool
+# Example: if your registry has products "my-app" and "other-tool":
+wrangler secret put MY_APP_GITHUB_TOKEN      # Fine-grained PAT for your-org/my-app
+wrangler secret put OTHER_TOOL_GITHUB_TOKEN  # Fine-grained PAT for your-org/other-tool
 ```
 
-## Step 4: Populate Slack Channel IDs
+## Step 3: Populate Slack Channel IDs
 
 The registry needs actual Slack channel IDs for Socket Mode event routing. Get them:
 
 ```bash
 curl -s -H "Authorization: Bearer xoxb-YOUR-BOT-TOKEN" \
   "https://slack.com/api/conversations.list?types=public_channel" \
-  | jq '.channels[] | select(.name | test("health|bike")) | {name, id}'
+  | jq '.channels[] | select(.name | test("your-channel")) | {name, id}'
 ```
 
 Then update `orchestrator/src/registry.ts` — add `slack_channel_id` for each product:
 
 ```typescript
-"health-tool": {
+"your-app": {
   slack_channel_id: "C06ABC123",  // actual ID from above
   // ...
 }
@@ -87,7 +86,7 @@ Then update `orchestrator/src/registry.ts` — add `slack_channel_id` for each p
 
 Commit, push, and redeploy (`wrangler deploy`).
 
-## Step 5: Configure Slack App
+## Step 4: Configure Slack App
 
 In [api.slack.com/apps](https://api.slack.com/apps):
 
@@ -95,50 +94,50 @@ In [api.slack.com/apps](https://api.slack.com/apps):
 2. **App-Level Token:** Settings → Basic Information → App-Level Tokens → Generate with `connections:write` scope
 3. **Bot Token Scopes:** OAuth & Permissions → add `chat:write`, `app_mentions:read`, `channels:history`
 4. **Event Subscriptions:** Event Subscriptions → Subscribe to bot events: `app_mention`, `message.channels`
-5. **Invite bot** to `#health-tool` and `#bike-tool` channels
+5. **Invite bot** to each product's Slack channel (e.g., `#your-app`)
 
-## Step 6: Configure Linear Webhook
+## Step 5: Configure Linear Webhook
 
 1. Linear Settings → API → Webhooks
 2. Add webhook:
-   - URL: `https://product-engineer.fryanpan.workers.dev/api/webhooks/linear`
+   - URL: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/linear`
    - Events: Issue created, Issue updated
    - Secret: same value as `LINEAR_WEBHOOK_SECRET`
 
-## Step 7: Configure GitHub Webhooks
+## Step 6: Configure GitHub Webhooks
 
-For each product repo (fryanpan/health-tool, fryanpan/bike-tool):
+For each product repo (e.g., `your-org/your-app`):
 
 1. Repo Settings → Webhooks → Add webhook
-2. Payload URL: `https://product-engineer.fryanpan.workers.dev/api/webhooks/github`
+2. Payload URL: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/github`
 3. Content type: `application/json`
 4. Secret: same value as `GITHUB_WEBHOOK_SECRET`
 5. Events: Pull requests, Pull request reviews
 
-## Step 8: Configure Notion Integration
+## Step 7: Configure Notion Integration
 
 1. Go to [notion.so/profile/integrations](https://www.notion.so/profile/integrations)
 2. Create an internal integration (or use existing)
 3. Share relevant Notion pages/databases with the integration
 4. The integration token is what you set as `NOTION_TOKEN`
 
-## Step 9: Test
+## Step 8: Test
 
 ### Verify health
 
 ```bash
-curl https://product-engineer.fryanpan.workers.dev/health
+curl https://product-engineer.<your-subdomain>.workers.dev/health
 # → {"ok":true,"service":"product-engineer-worker"}
 ```
 
 ### Test API dispatch (quickest test)
 
 ```bash
-curl -X POST https://product-engineer.fryanpan.workers.dev/api/dispatch \
+curl -X POST https://product-engineer.<your-subdomain>.workers.dev/api/dispatch \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "product": "health-tool",
+    "product": "your-app",
     "type": "ticket",
     "data": {
       "id": "test-1",
@@ -150,19 +149,19 @@ curl -X POST https://product-engineer.fryanpan.workers.dev/api/dispatch \
   }'
 ```
 
-Watch `#health-tool` in Slack for agent activity.
+Watch `#your-app` in Slack for agent activity.
 
 ### Test Linear trigger
 
-Create a test issue in the Health Tool Linear project. The system should:
+Create a test issue in your product's Linear project. The system should:
 1. Receive the webhook (verify HMAC signature)
 2. Route to Orchestrator DO → spawn TicketAgent
-3. Agent posts to `#health-tool` Slack thread
+3. Agent posts to the product's Slack channel
 4. Agent clones repo, implements, creates PR
 
 ### Test Slack round-trip
 
-1. In `#health-tool`, type: `@product-engineer create a hello world file`
+1. In your product's channel, type: `@product-engineer create a hello world file`
 2. Agent starts and posts progress as thread replies
 3. Reply in the thread — agent should receive your reply and continue
 

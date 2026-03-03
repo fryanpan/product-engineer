@@ -158,9 +158,10 @@ echo ""
 echo "  ── 3d. Invite bot to channels ──"
 cat <<'STEP'
 
-  In Slack, type in each channel:
-    /invite @product-engineer   (in #health-tool)
-    /invite @product-engineer   (in #bike-tool)
+  In Slack, invite the bot to each product channel:
+    /invite @product-engineer   (in #<your-channel>)
+
+  Repeat for each product you've registered.
 
 STEP
 pause
@@ -190,7 +191,7 @@ cat <<'STEP'
   1. Open: https://linear.app/settings/api
   2. Scroll to "Webhooks" → "New webhook"
   3. Label: "Product Engineer"
-  4. URL: https://product-engineer.fryanpan.workers.dev/api/webhooks/linear
+  4. URL: https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/linear
   5. Events: check "Issues" (creates, updates)
   6. Secret: use the LINEAR_WEBHOOK_SECRET generated in step 1
      (run: cd orchestrator && npx wrangler secret list  to verify it's set)
@@ -204,17 +205,21 @@ pause
 # ══════════════════════════════════════════════════════════════
 
 section "5. GitHub Personal Access Tokens"
-
-echo ""
-echo "  ── 5a. Health Tool PAT ──"
 cat <<'STEP'
+
+  Each product in your registry needs a fine-grained GitHub PAT.
+  The secret name convention is <PRODUCT>_GITHUB_TOKEN, where
+  <PRODUCT> is the uppercased, underscored product key from the
+  registry (e.g., product "my-app" → MY_APP_GITHUB_TOKEN).
+
+  Repeat the steps below for EACH product:
 
   1. Open: https://github.com/settings/tokens?type=beta
   2. Click "Generate new token"
-  3. Token name: "pe-health-tool"
+  3. Token name: "pe-<your-product>"
   4. Expiration: 90 days (or custom)
-  5. Resource owner: fryanpan
-  6. Repository access → "Only select repositories" → fryanpan/health-tool
+  5. Resource owner: <your-org>
+  6. Repository access → "Only select repositories" → <your-org>/<your-repo>
   7. Permissions → Repository permissions:
      - Contents: Read and write
      - Pull requests: Read and write
@@ -222,21 +227,22 @@ cat <<'STEP'
   8. Click "Generate token"
   9. Copy the token (starts with github_pat_)
 
-STEP
-set_secret "HEALTH_TOOL_GITHUB_TOKEN"
+  Then set the secret:
+    cd orchestrator && npx wrangler secret put <PRODUCT>_GITHUB_TOKEN
 
+STEP
 echo ""
-echo "  ── 5b. Bike Tool PAT ──"
-cat <<'STEP'
-
-  Same steps as 5a, but:
-  1. Open: https://github.com/settings/tokens?type=beta
-  2. Token name: "pe-bike-tool"
-  3. Repository: fryanpan/bike-tool
-  4. Same permissions as above
-
-STEP
-set_secret "BIKE_TOOL_GITHUB_TOKEN"
+echo -n "  How many product PATs to set up? [0 to skip]: "
+read -r pat_count
+pat_count=${pat_count:-0}
+for i in $(seq 1 "$pat_count"); do
+  echo ""
+  echo -n "  Product secret name (e.g., MY_APP_GITHUB_TOKEN): "
+  read -r pat_name
+  if [ -n "$pat_name" ]; then
+    set_secret "$pat_name"
+  fi
+done
 
 # ══════════════════════════════════════════════════════════════
 # 6. GITHUB WEBHOOKS (per-product repo)
@@ -245,13 +251,11 @@ set_secret "BIKE_TOOL_GITHUB_TOKEN"
 section "6. GitHub Webhooks"
 cat <<'STEP'
 
-  For EACH product repo (fryanpan/health-tool, fryanpan/bike-tool):
+  For EACH product repo:
 
-  1. Open:
-     - https://github.com/fryanpan/health-tool/settings/hooks/new
-     - https://github.com/fryanpan/bike-tool/settings/hooks/new
+  1. Open: https://github.com/<your-org>/<your-repo>/settings/hooks/new
 
-  2. Payload URL: https://product-engineer.fryanpan.workers.dev/api/webhooks/github
+  2. Payload URL: https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/github
   3. Content type: application/json
   4. Secret: the GITHUB_WEBHOOK_SECRET generated in step 1
      (if you need the value, re-generate and update with:
@@ -260,6 +264,8 @@ cat <<'STEP'
      - Pull requests
      - Pull request reviews
   6. Click "Add webhook"
+
+  Repeat for each product repo in your registry.
 
 STEP
 pause
@@ -367,7 +373,7 @@ cat <<'STEP'
 
   ── 10c. Add both to GitHub ──
 
-  1. Open: https://github.com/fryanpan/product-engineer/settings/secrets/actions
+  1. Open: https://github.com/<your-org>/product-engineer/settings/secrets/actions
   2. "New repository secret" → Name: CLOUDFLARE_ACCOUNT_ID → paste value
   3. "New repository secret" → Name: CLOUDFLARE_API_TOKEN → paste value
 
@@ -385,12 +391,12 @@ echo ""
 (cd "$ORCHESTRATOR_DIR" && npx wrangler secret list 2>&1) | grep '"name"' | sed 's/.*"name": "/  ✓ /' | sed 's/".*//'
 
 echo ""
-echo "  Expected secrets (14 total):"
+echo "  Expected secrets (core + per-product):"
 echo "    API_KEY, ANTHROPIC_API_KEY"
 echo "    SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_SIGNING_SECRET"
 echo "    LINEAR_API_KEY, LINEAR_WEBHOOK_SECRET"
 echo "    GITHUB_WEBHOOK_SECRET"
-echo "    HEALTH_TOOL_GITHUB_TOKEN, BIKE_TOOL_GITHUB_TOKEN"
+echo "    <PRODUCT>_GITHUB_TOKEN (one per product)"
 echo "    SENTRY_DSN, SENTRY_ACCESS_TOKEN (optional)"
 echo "    NOTION_TOKEN (optional)"
 echo "    CONTEXT7_API_KEY (optional)"
@@ -398,7 +404,7 @@ echo "    CONTEXT7_API_KEY (optional)"
 echo ""
 echo "  Checking GitHub Actions secrets..."
 echo ""
-gh secret list --repo fryanpan/product-engineer 2>&1 | head -10 || echo "  (install gh CLI or check manually)"
+gh secret list --repo "<your-org>/product-engineer" 2>&1 | head -10 || echo "  (install gh CLI or check manually)"
 
 cat <<'DONE'
 
@@ -407,13 +413,9 @@ cat <<'DONE'
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Next steps:
-    1. Merge PR #2 (or push to main)
-    2. Deploy runs automatically via GitHub Actions
-    3. Test:
-       curl https://product-engineer.fryanpan.workers.dev/health
-
-  For manual deploy:
-    cd orchestrator && npx wrangler deploy
+    1. Deploy: cd orchestrator && npx wrangler deploy
+    2. Test:
+       curl https://product-engineer.<your-subdomain>.workers.dev/health
 
   Debugging:
     cd orchestrator && npx wrangler tail
