@@ -59,8 +59,10 @@ For each secret in the product's config:
 **For Slack commands:**
 1. Ensure the Slack app is installed in the product's channel
 2. The bot must be invited to the channel
-3. Enable Event Subscriptions with URL: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/slack/events`
-4. Subscribe to: `app_mention`
+3. Verify Bot Token Scopes (OAuth & Permissions) include: `chat:write`, `app_mentions:read`, `channels:history`
+4. Subscribe to bot events (Event Subscriptions): `app_mention`, `message.channels`
+   - `app_mention` enables @mentions to create new tickets
+   - `message.channels` enables thread replies without @mentions to continue conversations
 
 **For feedback widgets (web apps only):**
 1. The product's worker dispatches to the orchestrator: `POST /api/dispatch`
@@ -101,6 +103,14 @@ If the product repo already has a `.claude/settings.json`, review it to ensure i
 2. Or mention the bot in the product's Slack channel: `@PE test: create a hello world file`
 3. Watch the Slack channel for agent notifications
 4. Verify the agent creates a PR
+5. **Test thread replies:** Send a follow-up message in the ticket thread WITHOUT mentioning the bot — it should respond within a few minutes
+
+### Troubleshooting
+
+**Thread replies not working (agent doesn't respond to messages in ticket threads):**
+- Verify the Slack app subscribes to `message.channels` event (not just `app_mention`)
+- Verify Bot Token Scopes include `channels:history`
+- The agent only responds to thread replies (messages with `thread_ts`), not top-level channel messages
 
 ## Principles
 
