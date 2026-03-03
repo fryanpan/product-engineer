@@ -9,6 +9,8 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { AgentConfig } from "./config";
 
+type ToolResult = { content: { type: "text"; text: string }[] };
+
 function persistSlackThreadTs(config: AgentConfig, ts: string) {
   if (!config.slackThreadTs && ts) {
     config.slackThreadTs = ts;
@@ -28,116 +30,49 @@ function persistSlackThreadTs(config: AgentConfig, ts: string) {
   }
 }
 
-export function createTools(config: AgentConfig) {
-  const { slackBotToken, slackChannel } = config;
+async function postToSlack(
+  text: string,
+  config: AgentConfig,
+): Promise<ToolResult> {
+  const res = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.slackBotToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      channel: config.slackChannel,
+      text,
+      ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
+    }),
+  });
 
+  if (!res.ok) {
+    return { content: [{ type: "text", text: `Slack API failed: ${res.status}` }] };
+  }
+
+  const data = (await res.json()) as { ok: boolean; error?: string; ts?: string };
+  if (!data.ok) {
+    return { content: [{ type: "text", text: `Slack API error: ${data.error}` }] };
+  }
+
+  if (data.ts) persistSlackThreadTs(config, data.ts);
+  return { content: [{ type: "text", text: "Message posted to Slack" }] };
+}
+
+export function createTools(config: AgentConfig) {
   const notifySlack = tool(
     "notify_slack",
     "Send a notification message to the product's Slack channel. Use this to keep the team informed of progress.",
-    {
-      message: z.string().describe("The message to post to Slack"),
-    },
-    async ({ message }) => {
-      const res = await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${slackBotToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: slackChannel,
-          text: message,
-          ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
-        }),
-      });
-
-      if (!res.ok) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Slack notification failed: ${res.status}`,
-            },
-          ],
-        };
-      }
-
-      const data = (await res.json()) as { ok: boolean; error?: string; ts?: string };
-      if (!data.ok) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Slack API error: ${data.error}`,
-            },
-          ],
-        };
-      }
-
-      // Persist thread_ts on first Slack message so replies route correctly
-      if (data.ts) persistSlackThreadTs(config, data.ts);
-
-      return {
-        content: [{ type: "text" as const, text: "Slack notification sent" }],
-      };
-    },
+    { message: z.string().describe("The message to post to Slack") },
+    ({ message }) => postToSlack(message, config),
   );
 
   const askQuestion = tool(
     "ask_question",
     "Post a clarifying question to the Slack channel. Use this when a task is ambiguous and you need more information. The user's reply will arrive as a new event.",
-    {
-      question: z.string().describe("The question to ask the user via Slack"),
-    },
-    async ({ question }) => {
-      const res = await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${slackBotToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: slackChannel,
-          text: `*Agent question:*\n${question}`,
-          ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
-        }),
-      });
-
-      if (!res.ok) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Failed to post question: ${res.status}`,
-            },
-          ],
-        };
-      }
-
-      const data = (await res.json()) as { ok: boolean; error?: string; ts?: string };
-      if (!data.ok) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Slack API error: ${data.error}`,
-            },
-          ],
-        };
-      }
-
-      // Persist thread_ts on first Slack message so replies route correctly
-      if (data.ts) persistSlackThreadTs(config, data.ts);
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Question posted to Slack. The user's reply will arrive as a new event.",
-          },
-        ],
-      };
-    },
+    { question: z.string().describe("The question to ask the user via Slack") },
+    ({ question }) => postToSlack(`*Agent question:*\n${question}`, config),
   );
 
   const updateTaskStatus = tool(

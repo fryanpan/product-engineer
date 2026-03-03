@@ -13,11 +13,10 @@ import {
   createSdkMcpServer,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { loadConfig, type TaskPayload } from "./config";
+import { loadConfig, type TaskPayload, type TicketEvent } from "./config";
 import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt } from "./prompt";
 import { buildMcpServers } from "./mcp";
-import type { TicketEvent } from "./types";
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });

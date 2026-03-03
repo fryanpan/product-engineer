@@ -37,6 +37,16 @@ export interface CommandData {
   thread_ts?: string;
 }
 
+export interface TicketEvent {
+  type: string;
+  source: string;
+  ticketId: string;
+  product: string;
+  payload: unknown;
+  slackThreadTs?: string;
+  slackChannel?: string;
+}
+
 export interface AgentConfig {
   ticketId: string;
   product: string;
