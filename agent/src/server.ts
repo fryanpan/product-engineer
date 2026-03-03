@@ -179,9 +179,11 @@ app.post("/event", async (c) => {
       };
       const prompt = buildPrompt(taskPayload);
       await startSession(prompt);
-    } else {
+    } else if (messageYielder) {
       const continuationPrompt = buildEventPrompt(event);
-      messageYielder!(userMessage(continuationPrompt));
+      messageYielder(userMessage(continuationPrompt));
+    } else {
+      return c.json({ error: "Session initializing" }, 503);
     }
 
     return c.json({ ok: true });
