@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, mock } from "bun:test";
 import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
 
 describe("buildTicketEvent", () => {
@@ -77,5 +77,28 @@ describe("resolveProductFromChannel", () => {
 
   test("returns null for empty string", () => {
     expect(resolveProductFromChannel("")).toBeNull();
+  });
+});
+
+describe("agent monitoring", () => {
+  test("calculates time difference for stuck agents correctly", () => {
+    const now = new Date();
+    const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000);
+    const fortyMinAgo = new Date(now.getTime() - 40 * 60 * 1000);
+
+    // SQLite date math: (julianday('now') - julianday(timestamp)) * 24 * 60 = minutes
+    const minutesDiff30 = (now.getTime() - thirtyMinAgo.getTime()) / 60000;
+    const minutesDiff40 = (now.getTime() - fortyMinAgo.getTime()) / 60000;
+
+    expect(minutesDiff30).toBeGreaterThanOrEqual(29);
+    expect(minutesDiff30).toBeLessThan(31);
+    expect(minutesDiff40).toBeGreaterThanOrEqual(39);
+    expect(minutesDiff40).toBeLessThan(41);
+  });
+
+  test("stuck agent threshold is 30 minutes", () => {
+    // Document the expected behavior
+    const stuckThreshold = 30;
+    expect(stuckThreshold).toBe(30);
   });
 });

@@ -114,7 +114,8 @@ export class Orchestrator extends Container<Bindings> {
         branch_name TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
-        agent_active INTEGER NOT NULL DEFAULT 1
+        agent_active INTEGER NOT NULL DEFAULT 1,
+        last_heartbeat TEXT
       )
     `);
     // Migration: add agent_active column for existing deployments
@@ -124,6 +125,16 @@ export class Orchestrator extends Container<Bindings> {
       const message = err instanceof Error ? err.message : "";
       if (!message.includes("duplicate column") && !message.includes("already exists")) {
         console.error("[Orchestrator] Failed to add agent_active column:", err);
+        throw err;
+      }
+    }
+    // Migration: add last_heartbeat column for monitoring
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN last_heartbeat TEXT`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (!message.includes("duplicate column") && !message.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add last_heartbeat column:", err);
         throw err;
       }
     }
@@ -147,6 +158,10 @@ export class Orchestrator extends Container<Bindings> {
         return this.handleStatusUpdate(request);
       case "/slack-event":
         return this.handleSlackEvent(request);
+      case "/heartbeat":
+        return this.handleHeartbeat(request);
+      case "/check-health":
+        return this.checkAgentHealth();
       default:
         return Response.json({ error: "not found" }, { status: 404 });
     }
@@ -250,7 +265,7 @@ export class Orchestrator extends Container<Bindings> {
     // Log phone-home payloads so they appear in wrangler tail
     console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""}`);
 
-    const updates: string[] = ["updated_at = datetime('now')"];
+    const updates: string[] = ["updated_at = datetime('now')", "last_heartbeat = datetime('now')"];
     const values: (string | null)[] = [];
 
     if (status) {
@@ -285,6 +300,209 @@ export class Orchestrator extends Container<Bindings> {
     );
 
     return Response.json({ ok: true });
+  }
+
+  private async handleHeartbeat(request: Request): Promise<Response> {
+    const { ticketId } = await request.json<{ ticketId: string }>();
+
+    this.ctx.storage.sql.exec(
+      "UPDATE tickets SET last_heartbeat = datetime('now') WHERE id = ?",
+      ticketId,
+    );
+
+    return Response.json({ ok: true });
+  }
+
+  private async checkAgentHealth(): Promise<Response> {
+    // Find all active tickets (agent_active = 1) that haven't sent a heartbeat in 30+ minutes
+    const stuckThreshold = 30; // minutes
+    const rows = this.ctx.storage.sql.exec(
+      `SELECT id, product, status, last_heartbeat, slack_thread_ts, slack_channel, created_at
+       FROM tickets
+       WHERE agent_active = 1
+         AND last_heartbeat IS NOT NULL
+         AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > ?`,
+      stuckThreshold,
+    ).toArray() as Array<{
+      id: string;
+      product: string;
+      status: string;
+      last_heartbeat: string;
+      slack_thread_ts: string | null;
+      slack_channel: string | null;
+      created_at: string;
+    }>;
+
+    if (rows.length === 0) {
+      return Response.json({ ok: true, stuck_agents: [] });
+    }
+
+    console.log(`[Orchestrator] Found ${rows.length} stuck agents`);
+
+    const results = [];
+    for (const ticket of rows) {
+      const minutesStuck = Math.floor(
+        (Date.now() - new Date(ticket.last_heartbeat).getTime()) / 60000,
+      );
+
+      console.log(
+        `[Orchestrator] Stuck agent detected: ${ticket.id} (${minutesStuck}min since last heartbeat)`,
+      );
+
+      // Try to fetch agent status for diagnostics
+      let agentStatus = "unknown";
+      let agentError = "";
+      try {
+        const id = this.env.TICKET_AGENT.idFromName(ticket.id);
+        const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
+        const statusRes = await agent.fetch(new Request("http://internal/status"));
+        if (statusRes.ok) {
+          const status = await statusRes.json<{
+            sessionActive: boolean;
+            sessionStatus: string;
+            sessionError: string;
+            sessionMessageCount: number;
+          }>();
+          agentStatus = status.sessionStatus;
+          agentError = status.sessionError;
+        }
+      } catch (err) {
+        console.error(`[Orchestrator] Failed to fetch status for ${ticket.id}:`, err);
+        agentError = String(err);
+      }
+
+      // Create investigation ticket
+      await this.createInvestigationTicket({
+        stuckTicketId: ticket.id,
+        product: ticket.product,
+        minutesStuck,
+        lastHeartbeat: ticket.last_heartbeat,
+        status: ticket.status,
+        agentStatus,
+        agentError,
+        slackChannel: ticket.slack_channel || undefined,
+        slackThreadTs: ticket.slack_thread_ts || undefined,
+      });
+
+      results.push({
+        ticketId: ticket.id,
+        product: ticket.product,
+        minutesStuck,
+        agentStatus,
+        investigationCreated: true,
+      });
+    }
+
+    return Response.json({ ok: true, stuck_agents: results });
+  }
+
+  private async createInvestigationTicket(details: {
+    stuckTicketId: string;
+    product: string;
+    minutesStuck: number;
+    lastHeartbeat: string;
+    status: string;
+    agentStatus: string;
+    agentError: string;
+    slackChannel?: string;
+    slackThreadTs?: string;
+  }) {
+    const {
+      stuckTicketId,
+      product,
+      minutesStuck,
+      lastHeartbeat,
+      status,
+      agentStatus,
+      agentError,
+      slackChannel,
+      slackThreadTs,
+    } = details;
+
+    // Create a Linear ticket for investigation
+    const title = `Stuck agent detected: ${stuckTicketId}`;
+    const description = `## Agent Stuck Alert
+
+**Ticket:** ${stuckTicketId}
+**Product:** ${product}
+**Minutes stuck:** ${minutesStuck}
+**Last heartbeat:** ${lastHeartbeat}
+**Ticket status:** ${status}
+**Agent session status:** ${agentStatus}
+${agentError ? `**Agent error:** \`\`\`\n${agentError}\n\`\`\`` : ""}
+
+The agent has not sent a heartbeat in over ${minutesStuck} minutes. This typically indicates:
+- Agent process crashed
+- Agent is in an infinite loop
+- Container was terminated
+- Network connectivity issue
+
+## Next Steps
+1. Check wrangler tail logs for the ticket
+2. Inspect agent /status endpoint
+3. If stuck in a loop, kill the agent container
+4. If a bug is identified, fix and deploy
+5. Restart the ticket if fixable
+
+## Logs
+Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
+`;
+
+    try {
+      // Post notification to Slack first
+      if (slackChannel) {
+        const productConfig = getProduct(product);
+        if (productConfig) {
+          await fetch("https://slack.com/api/chat.postMessage", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              channel: slackChannel,
+              text: `🚨 *Agent stuck detected*\nTicket: ${stuckTicketId}\nStuck for: ${minutesStuck} minutes\nCreating investigation ticket...`,
+              ...(slackThreadTs && { thread_ts: slackThreadTs }),
+            }),
+          });
+        }
+      }
+
+      // Create Linear ticket (this will trigger a new TicketAgent to investigate)
+      const investigationId = sanitizeTicketId(`investigation-${stuckTicketId}-${Date.now()}`);
+      const event: TicketEvent = {
+        type: "ticket_created",
+        source: "monitoring",
+        ticketId: investigationId,
+        product,
+        payload: {
+          title,
+          description,
+          priority: 1, // High priority
+          ticketId: investigationId,
+          stuckTicketId,
+        },
+        slackChannel,
+        slackThreadTs,
+      };
+
+      // Insert the investigation ticket
+      this.ctx.storage.sql.exec(
+        `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel)
+         VALUES (?, ?, ?, ?)`,
+        investigationId,
+        product,
+        slackThreadTs || null,
+        slackChannel || null,
+      );
+
+      // Route to a new agent
+      await this.routeToAgent(event);
+
+      console.log(`[Orchestrator] Investigation ticket created: ${investigationId}`);
+    } catch (err) {
+      console.error(`[Orchestrator] Failed to create investigation ticket:`, err);
+    }
   }
 
   private listTickets(): Response {

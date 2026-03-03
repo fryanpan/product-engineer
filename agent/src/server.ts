@@ -72,6 +72,16 @@ const heartbeatInterval = setInterval(() => {
     clearInterval(heartbeatInterval);
     return;
   }
+  // Send heartbeat to orchestrator for monitoring
+  fetch(`${config.workerUrl}/api/orchestrator/heartbeat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Key": config.apiKey,
+    },
+    body: JSON.stringify({ ticketId: config.ticketId }),
+  }).catch((err) => console.error("[Agent] Heartbeat failed:", err));
+
   phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount}`);
 }, 120_000);
 
