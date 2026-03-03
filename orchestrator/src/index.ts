@@ -1,193 +1,124 @@
 /**
- * Product Engineer Orchestrator — shared Cloudflare Worker.
+ * Product Engineer Worker — stateless proxy to Orchestrator DO.
  *
- * Receives triggers from multiple sources (Linear webhooks, Slack commands,
- * per-product dispatch API, GitHub webhooks) and launches sandbox containers
- * with the generic Product Engineer agent.
- *
- * This worker does NO AI decision-making — it's pure dispatch.
+ * Verifies webhook signatures. Proxies events to the singleton Orchestrator DO.
+ * No queue, no sandbox launcher. All state lives in the Orchestrator.
  */
 
+import * as Sentry from "@sentry/cloudflare";
 import { Hono } from "hono";
-import { dispatch } from "./dispatch";
 import { linearWebhook } from "./linear-webhook";
-import { slackCommands } from "./slack-commands";
 import { githubWebhook } from "./github-webhook";
+import type { Bindings } from "./types";
 
-// Sandbox Durable Object class — required by wrangler for the [[containers]] binding
-export { Sandbox } from "@cloudflare/sandbox";
-import { getProduct } from "./registry";
-import { launchSandbox, type SandboxEnv } from "./sandbox";
+// Export DO classes for wrangler
+export { Orchestrator } from "./orchestrator";
+export { TicketAgent } from "./ticket-agent";
 
-export interface Bindings {
-  // Queue
-  TASK_QUEUE: Queue;
-
-  // Sandbox (Durable Object → Container)
-  Sandbox: DurableObjectNamespace;
-
-  // Secrets
-  API_KEY: string;
-  SLACK_BOT_TOKEN: string;
-  SLACK_APP_TOKEN: string;
-  SLACK_SIGNING_SECRET: string;
-  LINEAR_API_KEY: string;
-  LINEAR_WEBHOOK_SECRET: string;
-  GITHUB_WEBHOOK_SECRET: string;
-  ANTHROPIC_API_KEY: string;
-  ORCHESTRATOR_URL: string;
-
-  // Per-product GitHub tokens
-  HEALTH_TOOL_GITHUB_TOKEN: string;
-  BIKE_TOOL_GITHUB_TOKEN: string;
-
-  [key: string]: unknown;
+function timingSafeEqual(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  if (bufA.byteLength !== bufB.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(bufA, bufB);
 }
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Health check
-app.get("/health", (c) => c.json({ ok: true, service: "product-engineer-orchestrator" }));
+// Reject oversized request bodies (1MB limit)
+const MAX_BODY_SIZE = 1024 * 1024;
+app.use("*", async (c, next) => {
+  const contentLength = c.req.header("Content-Length");
+  if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+    return c.json({ error: "Request body too large" }, 413);
+  }
+  await next();
+});
 
-// Dispatch API (for per-product workers)
-app.route("/api/dispatch", dispatch);
-app.route("/api", dispatch); // Also mount task status routes under /api
+app.get("/health", (c) => c.json({ ok: true, service: "product-engineer-worker" }));
 
-// Webhook handlers
 app.route("/api/webhooks/linear", linearWebhook);
-app.route("/api/webhooks/slack", slackCommands);
 app.route("/api/webhooks/github", githubWebhook);
 
-export default {
-  fetch: app.fetch,
-
-  // Queue consumer: process dispatched tasks
-  async queue(
-    batch: MessageBatch<{
-      type: "feedback" | "ticket" | "command";
-      product: string;
-      data: unknown;
-      slack_thread_ts?: string;
-    }>,
-    env: Bindings,
-  ) {
-    for (const msg of batch.messages) {
-      const { type, product, data, slack_thread_ts } = msg.body;
-
-      const productConfig = getProduct(product);
-      if (!productConfig) {
-        console.error(`[Queue] Unknown product: ${product}`);
-        msg.ack();
-        continue;
-      }
-
-      // Determine task ID for sandbox naming
-      const taskId =
-        type === "feedback"
-          ? (data as { id: string }).id
-          : type === "ticket"
-            ? (data as { id: string }).id
-            : `cmd-${Date.now()}`;
-
-      // Post initial Slack notification
-      let threadTs = slack_thread_ts;
-      try {
-        const res = await fetch("https://slack.com/api/chat.postMessage", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            channel: productConfig.slack_channel,
-            text: `🔍 *${product}* — Agent picking up ${type}: ${summarizeTask(type, data)}`,
-            ...(threadTs ? { thread_ts: threadTs } : {}),
-          }),
-        });
-        if (res.ok) {
-          const resData = (await res.json()) as { ok: boolean; ts?: string };
-          if (resData.ok && resData.ts && !threadTs) {
-            threadTs = resData.ts;
-          }
-        }
-      } catch {
-        // Slack notification is best-effort
-      }
-
-      // Launch the sandbox
-      try {
-        const sandboxResult = await launchSandbox({
-          taskId,
-          product,
-          productConfig,
-          taskPayload: { type, data },
-          env: env as unknown as SandboxEnv,
-          slackThreadTs: threadTs,
-        });
-        console.log(`[Queue] ${product}/${taskId} completed`);
-
-        // Extract session log from agent stdout
-        if (sandboxResult?.stdout) {
-          const logLine = sandboxResult.stdout
-            .split("\n")
-            .find((line: string) => line.includes("[PE Session Log]"));
-          if (logLine) {
-            const jsonStr = logLine.substring(
-              logLine.indexOf("[PE Session Log]") + "[PE Session Log] ".length,
-            );
-            try {
-              const sessionLog = JSON.parse(jsonStr);
-              console.log(
-                `[Queue] Session log: product=${sessionLog.product} ` +
-                `task=${sessionLog.taskType}/${sessionLog.taskId} ` +
-                `duration=${sessionLog.duration_ms}ms`,
-              );
-            } catch {
-              // Session log parse failed — not critical
-            }
-          }
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[Queue] ${product}/${taskId} failed: ${errMsg}`);
-
-        // Notify Slack of failure
-        try {
-          await fetch("https://slack.com/api/chat.postMessage", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              channel: productConfig.slack_channel,
-              text: `❌ *${product}* — Agent failed on ${type} ${taskId}: ${errMsg.slice(0, 200)}`,
-              ...(threadTs ? { thread_ts: threadTs } : {}),
-            }),
-          });
-        } catch {
-          // Best-effort
-        }
-      }
-
-      msg.ack();
-    }
-  },
-};
-
-function summarizeTask(
-  type: string,
-  data: unknown,
-): string {
-  const d = data as Record<string, unknown>;
-  switch (type) {
-    case "feedback":
-      return (d.text as string)?.slice(0, 80) || "(annotations)";
-    case "ticket":
-      return (d.title as string)?.slice(0, 80) || "(no title)";
-    case "command":
-      return (d.text as string)?.slice(0, 80) || "(empty command)";
-    default:
-      return "(unknown)";
+// Dispatch API — programmatic trigger
+app.post("/api/dispatch", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
   }
+
+  const body = await c.req.json<{
+    product: string;
+    type: string;
+    data: unknown;
+    slack_thread_ts?: string;
+  }>();
+
+  if (!body.product || !body.type || !body.data) {
+    return c.json({ error: "Missing product, type, or data" }, 400);
+  }
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: body.type,
+      source: "api",
+      ticketId: (body.data as Record<string, unknown>).id || `api-${Date.now()}`,
+      product: body.product,
+      payload: body.data,
+      slackThreadTs: body.slack_thread_ts,
+    }),
+  }));
+});
+
+// Internal: Slack events from orchestrator container's Socket Mode
+app.post("/api/internal/slack-event", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.SLACK_APP_TOKEN)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const event = await c.req.json();
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/slack-event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(event),
+  }));
+});
+
+// Internal: status updates from agent containers
+app.post("/api/internal/status", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/ticket/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+app.get("/api/orchestrator/tickets", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/tickets"));
+});
+
+export function getOrchestrator(env: Bindings): DurableObjectStub {
+  const id = env.ORCHESTRATOR.idFromName("main");
+  return env.ORCHESTRATOR.get(id);
 }
+
+export default Sentry.withSentry(
+  (env: Bindings) => ({ dsn: env.SENTRY_DSN }),
+  { fetch: app.fetch },
+);

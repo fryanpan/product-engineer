@@ -22,20 +22,15 @@ Project-specific conventions that guide how superpowers plugin skills behave in 
 
 ## Execution Strategy
 
-After planning, choose an execution approach. Present these options to the user:
+**Default: Subagent-Driven Development.** Always use this unless a specific reason requires a different approach.
 
 | Approach | When to use | How it works |
 |----------|-------------|--------------|
-| **Executing Plans** (default) | Most tasks. You want human checkpoints at the end. | `superpowers:executing-plans` — creates a worktree, executes all tasks in a single pass, then reports for review. Do NOT batch into groups of 3 — execute everything, then pause. |
-| **Subagent-Driven Development** | Tasks are independent. You want fast iteration with automated review. | `superpowers:subagent-driven-development` — stays in current session, dispatches a fresh subagent per task with two-stage review (spec compliance, then code quality). |
-| **Agent Team** (experimental) | Highly parallel work where 3+ tasks can run simultaneously with no shared state. | `TeamCreate` + spawn teammates — named agents coordinate via task list and messages, work in true parallel. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var. |
+| **Subagent-Driven Development** (default) | Most tasks. Fast iteration with automated review. | `superpowers:subagent-driven-development` — stays in current session, dispatches a fresh subagent per task with two-stage review (spec compliance, then code quality). |
+| **Agent Team** | Highly parallel work where 3+ tasks can run simultaneously with no shared state. | `TeamCreate` + spawn teammates — named agents coordinate via task list and messages, work in true parallel. |
+| **Executing Plans** | Only when subagent-driven won't work (e.g., tasks require deep shared state across steps). | `superpowers:executing-plans` — creates a worktree, executes all tasks in a single pass, then reports for review. |
 
-**Decision flow:**
-1. Are tasks mostly independent with no shared state? If no → **Executing Plans**
-2. Can 3+ tasks genuinely run in parallel? If yes → **Agent Team**
-3. Otherwise → **Subagent-Driven Development** (sequential but automated)
-
-If unsure, default to **Executing Plans** — it's the most predictable.
+Do NOT ask which approach to use. Use Subagent-Driven Development.
 
 ## Output Destination
 

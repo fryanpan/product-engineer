@@ -11,7 +11,8 @@
 
 export interface ProductConfig {
   repos: string[];
-  slack_channel: string;
+  slack_channel: string;     // Human-readable name (e.g., "#health-tool") — used for Slack API posts
+  slack_channel_id?: string; // Slack channel ID (e.g., "C06ABC123") — used for matching Socket Mode events
   triggers: {
     feedback?: { enabled: boolean; callback_url?: string };
     linear?: { enabled: boolean; project_name: string };
@@ -32,6 +33,10 @@ export function loadRegistry(): Registry {
 
 export function getProduct(name: string): ProductConfig | null {
   return registry.products[name] || null;
+}
+
+export function getProducts(): Record<string, ProductConfig> {
+  return registry.products;
 }
 
 /**
@@ -67,6 +72,7 @@ const registry: Registry = {
     "health-tool": {
       repos: ["fryanpan/health-tool"],
       slack_channel: "#health-tool",
+      slack_channel_id: "C0AHQK8LB34",
       triggers: {
         feedback: {
           enabled: true,
@@ -81,14 +87,17 @@ const registry: Registry = {
       secrets: {
         GITHUB_TOKEN: "HEALTH_TOOL_GITHUB_TOKEN",
         SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
-        SLACK_APP_TOKEN: "SLACK_APP_TOKEN",
         LINEAR_API_KEY: "LINEAR_API_KEY",
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+        NOTION_TOKEN: "NOTION_TOKEN",
+        SENTRY_ACCESS_TOKEN: "SENTRY_ACCESS_TOKEN",
+        CONTEXT7_API_KEY: "CONTEXT7_API_KEY",
       },
     },
     "bike-tool": {
       repos: ["fryanpan/bike-tool"],
       slack_channel: "#bike-tool",
+      slack_channel_id: "C0AHVFLB15G",
       triggers: {
         linear: {
           enabled: true,
@@ -99,9 +108,11 @@ const registry: Registry = {
       secrets: {
         GITHUB_TOKEN: "BIKE_TOOL_GITHUB_TOKEN",
         SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
-        SLACK_APP_TOKEN: "SLACK_APP_TOKEN",
         LINEAR_API_KEY: "LINEAR_API_KEY",
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+        NOTION_TOKEN: "NOTION_TOKEN",
+        SENTRY_ACCESS_TOKEN: "SENTRY_ACCESS_TOKEN",
+        CONTEXT7_API_KEY: "CONTEXT7_API_KEY",
       },
     },
   },

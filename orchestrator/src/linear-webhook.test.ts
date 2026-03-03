@@ -1,14 +1,21 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { Hono } from "hono";
 import { linearWebhook } from "./linear-webhook";
-import type { Bindings } from "./index";
+import type { Bindings } from "./types";
 
-// Mock queue that captures sent messages
-let sentMessages: unknown[] = [];
-const mockQueue = {
-  send: async (msg: unknown) => {
-    sentMessages.push(msg);
+// Mock orchestrator DO that captures events sent to it
+let sentEvents: unknown[] = [];
+const mockOrchestratorStub = {
+  fetch: async (req: Request) => {
+    const body = await req.json();
+    sentEvents.push(body);
+    return Response.json({ ok: true });
   },
+};
+
+const mockOrchestratorNamespace = {
+  idFromName: (_name: string) => "mock-id",
+  get: (_id: unknown) => mockOrchestratorStub,
 };
 
 function makeApp() {
@@ -17,32 +24,52 @@ function makeApp() {
   return app;
 }
 
+const TEST_WEBHOOK_SECRET = "test-linear-webhook-secret";
+
 function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
   return {
-    TASK_QUEUE: mockQueue as unknown as Queue,
-    Sandbox: {} as unknown as DurableObjectNamespace,
+    ORCHESTRATOR: mockOrchestratorNamespace as unknown as DurableObjectNamespace,
+    TICKET_AGENT: {} as unknown as DurableObjectNamespace,
     API_KEY: "test",
     SLACK_BOT_TOKEN: "test",
     SLACK_APP_TOKEN: "test",
     SLACK_SIGNING_SECRET: "test",
     LINEAR_API_KEY: "test",
-    LINEAR_WEBHOOK_SECRET: "", // empty = skip signature verification
+    LINEAR_WEBHOOK_SECRET: TEST_WEBHOOK_SECRET,
     GITHUB_WEBHOOK_SECRET: "test",
     ANTHROPIC_API_KEY: "test",
-    ORCHESTRATOR_URL: "http://localhost",
     HEALTH_TOOL_GITHUB_TOKEN: "test",
     BIKE_TOOL_GITHUB_TOKEN: "test",
     ...overrides,
   };
 }
 
-function postWebhook(app: ReturnType<typeof makeApp>, body: unknown, env: Bindings) {
+async function hmacSign(body: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function postWebhook(app: ReturnType<typeof makeApp>, body: unknown, env: Bindings) {
+  const rawBody = JSON.stringify(body);
+  const signature = await hmacSign(rawBody, env.LINEAR_WEBHOOK_SECRET);
   return app.request(
     "/",
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      headers: {
+        "Content-Type": "application/json",
+        "Linear-Signature": signature,
+      },
+      body: rawBody,
     },
     env,
   );
@@ -50,7 +77,7 @@ function postWebhook(app: ReturnType<typeof makeApp>, body: unknown, env: Bindin
 
 describe("linear webhook handler", () => {
   beforeEach(() => {
-    sentMessages = [];
+    sentEvents = [];
   });
 
   it("ignores non-Issue events", async () => {
@@ -71,7 +98,7 @@ describe("linear webhook handler", () => {
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ignored).toBe(true);
-    expect(sentMessages).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
   });
 
   it("ignores issues from unknown teams", async () => {
@@ -94,7 +121,7 @@ describe("linear webhook handler", () => {
     const json = await res.json() as Record<string, unknown>;
     expect(json.ignored).toBe(true);
     expect((json as Record<string, unknown>).reason).toBe("not our team");
-    expect(sentMessages).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
   });
 
   it("ignores issues without a project", async () => {
@@ -117,10 +144,10 @@ describe("linear webhook handler", () => {
     const json = await res.json() as Record<string, unknown>;
     expect(json.ignored).toBe(true);
     expect((json as Record<string, unknown>).reason).toContain("no project");
-    expect(sentMessages).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
   });
 
-  it("enqueues task for valid issue with known project", async () => {
+  it("forwards event to orchestrator DO for valid issue with known project", async () => {
     const app = makeApp();
     const env = makeEnv();
     const res = await postWebhook(app, {
@@ -144,13 +171,16 @@ describe("linear webhook handler", () => {
     expect(json.project).toBe("Health Tool");
     expect(json.ticketId).toBe("issue-123");
 
-    expect(sentMessages).toHaveLength(1);
-    const msg = sentMessages[0] as Record<string, unknown>;
-    expect(msg.type).toBe("ticket");
-    expect(msg.product).toBe("health-tool");
-    expect((msg.data as Record<string, unknown>).id).toBe("issue-123");
-    expect((msg.data as Record<string, unknown>).title).toBe("Fix the login bug");
-    expect((msg.data as Record<string, unknown>).labels).toEqual(["label-a"]);
+    expect(sentEvents).toHaveLength(1);
+    const event = sentEvents[0] as Record<string, unknown>;
+    expect(event.type).toBe("ticket_created");
+    expect(event.source).toBe("linear");
+    expect(event.ticketId).toBe("issue-123");
+    expect(event.product).toBe("health-tool");
+    const payload = event.payload as Record<string, unknown>;
+    expect(payload.id).toBe("issue-123");
+    expect(payload.title).toBe("Fix the login bug");
+    expect(payload.labels).toEqual(["label-a"]);
   });
 
   it("only triggers on create or 'In Progress' status changes", async () => {
@@ -178,10 +208,10 @@ describe("linear webhook handler", () => {
     const json1 = await res1.json() as Record<string, unknown>;
     expect(json1.ok).toBe(true);
     expect(json1.product).toBe("health-tool");
-    expect(sentMessages).toHaveLength(1);
+    expect(sentEvents).toHaveLength(1);
 
     // Reset
-    sentMessages = [];
+    sentEvents = [];
 
     // "update" with state "Done" should be ignored
     const res2 = await postWebhook(app, {
@@ -202,7 +232,7 @@ describe("linear webhook handler", () => {
     const json2 = await res2.json() as Record<string, unknown>;
     expect(json2.ignored).toBe(true);
     expect(json2.reason).toBe("action not relevant");
-    expect(sentMessages).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
 
     // "remove" action should be ignored
     const res3 = await postWebhook(app, {
@@ -221,7 +251,7 @@ describe("linear webhook handler", () => {
     expect(res3.status).toBe(200);
     const json3 = await res3.json() as Record<string, unknown>;
     expect(json3.ignored).toBe(true);
-    expect(sentMessages).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
   });
 
   it("ignores issues from unknown Linear projects", async () => {
@@ -244,6 +274,6 @@ describe("linear webhook handler", () => {
     const json = await res.json() as Record<string, unknown>;
     expect(json.ignored).toBe(true);
     expect((json as Record<string, unknown>).reason).toContain("unknown project");
-    expect(sentMessages).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
   });
 });

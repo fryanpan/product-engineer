@@ -81,7 +81,21 @@ The product repo should have:
 
 If missing, use the metaproject's `/propagate` skill to push templates.
 
-### Step 6: Test
+### Step 6: Set Up Agent Permissions
+
+Copy `templates/claude-settings.json` to the product repo's `.claude/settings.json` if it doesn't already have one. This ensures the agent can work without permission prompts when running inside a sandbox container.
+
+```bash
+# From the product repo root
+mkdir -p .claude
+cp /path/to/product-engineer/templates/claude-settings.json .claude/settings.json
+```
+
+The template grants permissions for standard development operations (git, bun, npm, file I/O, etc.). Safety is enforced by the agent's decision framework (reversible vs irreversible), not the permission system.
+
+If the product repo already has a `.claude/settings.json`, review it to ensure it includes the permissions the agent needs. Merge any missing entries from the template.
+
+### Step 7: Test
 
 1. Create a test Linear ticket in the product's team
 2. Or mention the bot in the product's Slack channel: `@PE test: create a hello world file`

@@ -14,50 +14,52 @@ Shared orchestrator and autonomous agent for processing tasks (feedback, Linear 
 ## Architecture
 
 ```
-Triggers (Linear, Slack, Feedback Widget, GitHub)
-        │
-        ▼
-Orchestrator (Cloudflare Worker)
-  - Receives triggers
-  - Looks up product config in registry
-  - Resolves secrets
-  - Launches sandboxes via Queue
-        │
-        ▼
-Sandbox (Cloudflare Container)
-  - Clones product repo(s)
-  - Runs generic PE agent (Claude Agent SDK)
-  - Agent reads repo's CLAUDE.md + skills
-  - Communicates via Slack, creates PRs
+Webhooks (Linear, GitHub)     Slack Socket Mode
+         │                            │
+         ▼                            ▼
+Worker (stateless) ──→ Orchestrator DO (singleton, always-on)
+                         │ SQLite: tickets, metadata
+                         │
+         ┌───────────────┼───────────────┐
+         ▼               ▼               ▼
+   TicketAgent #1   TicketAgent #2   TicketAgent #3
+   (4-day sleep)    (4-day sleep)    (4-day sleep)
+   Agent SDK        Agent SDK        Agent SDK
 ```
 
 ## Key Directories
 
 | Directory | Purpose |
 |-----------|---------|
-| `orchestrator/` | Shared Cloudflare Worker — dispatch, webhooks, queue consumer |
-| `agent/` | Generic Product Engineer agent — runs inside sandbox containers |
+| `orchestrator/` | Worker + Durable Object — webhook handling, event routing, ticket tracking |
+| `agent/` | Generic Product Engineer agent — Agent SDK, tools, prompt construction |
+| `containers/` | Dockerfiles and container-specific code (orchestrator Socket Mode, agent server) |
 | `.claude/skills/` | English skills that define agent behavior |
 | `docs/` | Process docs and learnings |
 
 ## How It Works
 
-### Orchestrator (`orchestrator/`)
-The Worker receives triggers and dispatches tasks:
-- `POST /api/dispatch` — programmatic dispatch from per-product workers
-- `POST /api/webhooks/linear` — Linear issue creation/update
-- `POST /api/webhooks/slack/events` — Slack app mentions
-- `POST /api/webhooks/github` — PR merge detection
+### Worker (`orchestrator/src/index.ts`)
+Stateless Cloudflare Worker that receives webhooks and proxies them to the Orchestrator Durable Object:
+- `POST /api/webhooks/linear` — Linear issue creation/update (HMAC-verified)
+- `POST /api/webhooks/github` — PR review/merge events (signature-verified)
 
-Tasks are enqueued to `TASK_QUEUE` and processed by the queue consumer, which launches Cloudflare Sandbox containers.
+The Worker looks up product config from the registry, resolves the Orchestrator DO singleton, and forwards events.
 
-### Product Engineer Agent (`agent/`)
-The generic agent runs inside sandbox containers:
-1. Reads `TASK_PAYLOAD` from env (injected by orchestrator)
-2. Clones the product's repo(s) (already done by sandbox launcher)
-3. Loads the repo's CLAUDE.md, skills, and MCP servers via `settingSources: ["project"]`
-4. Follows the `product-engineer` skill to assess, implement, and deliver
-5. Communicates via Slack and updates task status via orchestrator API
+### Orchestrator DO (`orchestrator/src/orchestrator.ts`)
+Singleton Durable Object that owns all coordination:
+- SQLite-backed ticket tracking (status, metadata, agent assignment)
+- Routes events to the correct TicketAgent container
+- Spawns new TicketAgent containers for new tickets
+- Its companion container (`containers/orchestrator/`) maintains a persistent Slack Socket Mode WebSocket connection, forwarding `@product-engineer` mentions to the DO
+
+### TicketAgent (`orchestrator/src/ticket-agent.ts`)
+Container class — one instance per ticket, lives up to 4 days:
+- Runs a persistent HTTP server that receives events from the Orchestrator DO
+- Wraps the Agent SDK with `settingSources: ["project"]` to load product repo CLAUDE.md and skills
+- Follows the `product-engineer` skill for decision-making (reversible actions = autonomous, irreversible = batch and ask)
+- Communicates via Slack (`notify_slack`, `ask_question` tools)
+- Handles full ticket lifecycle: creation, implementation, PR, review, revision, merge
 
 ### Product Registry (`orchestrator/src/registry.ts`)
 Static config mapping products to their repos, secrets, Slack channels, and trigger configuration. See `/setup-product` skill for how to register new products.
@@ -79,8 +81,8 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 - The registry maps logical secret names to Cloudflare binding names
 
 ### Testing
-- `cd orchestrator && bun test` for orchestrator tests
-- `cd agent && bun test` for agent tests
+- `cd orchestrator && bun test` for orchestrator tests (Worker, DO, TicketAgent, webhooks, registry)
+- `cd agent && bun test` for agent tests (prompt construction, tools)
 - End-to-end: create a test Linear ticket or Slack mention and watch the Slack channel
 
 ## Linear

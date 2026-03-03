@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   getProduct,
+  getProducts,
   getProductByLinearProject,
   isOurTeam,
   loadRegistry,
@@ -50,6 +51,16 @@ describe("getProductByLinearProject", () => {
     expect(getProductByLinearProject("Unknown Project")).toBeNull();
     expect(getProductByLinearProject("")).toBeNull();
     expect(getProductByLinearProject("health-tool")).toBeNull(); // slug, not project name
+  });
+});
+
+describe("getProducts", () => {
+  it("returns all products", () => {
+    const products = getProducts();
+    expect(Object.keys(products)).toContain("health-tool");
+    expect(Object.keys(products)).toContain("bike-tool");
+    expect(products["health-tool"].slack_channel).toBe("#health-tool");
+    expect(products["bike-tool"].slack_channel).toBe("#bike-tool");
   });
 });
 

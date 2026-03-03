@@ -3,29 +3,29 @@ main = "src/index.ts"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Task dispatch queue
-[[queues.producers]]
-queue = "pe-tasks"
-binding = "TASK_QUEUE"
-
-[[queues.consumers]]
-queue = "pe-tasks"
-max_batch_size = 1
-max_concurrency = 3
-
-# Sandbox containers (Cloudflare Containers)
-# Requires Workers Paid plan ($5/mo) and Docker for local deploys.
+# Orchestrator — always-on, Slack Socket Mode, event routing
 [[containers]]
-class_name = "Sandbox"
-image = "../Dockerfile"
+class_name = "Orchestrator"
+image = "../containers/orchestrator"
 instance_type = "lite"
-max_instances = 5
+max_instances = 1
+
+# Per-ticket agents — one per active ticket, runs Claude Agent SDK
+[[containers]]
+class_name = "TicketAgent"
+image = "../containers/agent"
+instance_type = "basic"
+max_instances = 10
 
 [durable_objects]
 bindings = [
-  { name = "Sandbox", class_name = "Sandbox" }
+  { name = "ORCHESTRATOR", class_name = "Orchestrator" },
+  { name = "TICKET_AGENT", class_name = "TicketAgent" }
 ]
 
+[vars]
+WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
+
 [[migrations]]
-tag = "v1"
-new_sqlite_classes = ["Sandbox"]
+tag = "v2"
+new_sqlite_classes = ["Orchestrator", "TicketAgent"]

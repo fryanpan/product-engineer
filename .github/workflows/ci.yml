@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install orchestrator dependencies
+        run: cd orchestrator && bun install
+
+      - name: Install agent dependencies
+        run: cd agent && bun install
+
+      - name: Run orchestrator tests
+        run: cd orchestrator && bun test
+
+      - name: Run agent tests
+        run: cd agent && bun test

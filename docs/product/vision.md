@@ -40,7 +40,7 @@ A product engineer agent that turns tickets, feedback, and natural language requ
 ## Deep Dives
 
 - [Example Workflows](workflows.md) — the 4 core workflows that define the product
-- [Implementation Phases](implementation-phases.md) — phased rollout plan
+- [Implementation Plan](plans/2026-03-01-unified-persistent-agent-plan.md) — unified persistent agent plan
 - [Landscape Review](landscape.md) — comparison of 11 competing tools
 - [Alternative Approaches](alternatives.md) — other paths and when they're better
 - [Decisions](decisions.md) — architecture decision log

@@ -1,0 +1,9 @@
+{
+  "name": "pe-orchestrator-container",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@sentry/bun": "^10.40.0",
+    "hono": "^4.0.0"
+  }
+}
