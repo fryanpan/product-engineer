@@ -42,6 +42,18 @@ export class TicketAgent extends Container<Bindings> {
 
   private configLoaded = false;
 
+  constructor(ctx: DurableObjectState, env: Bindings) {
+    // @ts-expect-error — DurableObjectState generic mismatch between Container SDK and Workers types
+    super(ctx, env);
+    // Container base class initializes envVars={} as a class field, which shadows
+    // any getter. Set the real values here so containerFetch auto-restarts work.
+    // On first construction (no config yet), envVars stays {} — /initialize sets it.
+    const config = this.getConfig();
+    if (config) {
+      this.envVars = resolveAgentEnvVars(config, env as unknown as Record<string, string>);
+    }
+  }
+
   private initDb() {
     if (this.configLoaded) return;
     this.ctx.storage.sql.exec(`
@@ -69,15 +81,17 @@ export class TicketAgent extends Container<Bindings> {
       JSON.stringify(config),
       JSON.stringify(config),
     );
+    // Update instance envVars so containerFetch auto-restarts use correct values
+    this.envVars = resolveAgentEnvVars(config, this.env as unknown as Record<string, string>);
   }
 
-  // @ts-expect-error — Container declares envVars as property, but getter is needed for dynamic values
-  get envVars() {
-    const config = this.getConfig();
-    if (!config) {
-      return {};
-    }
-    return resolveAgentEnvVars(config, this.env as unknown as Record<string, string>);
+  override onStop(params: { exitCode: number; reason: string }) {
+    console.error(`[TicketAgent] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
+  }
+
+  override onError(error: unknown) {
+    console.error("[TicketAgent] Container error:", error);
+    throw error;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -87,14 +101,17 @@ export class TicketAgent extends Container<Bindings> {
       case "/initialize": {
         const config = await request.json<TicketAgentConfig>();
         this.setConfig(config);
-        // Start container and wait for the HTTP port to be ready
-        await this.startAndWaitForPorts(this.defaultPort);
+        await this.startAndWaitForPorts({
+          ports: this.defaultPort,
+          startOptions: { envVars: this.envVars as Record<string, string> },
+        });
         return Response.json({ ok: true });
       }
       case "/event": {
         const event = await request.json<TicketEvent>();
         try {
-          // containerFetch starts the container if needed and waits for port readiness
+          // containerFetch auto-starts the container if needed, using this.envVars
+          // (set in constructor from SQLite or in setConfig from /initialize)
           return await this.containerFetch("http://localhost/event", {
             method: "POST",
             headers: {

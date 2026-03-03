@@ -40,15 +40,37 @@ export class Orchestrator extends Container<Bindings> {
   // No sleepAfter — always on
 
   private dbInitialized = false;
+  private containerStarted = false;
 
-  // @ts-expect-error — Container declares envVars as property, but getter is needed for dynamic values
-  get envVars() {
-    return {
-      SLACK_APP_TOKEN: this.env.SLACK_APP_TOKEN,
-      SLACK_BOT_TOKEN: this.env.SLACK_BOT_TOKEN,
-      SENTRY_DSN: this.env.SENTRY_DSN || "",
-      WORKER_URL: this.env.WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
+  constructor(ctx: DurableObjectState, env: Bindings) {
+    // @ts-expect-error — DurableObjectState generic mismatch between Container SDK and Workers types
+    super(ctx, env);
+    // Set envVars in constructor to overwrite the base class field (envVars={}).
+    // Using a getter doesn't work — the base class field creates an own property
+    // that shadows prototype getters.
+    this.envVars = {
+      SLACK_APP_TOKEN: (env as any).SLACK_APP_TOKEN,
+      SLACK_BOT_TOKEN: (env as any).SLACK_BOT_TOKEN,
+      SENTRY_DSN: (env as any).SENTRY_DSN || "",
+      WORKER_URL: (env as any).WORKER_URL || "https://product-engineer.fryanpan.workers.dev",
     };
+  }
+
+  override onStop(params: { exitCode: number; reason: string }) {
+    console.error(`[Orchestrator] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
+    this.containerStarted = false;
+  }
+
+  override onError(error: unknown) {
+    console.error("[Orchestrator] Container error:", error);
+    throw error;
+  }
+
+  // Start the Slack Socket Mode container on first request (and after crashes)
+  private async ensureContainerRunning() {
+    if (this.containerStarted) return;
+    await this.startAndWaitForPorts(this.defaultPort);
+    this.containerStarted = true;
   }
 
   private initDb() {
@@ -71,6 +93,8 @@ export class Orchestrator extends Container<Bindings> {
 
   async fetch(request: Request): Promise<Response> {
     this.initDb();
+    // Start the Slack Socket Mode companion container on first request
+    await this.ensureContainerRunning();
     const url = new URL(request.url);
 
     switch (url.pathname) {
