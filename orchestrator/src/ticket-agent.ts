@@ -71,6 +71,7 @@ export class TicketAgent extends Container<Bindings> {
     );
   }
 
+  // @ts-expect-error — Container declares envVars as property, but getter is needed for dynamic values
   get envVars() {
     const config = this.getConfig();
     if (!config) {
@@ -91,7 +92,7 @@ export class TicketAgent extends Container<Bindings> {
       case "/event": {
         const event = await request.json<TicketEvent>();
         try {
-          const port = this.ctx.container.getTcpPort(this.defaultPort);
+          const port = this.ctx.container!.getTcpPort(this.defaultPort);
           const res = await port.fetch("http://localhost/event", {
             method: "POST",
             headers: {

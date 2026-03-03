@@ -41,6 +41,7 @@ export class Orchestrator extends Container<Bindings> {
 
   private dbInitialized = false;
 
+  // @ts-expect-error — Container declares envVars as property, but getter is needed for dynamic values
   get envVars() {
     return {
       SLACK_APP_TOKEN: this.env.SLACK_APP_TOKEN,
