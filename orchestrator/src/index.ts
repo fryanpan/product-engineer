@@ -124,6 +124,42 @@ app.post("/api/orchestrator/heartbeat", async (c) => {
   }));
 });
 
+// Internal: transcript upload from agent containers
+app.post("/api/internal/upload-transcript", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const { ticketId, r2Key, transcript } = await c.req.json<{
+    ticketId: string;
+    r2Key: string;
+    transcript: string;
+  }>();
+
+  try {
+    // Upload to R2
+    await c.env.TRANSCRIPTS.put(r2Key, transcript, {
+      httpMetadata: { contentType: "application/x-ndjson" },
+      customMetadata: { ticketId, uploadedAt: new Date().toISOString() },
+    });
+
+    // Update ticket record with R2 key
+    const orchestrator = getOrchestrator(c.env);
+    await orchestrator.fetch(new Request("http://internal/ticket/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticketId, transcript_r2_key: r2Key }),
+    }));
+
+    console.log(`[Worker] Transcript uploaded: ticket=${ticketId} key=${r2Key} size=${transcript.length}`);
+    return c.json({ ok: true, r2Key });
+  } catch (err) {
+    console.error("[Worker] Transcript upload failed:", err);
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
 app.get("/api/orchestrator/tickets", async (c) => {
   const apiKey = c.req.header("X-API-Key");
   if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
@@ -131,6 +167,44 @@ app.get("/api/orchestrator/tickets", async (c) => {
   }
   const orchestrator = getOrchestrator(c.env);
   return orchestrator.fetch(new Request("http://internal/tickets"));
+});
+
+// API: list transcripts
+app.get("/api/transcripts", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const limit = parseInt(c.req.query("limit") || "50", 10);
+  const sinceHours = c.req.query("sinceHours") ? parseInt(c.req.query("sinceHours")!, 10) : undefined;
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request(`http://internal/transcripts?limit=${limit}${sinceHours ? `&sinceHours=${sinceHours}` : ""}`));
+});
+
+// API: fetch a specific transcript
+app.get("/api/transcripts/:r2Key", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const r2Key = decodeURIComponent(c.req.param("r2Key"));
+  try {
+    const obj = await c.env.TRANSCRIPTS.get(r2Key);
+    if (!obj) {
+      return c.json({ error: "Transcript not found" }, 404);
+    }
+
+    const transcript = await obj.text();
+    return new Response(transcript, {
+      headers: { "Content-Type": "application/x-ndjson" },
+    });
+  } catch (err) {
+    console.error("[Worker] Transcript fetch failed:", err);
+    return c.json({ error: String(err) }, 500);
+  }
 });
 
 // Debug: query a specific ticket agent's container status

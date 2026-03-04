@@ -32,6 +32,9 @@ export interface Bindings {
   ORCHESTRATOR: DurableObjectNamespace;
   TICKET_AGENT: DurableObjectNamespace;
 
+  // R2 buckets
+  TRANSCRIPTS: R2Bucket;
+
   // Config vars
   WORKER_URL: string;
 
