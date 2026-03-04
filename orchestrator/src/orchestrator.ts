@@ -371,6 +371,13 @@ export class Orchestrator extends Container<Bindings> {
         agentError = String(err);
       }
 
+      // Mark the stuck ticket inactive so subsequent cron runs don't create duplicate investigations
+      this.ctx.storage.sql.exec(
+        "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+        ticket.id,
+      );
+      console.log(`[Orchestrator] Marked stuck ticket ${ticket.id} as inactive`);
+
       // Create investigation ticket
       await this.createInvestigationTicket({
         stuckTicketId: ticket.id,
@@ -449,27 +456,24 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
 `;
 
     try {
-      // Post notification to Slack first
+      // Post notification to Slack
       if (slackChannel) {
-        const productConfig = getProduct(product);
-        if (productConfig) {
-          await fetch("https://slack.com/api/chat.postMessage", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              channel: slackChannel,
-              text: `🚨 *Agent stuck detected*\nTicket: ${stuckTicketId}\nStuck for: ${minutesStuck} minutes\nCreating investigation ticket...`,
-              ...(slackThreadTs && { thread_ts: slackThreadTs }),
-            }),
-          });
-        }
+        await fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            channel: slackChannel,
+            text: `🚨 *Agent stuck detected*\nTicket: ${stuckTicketId}\nStuck for: ${minutesStuck} minutes\nCreating investigation ticket...`,
+            ...(slackThreadTs && { thread_ts: slackThreadTs }),
+          }),
+        });
       }
 
-      // Create Linear ticket (this will trigger a new TicketAgent to investigate)
-      const investigationId = sanitizeTicketId(`investigation-${stuckTicketId}-${Date.now()}`);
+      // Deterministic ID — ensures only one investigation per stuck ticket
+      const investigationId = sanitizeTicketId(`investigation-${stuckTicketId}`);
       const event: TicketEvent = {
         type: "ticket_created",
         source: "monitoring",
@@ -486,10 +490,11 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
         slackThreadTs,
       };
 
-      // Insert the investigation ticket
+      // Upsert — idempotent if cron fires twice simultaneously
       this.ctx.storage.sql.exec(
         `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel)
-         VALUES (?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')`,
         investigationId,
         product,
         slackThreadTs || null,

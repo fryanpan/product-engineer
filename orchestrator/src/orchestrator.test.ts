@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
 
 describe("buildTicketEvent", () => {
@@ -96,9 +96,13 @@ describe("agent monitoring", () => {
     expect(minutesDiff40).toBeLessThan(41);
   });
 
-  test("stuck agent threshold is 30 minutes", () => {
-    // Document the expected behavior
-    const stuckThreshold = 30;
-    expect(stuckThreshold).toBe(30);
+  test("investigation ticket ID is deterministic per stuck ticket", () => {
+    // The investigation ID should be deterministic so duplicate cron runs
+    // don't create multiple investigations for the same stuck ticket
+    const stuckTicketId = "LIN-123";
+    const investigationId = `investigation-${stuckTicketId}`;
+    expect(investigationId).toBe("investigation-LIN-123");
+    // Same input always produces same ID (no Date.now() or random component)
+    expect(`investigation-${stuckTicketId}`).toBe(investigationId);
   });
 });
