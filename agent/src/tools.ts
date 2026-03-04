@@ -60,6 +60,36 @@ async function postToSlack(
   return { content: [{ type: "text", text: "Message posted to Slack" }] };
 }
 
+async function updateSlackMessage(
+  text: string,
+  ts: string,
+  config: AgentConfig,
+): Promise<ToolResult> {
+  const res = await fetch("https://slack.com/api/chat.update", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.slackBotToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      channel: config.slackChannel,
+      ts,
+      text,
+    }),
+  });
+
+  if (!res.ok) {
+    return { content: [{ type: "text", text: `Slack update failed: ${res.status}` }] };
+  }
+
+  const data = (await res.json()) as { ok: boolean; error?: string };
+  if (!data.ok) {
+    return { content: [{ type: "text", text: `Slack update error: ${data.error}` }] };
+  }
+
+  return { content: [{ type: "text", text: "Slack message updated" }] };
+}
+
 export function createTools(config: AgentConfig) {
   const notifySlack = tool(
     "notify_slack",
@@ -77,7 +107,7 @@ export function createTools(config: AgentConfig) {
 
   const updateTaskStatus = tool(
     "update_task_status",
-    "Update the task's status. Call this at every state transition.",
+    "Update the task's status. Call this at every state transition. This will update Linear ticket status and edit the top-level Slack message.",
     {
       status: z
         .enum([
@@ -102,12 +132,14 @@ export function createTools(config: AgentConfig) {
         .optional()
         .describe("ID of the created or referenced Linear ticket"),
     },
-    async ({ status, reason, pr_url, linear_ticket_id }) => {
+    async ({ status, reason, pr_url, linear_ticket_id: explicitTicketId }) => {
+      const linear_ticket_id = explicitTicketId || config.ticketId;
       console.log(
         `[Agent] Status update: ${status}`,
         JSON.stringify({ reason, pr_url, linear_ticket_id }),
       );
 
+      // Update orchestrator
       try {
         await fetch(`${config.workerUrl}/api/internal/status`, {
           method: "POST",
@@ -123,7 +155,128 @@ export function createTools(config: AgentConfig) {
           }),
         });
       } catch (err) {
-        console.error("[Agent] Failed to update status:", err);
+        console.error("[Agent] Failed to update orchestrator status:", err);
+      }
+
+      // Map status to Linear workflow state
+      const linearStateMap: Record<string, string> = {
+        in_progress: "In Progress",
+        pr_open: "In Review",
+        in_review: "In Review",
+        needs_revision: "In Progress",
+        merged: "Done",
+        closed: "Done",
+        deferred: "Canceled",
+        failed: "Canceled",
+        asking: "In Progress",
+      };
+
+      const linearState = linearStateMap[status] || "In Progress";
+
+      // Update Linear ticket if we have the ticket ID and API key
+      if (linear_ticket_id && config.linearApiKey) {
+        try {
+          // First, look up the workflow state ID by name from the issue's team
+          const stateRes = await fetch("https://api.linear.app/graphql", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: config.linearApiKey,
+            },
+            body: JSON.stringify({
+              query: `query($issueId: String!) {
+                issue(id: $issueId) {
+                  team { states { nodes { id name } } }
+                }
+              }`,
+              variables: { issueId: linear_ticket_id },
+            }),
+          });
+          const stateData = await stateRes.json() as {
+            data?: { issue?: { team?: { states?: { nodes?: { id: string; name: string }[] } } } };
+          };
+          const states = stateData.data?.issue?.team?.states?.nodes || [];
+          const targetState = states.find((s) => s.name === linearState);
+
+          if (!targetState) {
+            console.warn(`[Agent] Could not find Linear state "${linearState}" for ticket ${linear_ticket_id}`);
+          } else {
+            await fetch("https://api.linear.app/graphql", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: config.linearApiKey,
+              },
+              body: JSON.stringify({
+                query: `mutation($issueId: String!, $stateId: String!) {
+                  issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+                    success
+                    issue { id state { name } }
+                  }
+                }`,
+                variables: {
+                  issueId: linear_ticket_id,
+                  stateId: targetState.id,
+                },
+              }),
+            });
+            console.log(`[Agent] Updated Linear ticket ${linear_ticket_id} to ${linearState}`);
+          }
+        } catch (err) {
+          console.error("[Agent] Failed to update Linear ticket:", err);
+        }
+      }
+
+      // Update top-level Slack message with status
+      if (config.slackThreadTs) {
+        try {
+          // Get original message first to preserve ticket info
+          const historyRes = await fetch(
+            `https://slack.com/api/conversations.history?channel=${encodeURIComponent(config.slackChannel)}&latest=${config.slackThreadTs}&inclusive=true&limit=1`,
+            {
+              headers: {
+                Authorization: `Bearer ${config.slackBotToken}`,
+              },
+            },
+          );
+
+          if (historyRes.ok) {
+            const historyData = (await historyRes.json()) as {
+              ok: boolean;
+              messages?: Array<{ text: string }>;
+            };
+
+            if (historyData.ok && historyData.messages?.[0]) {
+              const originalText = historyData.messages[0].text;
+
+              // Build status indicator
+              let statusEmoji = "⏳";
+              let statusText = status.replace(/_/g, " ").toUpperCase();
+              if (["merged", "closed"].includes(status)) {
+                statusEmoji = "✅";
+                statusText = "*DONE*";
+              } else if (status === "pr_open" || status === "in_review") {
+                statusEmoji = "👀";
+              } else if (status === "failed") {
+                statusEmoji = "❌";
+              }
+
+              // Strip existing status header to prevent stacking on repeated updates
+              const cleanText = originalText.replace(/^[⏳✅👀❌] .+\n\n/, "");
+              const updatedText = `${statusEmoji} ${statusText}\n\n${cleanText}`;
+
+              const updateResult = await updateSlackMessage(updatedText, config.slackThreadTs, config);
+              const resultText = updateResult.content[0]?.text || "";
+              if (resultText.includes("failed") || resultText.includes("error")) {
+                console.error(`[Agent] Failed to update Slack thread: ${resultText}`);
+              } else {
+                console.log(`[Agent] Updated Slack thread ${config.slackThreadTs} with status: ${status}`);
+              }
+            }
+          }
+        } catch (err) {
+          console.error("[Agent] Failed to update Slack message:", err);
+        }
       }
 
       return {
@@ -156,9 +309,9 @@ export function createTools(config: AgentConfig) {
           return { content: [{ type: "text" as const, text: `Failed to list transcripts: ${res.status}` }] };
         }
 
-        const data = await res.json<{ transcripts: Array<{ ticketId: string; r2Key: string; uploadedAt: string; product: string; status: string }> }>();
+        const data = (await res.json()) as { transcripts: Array<{ ticketId: string; r2Key: string; uploadedAt: string; product: string; status: string }> };
         const transcriptList = data.transcripts
-          .map((t) => `- ${t.ticketId} (${t.product}, ${t.status}) — ${t.r2Key}`)
+          .map((t: { ticketId: string; product: string; status: string; r2Key: string }) => `- ${t.ticketId} (${t.product}, ${t.status}) — ${t.r2Key}`)
           .join("\n");
 
         return {

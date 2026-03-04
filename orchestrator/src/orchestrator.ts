@@ -229,7 +229,7 @@ export class Orchestrator extends Container<Bindings> {
       ticketId: event.ticketId,
       product: event.product,
       repos: productConfig.repos,
-      slackChannel: productConfig.slack_channel,
+      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
       secrets: productConfig.secrets,
     };
 

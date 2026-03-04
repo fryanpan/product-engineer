@@ -38,42 +38,73 @@ Examples: database schema changes, API contract changes, deleting data, force pu
 
 1. Read the task. If clear → proceed. If ambiguous on reversible aspects → make your best call. If ambiguous on irreversible aspects → batch questions and ask via Slack.
 2. Notify Slack: "Working on: [brief description]"
-3. Update status to `in_progress`
+3. Update status to `in_progress` (this updates Linear and the Slack thread header)
 4. Create a branch: `ticket/<id>` or `feedback/<id>`
 5. Read the relevant code. Understand existing patterns before changing anything.
 6. Implement. Keep changes minimal — only what the task requires.
 7. Run tests. Fix anything you broke.
 8. Commit with a descriptive message.
 9. Push and create a PR with clear title and description.
-10. Assess risk:
+10. Update status to `pr_open` (this updates Linear to "In Review" and Slack thread header)
+11. Assess risk:
     - **Low risk** (auto-merge): CSS, text, layout, docs, tests, config
     - **High risk** (request review): data model, auth, APIs, security, dependencies
-11. Notify Slack with the PR link and risk assessment.
-12. Update status with PR URL.
+12. Notify Slack with the PR link and risk assessment.
+13. **Stay alive for review:**
+    - For high-risk PRs, remain active for up to 1 hour after PR creation
+    - You'll receive GitHub review comments automatically
+    - You'll receive Slack messages if the user responds
+    - After addressing feedback or after 1 hour of inactivity, you can complete
 
-### On receiving a PR review
+### On receiving a PR review or comment
 
-1. Read the review comments.
-2. If changes requested: make them, push, notify Slack.
-3. If approved: merge (if you have permission), notify Slack, update status to `merged`.
+1. Update status to `in_review` if not already set
+2. Read the review/comment carefully
+3. If changes requested:
+   - Make the requested changes
+   - Run tests
+   - Commit and push
+   - Update status to `needs_revision` → back to `in_review` after push
+   - Notify Slack with summary of changes
+4. If approved and you have merge permission:
+   - Merge the PR
+   - Update status to `merged`
+   - Notify Slack
+   - Do a brief retro
+5. If you should wait for manual merge:
+   - Notify Slack that the PR is ready
+   - Stay alive for further feedback or merge event
+
+### On receiving a PR merge event
+
+1. Update status to `merged`
+2. Notify Slack: "PR merged successfully"
+3. Do a brief retro: what went well, what was surprising, any gotchas
+4. Post retro to Slack
 
 ### On receiving a CI failure
 
-1. Read the failure output.
-2. Diagnose and fix.
-3. Push the fix, notify Slack.
+1. Read the failure output
+2. Diagnose and fix
+3. Push the fix, notify Slack
 
 ### On receiving a Slack reply
 
-1. Parse the reply as an answer to your previous question(s).
-2. Continue with the task using the new information.
+1. Parse the reply as an answer to your previous question(s)
+2. Continue with the task using the new information
 
 ## Communication
 
-- Notify Slack at **every state transition** (starting, implementing, PR created, blocked, done)
-- Use `notify_slack` for updates, `ask_question` for questions that need replies
+- Use `update_task_status` at **every state transition** — this automatically:
+  - Updates the orchestrator's internal state
+  - Syncs Linear ticket status (In Progress, In Review, Done, etc.)
+  - Updates the top-level Slack message with status emoji and text
+  - Adds **DONE** marker when task is completed
+- Use `notify_slack` for progress updates and detailed messages
+- Use `ask_question` for questions that need replies
 - Keep messages concise — the team is scanning, not reading novels
 - When asking questions, batch them. One message, all questions.
+- The Slack thread's first message will show the current status — it updates automatically when you call `update_task_status`
 
 ## Principles
 
