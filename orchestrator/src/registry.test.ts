@@ -101,11 +101,19 @@ describe("isOurTeam", () => {
 });
 
 describe("getAIGatewayConfig", () => {
-  it("returns null when not configured", () => {
-    // Registry.json may not have cloudflare_ai_gateway initially
+  it("returns null or valid config object", () => {
     const config = getAIGatewayConfig();
-    // This test will pass if config is null OR if it's defined
-    // The important part is it doesn't throw
-    expect(config === null || typeof config === "object").toBe(true);
+
+    // Registry.json may or may not have cloudflare_ai_gateway configured
+    if (config === null) {
+      expect(config).toBeNull();
+    } else {
+      // If configured, should have required fields
+      expect(typeof config).toBe("object");
+      expect(typeof config.account_id).toBe("string");
+      expect(typeof config.gateway_id).toBe("string");
+      expect(config.account_id.length).toBeGreaterThan(0);
+      expect(config.gateway_id.length).toBeGreaterThan(0);
+    }
   });
 });

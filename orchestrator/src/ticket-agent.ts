@@ -42,7 +42,7 @@ export function resolveAgentEnvVars(
   // See docs/cloudflare-ai-gateway.md for setup and analytics features
   const gateway = gatewayConfig ?? getAIGatewayConfig();
   if (gateway) {
-    vars.ANTHROPIC_BASE_URL = `https://gateway.ai.cloudflare.com/v1/${gateway.account_id}/${gateway.gateway_id}/anthropic`;
+    vars.ANTHROPIC_BASE_URL = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(gateway.account_id)}/${encodeURIComponent(gateway.gateway_id)}/anthropic`;
   }
 
   return vars;
