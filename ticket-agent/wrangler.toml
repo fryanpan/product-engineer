@@ -1,0 +1,23 @@
+name = "ticket-agent-worker"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+# Per-ticket agents — one per active ticket, runs Claude Agent SDK
+[[containers]]
+class_name = "TicketAgent"
+image = "../agent/Dockerfile"
+instance_type = "basic"
+max_instances = 10
+
+[durable_objects]
+bindings = [
+  { name = "TICKET_AGENT", class_name = "TicketAgent" }
+]
+
+# Note: Variables are NOT needed in this worker — the orchestrator worker
+# passes all config via /initialize when spawning agents.
+# Secrets are bound at container start time via envVars.

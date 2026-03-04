@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,13 +18,47 @@ jobs:
       - name: Install agent dependencies
         run: cd agent && bun install
 
+      - name: Install ticket-agent dependencies
+        run: cd ticket-agent && bun install
+
       - name: Run tests
         run: |
           cd orchestrator && bun test
           cd ../agent && bun test
 
-      - name: Deploy to Cloudflare
+  deploy-orchestrator:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install orchestrator dependencies
+        run: cd orchestrator && bun install
+
+      - name: Deploy orchestrator worker
         run: cd orchestrator && npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-ticket-agent:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install ticket-agent dependencies
+        run: cd ticket-agent && bun install
+
+      - name: Deploy ticket-agent worker with gradual rollout
+        run: |
+          cd ticket-agent
+          npx wrangler versions upload
+          npx wrangler versions deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

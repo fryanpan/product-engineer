@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["@cloudflare/workers-types", "@types/bun"]
+  },
+  "include": ["src/**/*", "../orchestrator/src/ticket-agent.ts", "../orchestrator/src/types.ts", "../orchestrator/src/registry.ts"]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "product-engineer-ticket-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler versions upload && wrangler versions deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.1.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "@types/bun": "^1.3.9",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.0.0"
+  }
+}

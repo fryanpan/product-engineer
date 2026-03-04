@@ -1,7 +1,7 @@
 FROM oven/bun:latest
 
 RUN apt-get update && \
-    apt-get install -y git curl ca-certificates gnupg && \
+    apt-get install -y git curl ca-certificates gnupg s3fs fuse && \
     # Node.js 22 via nodesource (provides npx for stdio MCP servers)
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
@@ -21,5 +21,9 @@ COPY . /app/
 WORKDIR /app
 RUN bun install
 
+# Copy entrypoint script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 USER agent
-CMD ["bun", "run", "src/server.ts"]
+ENTRYPOINT ["/app/entrypoint.sh"]

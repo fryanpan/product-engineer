@@ -20,6 +20,10 @@ export function resolveAgentEnvVars(
     SENTRY_DSN: env.SENTRY_DSN || "",
     WORKER_URL: env.WORKER_URL || (() => { console.error("[TicketAgent] WORKER_URL not configured — set it in wrangler.toml [vars]"); return ""; })(),
     API_KEY: env.API_KEY || "",
+    // R2 FUSE mount credentials for session persistence
+    R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID || "",
+    R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY || "",
+    CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {

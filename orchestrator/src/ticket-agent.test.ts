@@ -97,6 +97,26 @@ describe("resolveAgentEnvVars", () => {
     const vars = resolveAgentEnvVars(config, env);
     expect(vars.GITHUB_TOKEN).toBe("");
   });
+
+  test("includes R2 credentials for session persistence", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {},
+    };
+    const env = {
+      R2_ACCESS_KEY_ID: "r2_key_id",
+      R2_SECRET_ACCESS_KEY: "r2_secret",
+      CF_ACCOUNT_ID: "cf_account",
+    } as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.R2_ACCESS_KEY_ID).toBe("r2_key_id");
+    expect(vars.R2_SECRET_ACCESS_KEY).toBe("r2_secret");
+    expect(vars.CF_ACCOUNT_ID).toBe("cf_account");
+  });
 });
 
 describe("resolveAgentEnvVars - AI Gateway", () => {
