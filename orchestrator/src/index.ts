@@ -219,6 +219,108 @@ app.get("/api/agent/:ticketId/status", async (c) => {
   return agent.fetch(new Request("http://internal/status"));
 });
 
+// Products API: list all products
+app.get("/api/products", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/products"));
+});
+
+// Products API: get single product
+app.get("/api/products/:slug", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const slug = c.req.param("slug");
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request(`http://internal/products/${slug}`));
+});
+
+// Products API: create product
+app.post("/api/products", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/products", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+// Products API: update product
+app.put("/api/products/:slug", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const slug = c.req.param("slug");
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request(`http://internal/products/${slug}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+// Products API: delete product
+app.delete("/api/products/:slug", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const slug = c.req.param("slug");
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request(`http://internal/products/${slug}`, {
+    method: "DELETE",
+  }));
+});
+
+// Products API: seed from old registry.json format
+app.post("/api/products/seed", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/products/seed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+// Settings API: list all settings
+app.get("/api/settings", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/settings"));
+});
+
+// Settings API: update a setting
+app.put("/api/settings/:key", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const key = c.req.param("key");
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request(`http://internal/settings/${key}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
 export function getOrchestrator(env: Bindings): DurableObjectStub {
   const id = env.ORCHESTRATOR.idFromName("main");
   return env.ORCHESTRATOR.get(id);

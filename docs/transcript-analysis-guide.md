@@ -174,13 +174,13 @@ If you want to analyze transcripts outside the agent system:
 ### List transcripts
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  "https://product-engineer.fryanpan.workers.dev/api/transcripts?limit=50&sinceHours=24"
+  "https://your-worker.workers.dev/api/transcripts?limit=50&sinceHours=24"
 ```
 
 ### Fetch transcript
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  "https://product-engineer.fryanpan.workers.dev/api/transcripts/BC-123-2026-03-04T16-30-00-000Z.jsonl"
+  "https://your-worker.workers.dev/api/transcripts/BC-123-2026-03-04T16-30-00-000Z.jsonl"
 ```
 
 ## Troubleshooting

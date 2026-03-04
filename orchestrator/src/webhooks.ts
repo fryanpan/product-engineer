@@ -39,17 +39,24 @@ export function extractTaskId(branch: string): string | null {
   return branch.match(/^(?:feedback|ticket)\/(.+)$/)?.[1] ?? null;
 }
 
-export function resolveProductByRepo(repoFullName: string): string | null {
-  const registry = loadRegistry();
+export async function resolveProductByRepo(
+  orchestratorStub: DurableObjectStub,
+  repoFullName: string,
+): Promise<string | null> {
+  const registry = await loadRegistry(orchestratorStub);
   for (const [name, config] of Object.entries(registry.products)) {
     if (config.repos.includes(repoFullName)) return name;
   }
   return null;
 }
 
-function forwardToOrchestrator(env: Bindings, event: Record<string, unknown>) {
+function getOrchestrator(env: Bindings): DurableObjectStub {
   const id = env.ORCHESTRATOR.idFromName("main");
-  const orchestrator = env.ORCHESTRATOR.get(id);
+  return env.ORCHESTRATOR.get(id);
+}
+
+function forwardToOrchestrator(env: Bindings, event: Record<string, unknown>) {
+  const orchestrator = getOrchestrator(env);
   return orchestrator.fetch(new Request("http://internal/event", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -137,7 +144,9 @@ linearWebhook.post("/", async (c) => {
     return c.json({ ok: true, ignored: true });
   }
 
-  if (!isOurTeam(payload.data.teamId)) {
+  const orchestrator = getOrchestrator(c.env);
+
+  if (!(await isOurTeam(orchestrator, payload.data.teamId))) {
     return c.json({ ok: true, ignored: true, reason: "not our team" });
   }
 
@@ -150,7 +159,7 @@ linearWebhook.post("/", async (c) => {
     });
   }
 
-  const match = getProductByLinearProject(projectName);
+  const match = await getProductByLinearProject(orchestrator, projectName);
   if (!match) {
     return c.json({
       ok: true,
@@ -160,7 +169,7 @@ linearWebhook.post("/", async (c) => {
   }
 
   // Trigger conditions: create or assigned to agent (but not if already in terminal state)
-  const agent = getAgentIdentity();
+  const agent = await getAgentIdentity(orchestrator);
   const isAssignedToAgent =
     payload.data.assignee?.email === agent.linear_email ||
     payload.data.assignee?.name === agent.linear_name;
@@ -269,7 +278,8 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  const productName = resolveProductByRepo(payload.repository.full_name);
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
@@ -315,7 +325,8 @@ async function handlePullRequestReview(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  const productName = resolveProductByRepo(payload.repository.full_name);
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
@@ -366,7 +377,8 @@ async function handlePullRequestReviewComment(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  const productName = resolveProductByRepo(payload.repository.full_name);
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
@@ -416,12 +428,13 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
   }
 
   // Resolve product early so we can get the right per-product GitHub token
-  const productName = resolveProductByRepo(payload.repository.full_name);
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  const productConfig = getProduct(productName);
+  const productConfig = await getProduct(orchestrator, productName);
   const ghTokenBinding = productConfig?.secrets?.GITHUB_TOKEN;
   const ghToken = ghTokenBinding ? (env as Record<string, unknown>)[ghTokenBinding] as string : undefined;
   if (!ghToken) {

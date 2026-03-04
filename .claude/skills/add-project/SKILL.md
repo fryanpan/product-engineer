@@ -19,40 +19,48 @@ Collect the following information:
 - **Product name** — short identifier (e.g., `health-tool`, `bike-tool`). Use kebab-case.
 - **GitHub repo(s)** — one or more repos (e.g., `your-org/your-app`)
 - **Slack channel** — where the agent will communicate (e.g., `#health-tool`)
+- **Slack channel ID** (optional but recommended) — the channel ID from Slack
 - **Linear project name** — the project name in Linear that will trigger this product
 
-### Step 2: Add to Registry
+### Step 2: Add to Registry via API
 
-Add the product to `orchestrator/src/registry.json`:
+Use the admin API to add the product to the registry:
 
-```json
-"product-name": {
-  "repos": ["org/repo-name"],
-  "slack_channel": "#product-channel",
-  "triggers": {
-    "linear": {
-      "enabled": true,
-      "project_name": "Project Name"
-    },
-    "slack": { "enabled": true }
-  },
-  "secrets": {
-    "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
-    "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
-    "LINEAR_API_KEY": "LINEAR_API_KEY",
-    "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
-    "NOTION_TOKEN": "NOTION_TOKEN",
-    "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
-    "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
-  }
-}
+```bash
+curl -X POST https://your-worker.workers.dev/api/products \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "slug": "product-name",
+    "config": {
+      "repos": ["org/repo-name"],
+      "slack_channel": "#product-channel",
+      "slack_channel_id": "C000000APP1",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Project Name"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "YOUR_ORG_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
+    }
+  }'
 ```
 
 **Notes:**
-- Most products use the shared `FRYANPAN_ORG_GITHUB_TOKEN` secret
+- Most products use a shared org-wide GitHub token
 - All other secrets are shared across products
 - Only add `feedback` trigger if the product has a feedback widget
-- The `slack_channel_id` field is optional and can be added later
+- The `slack_channel_id` field is optional but recommended for faster lookups
 
 ### Step 3: Create Slack Channel (if needed)
 
@@ -87,17 +95,17 @@ Ensure all required secrets exist in Cloudflare:
 # Check existing secrets
 wrangler secret list
 
-# The shared FRYANPAN_ORG_GITHUB_TOKEN should already exist
+# The shared YOUR_ORG_GITHUB_TOKEN should already exist
 # If it doesn't, you'll need to create a GitHub fine-grained PAT with:
 # - Permissions: Contents (read/write), Pull requests (read/write), Issues (read)
-# - Add it: wrangler secret put FRYANPAN_ORG_GITHUB_TOKEN
+# - Add it: wrangler secret put YOUR_ORG_GITHUB_TOKEN
 ```
 
-### Step 7: Deploy and Test
+### Step 7: Test
 
-1. Deploy the updated registry: `bun run deploy` from `orchestrator/`
+1. List products to verify it was added: `curl -H "X-API-Key: $API_KEY" https://your-worker.workers.dev/api/products`
 2. Create a test Linear ticket in the product's project
-3. Or mention the bot in Slack: `@PE test: create a hello world file`
+3. Or mention the bot in Slack: `@bot test: create a hello world file`
 4. Verify the agent responds and creates a PR
 
 ## Common Patterns

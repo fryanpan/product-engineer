@@ -31,7 +31,7 @@ binding = "TRANSCRIPTS"
 bucket_name = "product-engineer-transcripts"
 
 [vars]
-WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
+WORKER_URL = "https://your-worker.workers.dev"
 
 # Health check cron: runs every 10 minutes to detect stuck agents
 [triggers]

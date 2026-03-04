@@ -1,14 +1,16 @@
 import { Container } from "@cloudflare/containers";
-import { getProduct, getProducts } from "./registry";
 import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
+import type { ProductConfig } from "./registry";
 
 function sanitizeTicketId(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
 }
 
 // Pure helper — exported for testing
-export function resolveProductFromChannel(channel: string): string | null {
-  const products = getProducts();
+export function resolveProductFromChannel(
+  products: Record<string, ProductConfig>,
+  channel: string,
+): string | null {
   for (const [name, config] of Object.entries(products)) {
     // Match on channel ID (from Socket Mode events) or channel name
     if (config.slack_channel_id === channel || config.slack_channel === channel) {
@@ -103,6 +105,8 @@ export class Orchestrator extends Container<Bindings> {
 
   private initDb() {
     if (this.dbInitialized) return;
+
+    // Tickets table
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS tickets (
         id TEXT PRIMARY KEY,
@@ -117,6 +121,24 @@ export class Orchestrator extends Container<Bindings> {
         agent_active INTEGER NOT NULL DEFAULT 1,
         last_heartbeat TEXT,
         transcript_r2_key TEXT
+      )
+    `);
+
+    // Products table
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS products (
+        slug TEXT PRIMARY KEY,
+        config TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+
+    // Settings table
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
     // Migration: add agent_active column for existing deployments
@@ -152,6 +174,230 @@ export class Orchestrator extends Container<Bindings> {
     this.dbInitialized = true;
   }
 
+  // --- Product registry CRUD methods ---
+
+  private listProducts(): Response {
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT slug, config, updated_at FROM products ORDER BY slug",
+    ).toArray() as Array<{ slug: string; config: string; updated_at: string }>;
+
+    const products = rows.reduce((acc, row) => {
+      acc[row.slug] = JSON.parse(row.config);
+      return acc;
+    }, {} as Record<string, unknown>);
+
+    return Response.json({ products });
+  }
+
+  private getProduct(request: Request): Response {
+    const url = new URL(request.url);
+    const slug = url.pathname.split("/").pop();
+    if (!slug) {
+      return Response.json({ error: "Missing slug" }, { status: 400 });
+    }
+
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      slug,
+    ).toArray() as Array<{ config: string }>;
+
+    if (rows.length === 0) {
+      return Response.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    return Response.json({ product: JSON.parse(rows[0].config) });
+  }
+
+  private async createProduct(request: Request): Promise<Response> {
+    const { slug, config } = await request.json<{ slug: string; config: unknown }>();
+
+    if (!slug || !config) {
+      return Response.json({ error: "Missing slug or config" }, { status: 400 });
+    }
+
+    try {
+      this.ctx.storage.sql.exec(
+        "INSERT INTO products (slug, config) VALUES (?, ?)",
+        slug,
+        JSON.stringify(config),
+      );
+      return Response.json({ ok: true, slug });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("UNIQUE constraint")) {
+        return Response.json({ error: "Product already exists" }, { status: 409 });
+      }
+      return Response.json({ error: message }, { status: 500 });
+    }
+  }
+
+  private async updateProduct(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const slug = url.pathname.split("/").pop();
+    if (!slug) {
+      return Response.json({ error: "Missing slug" }, { status: 400 });
+    }
+
+    const { config } = await request.json<{ config: unknown }>();
+    if (!config) {
+      return Response.json({ error: "Missing config" }, { status: 400 });
+    }
+
+    this.ctx.storage.sql.exec(
+      "UPDATE products SET config = ?, updated_at = datetime('now') WHERE slug = ?",
+      JSON.stringify(config),
+      slug,
+    );
+
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT changes() as count",
+    ).toArray() as Array<{ count: number }>;
+
+    if (rows[0].count === 0) {
+      return Response.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    return Response.json({ ok: true, slug });
+  }
+
+  private deleteProduct(request: Request): Response {
+    const url = new URL(request.url);
+    const slug = url.pathname.split("/").pop();
+    if (!slug) {
+      return Response.json({ error: "Missing slug" }, { status: 400 });
+    }
+
+    this.ctx.storage.sql.exec("DELETE FROM products WHERE slug = ?", slug);
+
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT changes() as count",
+    ).toArray() as Array<{ count: number }>;
+
+    if (rows[0].count === 0) {
+      return Response.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    return Response.json({ ok: true, slug });
+  }
+
+  private listSettings(): Response {
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT key, value FROM settings ORDER BY key",
+    ).toArray() as Array<{ key: string; value: string }>;
+
+    const settings = rows.reduce((acc, row) => {
+      acc[row.key] = row.value;
+      return acc;
+    }, {} as Record<string, string>);
+
+    return Response.json({ settings });
+  }
+
+  private async updateSetting(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const key = url.pathname.split("/").pop();
+    if (!key) {
+      return Response.json({ error: "Missing key" }, { status: 400 });
+    }
+
+    const { value } = await request.json<{ value: string }>();
+    if (value === undefined || value === null) {
+      return Response.json({ error: "Missing value" }, { status: 400 });
+    }
+
+    this.ctx.storage.sql.exec(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+      key,
+      value,
+    );
+
+    return Response.json({ ok: true, key, value });
+  }
+
+  private async seedProducts(request: Request): Promise<Response> {
+    const registry = await request.json<{
+      linear_team_id?: string;
+      agent_linear_email?: string;
+      agent_linear_name?: string;
+      cloudflare_ai_gateway?: { account_id: string; gateway_id: string };
+      products: Record<string, unknown>;
+    }>();
+
+    let productsCreated = 0;
+    let productsUpdated = 0;
+    let settingsUpdated = 0;
+
+    // Insert global settings
+    if (registry.linear_team_id) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+        "linear_team_id",
+        registry.linear_team_id,
+      );
+      settingsUpdated++;
+    }
+    if (registry.agent_linear_email) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+        "agent_linear_email",
+        registry.agent_linear_email,
+      );
+      settingsUpdated++;
+    }
+    if (registry.agent_linear_name) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+        "agent_linear_name",
+        registry.agent_linear_name,
+      );
+      settingsUpdated++;
+    }
+    if (registry.cloudflare_ai_gateway) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+        "cloudflare_ai_gateway",
+        JSON.stringify(registry.cloudflare_ai_gateway),
+      );
+      settingsUpdated++;
+    }
+
+    // Insert products
+    for (const [slug, config] of Object.entries(registry.products)) {
+      const existing = this.ctx.storage.sql.exec(
+        "SELECT 1 FROM products WHERE slug = ?",
+        slug,
+      ).toArray();
+
+      if (existing.length > 0) {
+        this.ctx.storage.sql.exec(
+          "UPDATE products SET config = ?, updated_at = datetime('now') WHERE slug = ?",
+          JSON.stringify(config),
+          slug,
+        );
+        productsUpdated++;
+      } else {
+        this.ctx.storage.sql.exec(
+          "INSERT INTO products (slug, config) VALUES (?, ?)",
+          slug,
+          JSON.stringify(config),
+        );
+        productsCreated++;
+      }
+    }
+
+    return Response.json({
+      ok: true,
+      products_created: productsCreated,
+      products_updated: productsUpdated,
+      settings_updated: settingsUpdated,
+    });
+  }
+
   async fetch(request: Request): Promise<Response> {
     this.initDb();
     // Start the Slack Socket Mode companion container on first request
@@ -175,7 +421,23 @@ export class Orchestrator extends Container<Bindings> {
         return this.checkAgentHealth();
       case "/transcripts":
         return this.listTranscripts(request);
+      case "/products":
+        return request.method === "GET" ? this.listProducts() : this.createProduct(request);
+      case "/settings":
+        return this.listSettings();
       default:
+        // Handle dynamic routes
+        if (url.pathname.startsWith("/products/")) {
+          if (url.pathname === "/products/seed") {
+            return this.seedProducts(request);
+          }
+          if (request.method === "GET") return this.getProduct(request);
+          if (request.method === "PUT") return this.updateProduct(request);
+          if (request.method === "DELETE") return this.deleteProduct(request);
+        }
+        if (url.pathname.startsWith("/settings/")) {
+          if (request.method === "PUT") return this.updateSetting(request);
+        }
         return Response.json({ error: "not found" }, { status: 404 });
     }
   }
@@ -218,11 +480,18 @@ export class Orchestrator extends Container<Bindings> {
       return;
     }
 
-    const productConfig = getProduct(event.product);
-    if (!productConfig) {
+    // Load product config from database
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      event.product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) {
       console.error(`[Orchestrator] Unknown product: ${event.product}`);
       return;
     }
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
 
     const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
     const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
@@ -610,7 +879,17 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
     }
 
     // New mention — resolve product from channel
-    const product = this.resolveProductFromChannel(slackEvent.channel || "");
+    // Load all products from database
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT slug, config FROM products",
+    ).toArray() as Array<{ slug: string; config: string }>;
+
+    const products = productRows.reduce((acc, row) => {
+      acc[row.slug] = JSON.parse(row.config);
+      return acc;
+    }, {} as Record<string, ProductConfig>);
+
+    const product = resolveProductFromChannel(products, slackEvent.channel || "");
     if (!product) {
       console.warn(`[Orchestrator] No product mapped to channel ${slackEvent.channel}`);
       return Response.json({ error: "no product for channel" }, { status: 404 });
@@ -635,7 +914,4 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
     }));
   }
 
-  private resolveProductFromChannel(channel: string): string | null {
-    return resolveProductFromChannel(channel);
-  }
 }

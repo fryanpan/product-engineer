@@ -1,11 +1,9 @@
 /**
- * Product registry — typed helpers over registry.json.
+ * Product registry — typed helpers with DO-backed lookups.
  *
- * Product data lives in registry.json (easy to edit, no TypeScript).
- * This file provides typed lookups.
+ * Product data lives in the Orchestrator DO's SQLite database.
+ * This file provides cached lookups with lazy loading from the DO.
  */
-
-import data from "./registry.json";
 
 export interface ProductConfig {
   repos: string[];
@@ -37,23 +35,70 @@ export interface Registry {
   products: Record<string, ProductConfig>;
 }
 
-const registry = data as Registry;
+// Module-level cache — persists per Worker isolate
+let registryCache: Registry | null = null;
 
-export function loadRegistry(): Registry {
-  return registry;
+/**
+ * Load registry from DO on first access, then cache for the life of the isolate.
+ * Registry changes are rare, so stale-for-one-isolate is acceptable.
+ */
+export async function loadRegistry(orchestratorStub: DurableObjectStub): Promise<Registry> {
+  if (registryCache) {
+    return registryCache;
+  }
+
+  // Fetch from DO
+  const [productsRes, settingsRes] = await Promise.all([
+    orchestratorStub.fetch(new Request("http://internal/products")),
+    orchestratorStub.fetch(new Request("http://internal/settings")),
+  ]);
+
+  const { products } = await productsRes.json<{ products: Record<string, ProductConfig> }>();
+  const { settings } = await settingsRes.json<{ settings: Record<string, string> }>();
+
+  const cloudflareAiGateway = settings.cloudflare_ai_gateway
+    ? JSON.parse(settings.cloudflare_ai_gateway)
+    : undefined;
+
+  registryCache = {
+    linear_team_id: settings.linear_team_id || "",
+    agent_linear_email: settings.agent_linear_email || "",
+    agent_linear_name: settings.agent_linear_name || "",
+    cloudflare_ai_gateway: cloudflareAiGateway,
+    products,
+  };
+
+  return registryCache;
 }
 
-export function getProduct(name: string): ProductConfig | null {
+/**
+ * Clear the cache — useful for testing or if you need to force a reload.
+ * Not used in production.
+ */
+export function clearRegistryCache() {
+  registryCache = null;
+}
+
+export async function getProduct(
+  orchestratorStub: DurableObjectStub,
+  name: string,
+): Promise<ProductConfig | null> {
+  const registry = await loadRegistry(orchestratorStub);
   return registry.products[name] || null;
 }
 
-export function getProducts(): Record<string, ProductConfig> {
+export async function getProducts(
+  orchestratorStub: DurableObjectStub,
+): Promise<Record<string, ProductConfig>> {
+  const registry = await loadRegistry(orchestratorStub);
   return registry.products;
 }
 
-export function getProductByLinearProject(
+export async function getProductByLinearProject(
+  orchestratorStub: DurableObjectStub,
   projectName: string,
-): { name: string; config: ProductConfig } | null {
+): Promise<{ name: string; config: ProductConfig } | null> {
+  const registry = await loadRegistry(orchestratorStub);
   const normalized = projectName.toLowerCase();
   for (const [name, config] of Object.entries(registry.products)) {
     if (
@@ -66,17 +111,27 @@ export function getProductByLinearProject(
   return null;
 }
 
-export function isOurTeam(teamId: string): boolean {
+export async function isOurTeam(
+  orchestratorStub: DurableObjectStub,
+  teamId: string,
+): Promise<boolean> {
+  const registry = await loadRegistry(orchestratorStub);
   return registry.linear_team_id === teamId;
 }
 
-export function getAgentIdentity(): AgentIdentity {
+export async function getAgentIdentity(
+  orchestratorStub: DurableObjectStub,
+): Promise<AgentIdentity> {
+  const registry = await loadRegistry(orchestratorStub);
   return {
     linear_email: registry.agent_linear_email,
     linear_name: registry.agent_linear_name,
   };
 }
 
-export function getAIGatewayConfig(): CloudflareAIGateway | null {
+export async function getAIGatewayConfig(
+  orchestratorStub: DurableObjectStub,
+): Promise<CloudflareAIGateway | null> {
+  const registry = await loadRegistry(orchestratorStub);
   return registry.cloudflare_ai_gateway || null;
 }

@@ -62,7 +62,7 @@ Migration is automatic via ALTER TABLE with duplicate column handling.
 3. **Query the database**:
    ```bash
    # Via API
-   curl -H "X-API-Key: $API_KEY" https://product-engineer.fryanpan.workers.dev/api/transcripts
+   curl -H "X-API-Key: $API_KEY" https://your-worker.workers.dev/api/transcripts
    ```
 
 4. **Test MCP tools** (from another agent):

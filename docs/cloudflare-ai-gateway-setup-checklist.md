@@ -28,9 +28,9 @@ Edit `orchestrator/src/registry.json` and add the `cloudflare_ai_gateway` sectio
 
 ```json
 {
-  "linear_team_id": "01328a7f-d761-4176-8bbf-004a397dc6f7",
-  "agent_linear_email": "bcagent13@gmail.com",
-  "agent_linear_name": "BC Agent",
+  "linear_team_id": "00000000-0000-0000-0000-000000000001",
+  "agent_linear_email": "agent@example.com",
+  "agent_linear_name": "My Agent",
   "cloudflare_ai_gateway": {
     "account_id": "YOUR_ACCOUNT_ID_HERE",
     "gateway_id": "YOUR_GATEWAY_ID_HERE"

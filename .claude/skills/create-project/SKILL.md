@@ -20,13 +20,13 @@ Collect information from the user:
 - **Project description** — what the project does
 - **Project type** — web app, CLI tool, API service, library, etc.
 - **Tech stack preferences** — language, framework, database, etc.
-- **GitHub org** — which organization to create the repo under (e.g., `fryanpan`)
+- **GitHub org** — which organization to create the repo under (e.g., `your-org`)
 - **Slack channel name** — where the agent will communicate (e.g., `#health-tool`)
 - **Linear project name** — the project name in Linear (e.g., `Health Tool`)
 
 ### Step 2: Check for Existing Scaffolding Skills
 
-If the `fryanpan/ai-project-support` repo exists and has scaffolding skills, use those to set up the project structure. Common patterns:
+If the `your-org/ai-project-support` repo exists and has scaffolding skills, use those to set up the project structure. Common patterns:
 
 - **Web app**: Next.js, React, TypeScript, Tailwind, database setup
 - **API service**: Cloudflare Workers, Hono, TypeScript, D1/KV
@@ -248,7 +248,7 @@ Use the `/add-project` skill to register the new repo:
 
 ## Integration with AI Project Support
 
-If `fryanpan/ai-project-support` exists and has scaffolding skills:
+If `your-org/ai-project-support` exists and has scaffolding skills:
 
 1. Load its skills: reference them in the prompt or use them directly if available
 2. Use its templates and generators for consistent project structure
