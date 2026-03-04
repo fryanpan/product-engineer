@@ -9,6 +9,7 @@ Technical discoveries that should persist across sessions.
 - `startAndWaitForPorts` accepts `{ ports, startOptions: { envVars } }` to pass env vars at start time.
 - `containerFetch` auto-starts the container using `this.envVars` — set them in constructor from persisted config so cold restarts work.
 - Container SDK docs are thin. Read the source code (`@cloudflare/containers`) when in doubt.
+- In-memory flags on a Container DO (e.g., `private containerStarted = false`) survive DO restarts because the DO object is re-hydrated in memory — but the underlying container process is replaced on deploy. Always probe the container with a health check before trusting an in-memory "already started" flag. See `ensureContainerRunning()` in `orchestrator.ts` for the pattern.
 
 ## Agent SDK (Headless Execution)
 - `ExitPlanMode` / `EnterPlanMode` require interactive user approval. In headless execution (no TTY), the agent hangs forever waiting. **Always ban plan mode** in headless agent prompts.
@@ -25,3 +26,10 @@ Technical discoveries that should persist across sessions.
 - Phone-home status updates (agent → worker → DO) are essential for tracking agent lifecycle in production.
 - Add `onStop` and `onError` lifecycle hooks to Container subclasses — without them, crashes are invisible.
 - stderr callbacks on the Agent SDK `query()` call surface Claude Code subprocess errors that would otherwise be lost.
+
+## Cloudflare Deployment Config
+- `WORKER_URL` in `wrangler.toml [vars]` must match the actual deployed URL. A stale placeholder silently breaks Socket Mode forwarding — the container starts and connects to Slack, but event forwarding to the Worker fails with empty URLs. Before deploying to a new account/subdomain, audit all `[vars]` entries in `wrangler.toml`.
+
+## Slack Thread Routing
+- The Orchestrator looks up existing tickets by `slack_thread_ts` (exact string match). Re-triggers must use the original top-level message `ts`, not a reply `ts` — otherwise a new ticket is created instead of routing to the existing one.
+- For new `app_mention` events, `slackEvent.ts` (not `thread_ts`) becomes the canonical `thread_ts` stored in the DB. Subsequent replies arrive with `thread_ts` matching that original `ts`. The asymmetry is intentional — Slack uses the first message's `ts` as the thread identifier.

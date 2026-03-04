@@ -71,3 +71,50 @@ The main build session (56 turns) hit context limits and required a continuation
 | Phone-home overwrites branch_name | Code fix | Stopped sending diagnostics via `branch_name` field |
 | No observability into container crashes | Code fix | Added `onStop`/`onError` lifecycle hooks, stderr callback |
 | Disabled MCP servers breaking tests | Test fix | Skipped Notion/Sentry tests (npx hangs in containers) |
+
+## 2026-03-03 - Slack Socket Mode debugging + PR review feedback
+
+Debugged why `@product-engineer` Slack mentions weren't working, fixed container liveness after deploys, and addressed Copilot review feedback across PRs #20, #21, #22.
+
+### Time Breakdown
+
+| Started (PT) | Phase | 👤 Hands-On | 🤖 Agent | Problems |
+|---------|-------|------------|----------|----------|
+| Mar 3 2:01pm | Debug Slack Socket Mode (WORKER_URL, container dormancy) | ██ 15m | █ 14m | ⚠ 3 errors during deploy/investigation |
+| Mar 3 2:30pm | Re-trigger stalled agents (API calls, wrong thread IDs) | ██ 20m | █ 11m | ⚠ Wrong timestamps, user did it manually |
+| Mar 3 3:01pm | PR creation + review fixes (#20, #21, #22) | █ 13m | █ 5m | ⚠ Rebase conflict, typecheck failure |
+| Mar 3 3:19pm | Wrap-up | 2m | 1m | |
+
+### Metrics
+
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | 1h 21m |
+| Hands-on | ~50m (62%) |
+| Automated agent time | ~31m (38%) |
+| Idle/away | minimal |
+| PRs addressed | 3 (#20, #21, #22) |
+| Retro analysis time | ~8 min |
+
+### Key Observations
+
+1. **WORKER_URL placeholder was the root cause of Slack not working** — `wrangler.toml` had `<your-subdomain>` sitting in production unnoticed. Container started fine, connected to Slack, but couldn't forward events.
+2. **Re-triggering stalled agents was a 20-min dead end** — Used wrong thread timestamps from logs, created duplicate tickets instead of routing to existing ones. Should have recognized earlier that original tasks came from Linear, not Slack.
+3. **Container liveness flag (`containerStarted`) goes stale across deploys** — In-memory boolean survives DO restarts but the container process is replaced. Fixed with TCP health check probe.
+4. **Three PRs of review feedback handled efficiently** — Parallelized investigation, bundled PR #21 fixes into PR #22 since #21 was already merged.
+
+### Feedback
+
+**What worked:** Debugging Slack Socket Mode was fast — root cause identified within minutes. PR review feedback was handled in parallel across three PRs.
+
+**What didn't:** Re-triggering stalled agents via internal API wasted time — wrong approach for tasks that originated from Linear.
+
+### Actions Taken
+
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Container in-memory flag stale across deploys | learnings.md | Added gotcha about health-checking before trusting flags |
+| WORKER_URL placeholder unnoticed | learnings.md | New "Cloudflare Deployment Config" section |
+| Slack thread re-trigger duplicates | learnings.md | New "Slack Thread Routing" section |
+| CLAUDE.md missing deployment safety info | CLAUDE.md | Added `agent_active`, `[vars]` config, and deployment-safety.md pointers |
+| Missing test coverage for agent_active | Linear ticket | Created BC-80 |
