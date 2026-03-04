@@ -57,15 +57,20 @@ wrangler secret put SENTRY_ACCESS_TOKEN   # Sentry User Auth Token (org:read, pr
 wrangler secret put CONTEXT7_API_KEY      # Context7 API key (optional — works without, lower rate limits)
 ```
 
-### Per-product GitHub tokens
+### Per-organization GitHub tokens
 
-Each product in the registry needs its own fine-grained PAT. The naming convention is `<PRODUCT>_GITHUB_TOKEN`, where `<PRODUCT>` matches the uppercased, underscored product key from the registry.
+Products from the same GitHub organization can share a single token. Use org-level tokens (e.g., `FRYANPAN_ORG_GITHUB_TOKEN`) for all repos in that org.
 
 ```bash
-# Example: if your registry has products "my-app" and "other-tool":
+# Example: if all your products are in the "your-org" GitHub org:
+wrangler secret put YOUR_ORG_GITHUB_TOKEN    # Fine-grained PAT for all your-org/* repos
+
+# Or use per-product tokens if you need different permissions:
 wrangler secret put MY_APP_GITHUB_TOKEN      # Fine-grained PAT for your-org/my-app
 wrangler secret put OTHER_TOOL_GITHUB_TOKEN  # Fine-grained PAT for your-org/other-tool
 ```
+
+In `registry.json`, set `"GITHUB_TOKEN": "YOUR_ORG_GITHUB_TOKEN"` for all products in that org.
 
 ## Step 3: Populate Slack Channel IDs
 

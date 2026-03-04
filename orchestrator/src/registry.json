@@ -19,7 +19,7 @@
         "slack": { "enabled": true }
       },
       "secrets": {
-        "GITHUB_TOKEN": "HEALTH_TOOL_GITHUB_TOKEN",
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
         "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
         "LINEAR_API_KEY": "LINEAR_API_KEY",
         "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
@@ -40,7 +40,7 @@
         "slack": { "enabled": true }
       },
       "secrets": {
-        "GITHUB_TOKEN": "BIKE_TOOL_GITHUB_TOKEN",
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
         "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
         "LINEAR_API_KEY": "LINEAR_API_KEY",
         "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
@@ -61,7 +61,7 @@
         "slack": { "enabled": true }
       },
       "secrets": {
-        "GITHUB_TOKEN": "PRODUCT_ENGINEER_GITHUB_TOKEN",
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
         "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
         "LINEAR_API_KEY": "LINEAR_API_KEY",
         "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
@@ -82,7 +82,7 @@
         "slack": { "enabled": true }
       },
       "secrets": {
-        "GITHUB_TOKEN": "PERSONAL_CRM_GITHUB_TOKEN",
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
         "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
         "LINEAR_API_KEY": "LINEAR_API_KEY",
         "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
