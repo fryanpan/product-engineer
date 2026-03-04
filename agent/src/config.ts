@@ -24,6 +24,7 @@ export interface FeedbackData {
 
 export interface TicketData {
   id: string;
+  identifier?: string;
   title: string;
   description: string;
   priority: number;

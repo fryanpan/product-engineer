@@ -49,6 +49,7 @@ Use the repo's existing CLAUDE.md, skills, and conventions. Don't fight the code
 ## Communication
 
 - Use \`notify_slack\` at every state transition so the team can follow along
+- **IMPORTANT:** In your first Slack message, include the ticket identifier and link (if available) so the team knows what the thread is about
 - Use \`update_task_status\` to keep the orchestrator informed
 - Use \`ask_question\` when you need clarification (the reply comes as your next message)
 
@@ -89,6 +90,7 @@ function formatFeedback(data: FeedbackData): string {
 function formatTicket(data: TicketData): string {
   const parts = [
     `**Type:** Linear ticket`,
+    data.identifier && `**Ticket:** ${data.identifier} (https://linear.app/issue/${data.identifier})`,
     `**Title:**\n<user_input>\n${data.title}\n</user_input>`,
     `**Description:**\n<user_input>\n${data.description}\n</user_input>`,
     `**Priority:** ${data.priority}`,

@@ -156,6 +156,7 @@ describe("linear webhook handler", () => {
       type: "Issue",
       data: {
         id: "issue-123",
+        identifier: "HT-42",
         title: "Fix the login bug",
         description: "Users cannot log in",
         priority: 2,
@@ -180,8 +181,42 @@ describe("linear webhook handler", () => {
     expect(event.product).toBe("health-tool");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.id).toBe("issue-123");
+    expect(payload.identifier).toBe("HT-42");
     expect(payload.title).toBe("Fix the login bug");
     expect(payload.labels).toEqual(["label-a"]);
+  });
+
+  it("forwards event successfully when identifier is missing", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "create",
+      type: "Issue",
+      data: {
+        id: "issue-124",
+        // No identifier field - testing optional field
+        title: "Another issue",
+        description: "Test without identifier",
+        priority: 1,
+        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        labelIds: [],
+        project: { id: "p1", name: "Health Tool" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ok).toBe(true);
+    expect(json.product).toBe("health-tool");
+
+    expect(sentEvents).toHaveLength(1);
+    const event = sentEvents[0] as Record<string, unknown>;
+    expect(event.type).toBe("ticket_created");
+    const payload = event.payload as Record<string, unknown>;
+    expect(payload.id).toBe("issue-124");
+    expect(payload.title).toBe("Another issue");
+    // identifier should be undefined when not present in webhook
+    expect(payload.identifier).toBeUndefined();
   });
 
   it("ignores status changes that aren't agent assignment", async () => {
