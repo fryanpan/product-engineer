@@ -419,13 +419,10 @@ fi
 section "11. Worker URL"
 cat <<'STEP'
 
-  Both workers need WORKER_URL set to the deployed Worker URL.
-  This is how the orchestrator container forwards Slack events
-  back to the Worker.
+  The orchestrator container needs WORKER_URL set to the deployed
+  Worker URL. This is how it forwards Slack events back to the Worker.
 
   The URL is typically: https://product-engineer.<your-subdomain>.workers.dev
-
-  You must set this on BOTH workers (orchestrator and ticket-agent).
 
 STEP
 
@@ -434,9 +431,6 @@ read -r worker_url
 if [ -n "$worker_url" ] && [ "$worker_url" != "skip" ]; then
   echo "$worker_url" | (cd "$ORCHESTRATOR_DIR" && npx wrangler secret put WORKER_URL 2>&1 | tail -1)
   echo "  ✅ WORKER_URL set on orchestrator"
-  TICKET_AGENT_DIR="$(pwd)/ticket-agent"
-  echo "$worker_url" | (cd "$TICKET_AGENT_DIR" && npx wrangler secret put WORKER_URL 2>&1 | tail -1)
-  echo "  ✅ WORKER_URL set on ticket-agent"
 else
   echo "  ⏭  Skipped WORKER_URL (set it before deploying!)"
 fi
@@ -448,11 +442,9 @@ cat <<'DONE'
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Next steps:
-    1. Deploy ticket-agent first (orchestrator depends on it):
-       cd ticket-agent && npx wrangler deploy
-    2. Deploy orchestrator:
+    1. Deploy:
        cd orchestrator && npx wrangler deploy
-    3. Test:
+    2. Test:
        curl https://product-engineer.<your-subdomain>.workers.dev/health
 
   Debugging:

@@ -15,15 +15,8 @@ For deployment safety and zero-disruption updates, see [deployment-safety.md](./
 
 ## Step 1: Deploy
 
-**Important:** Deploy ticket-agent first — the orchestrator references it as a cross-script Durable Object binding.
-
 ```bash
-# 1. Ticket-agent first (creates the worker that orchestrator depends on)
-cd ticket-agent
-wrangler deploy
-
-# 2. Then orchestrator
-cd ../orchestrator
+cd orchestrator
 wrangler deploy
 ```
 
@@ -31,15 +24,14 @@ First deploy may take several minutes for container image builds.
 
 ## Step 2: Provision Secrets
 
-### Deployment config (set on BOTH workers)
+### Deployment config
 
 ```bash
-# Set on both workers — the orchestrator container uses this to forward Slack events
+# The orchestrator container uses this to forward Slack events
 cd orchestrator && wrangler secret put WORKER_URL   # e.g., https://product-engineer.your-subdomain.workers.dev
-cd ../ticket-agent && wrangler secret put WORKER_URL # same value
 ```
 
-### Platform secrets (shared, set once)
+### Platform secrets
 
 ```bash
 cd orchestrator

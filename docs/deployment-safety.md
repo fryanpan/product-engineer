@@ -9,35 +9,26 @@ This document describes how Product Engineer handles deployments without disrupt
 3. Allow ticket agents to complete their work naturally
 4. No manual intervention required during deployment
 
-## Architecture: Split Workers
+## Architecture: Single Worker
 
-To achieve zero-downtime deploys, Product Engineer uses **two separate workers**:
-
-1. **Orchestrator Worker** (`orchestrator/`) — Worker entry point, Orchestrator DO, cron triggers, R2 bindings
-2. **TicketAgent Worker** (`ticket-agent/`) — TicketAgent DO class only
-
-The orchestrator references the ticket-agent worker via `script_name`:
+Product Engineer deploys as a **single worker** (`orchestrator/`) containing both the Orchestrator DO and TicketAgent DO classes:
 
 ```toml
 # orchestrator/wrangler.toml
 [durable_objects]
 bindings = [
   { name = "ORCHESTRATOR", class_name = "Orchestrator" },
-  { name = "TICKET_AGENT", class_name = "TicketAgent", script_name = "ticket-agent-worker" }
+  { name = "TICKET_AGENT", class_name = "TicketAgent" }
 ]
 ```
 
-**Why this matters:**
-
-- Deploying `orchestrator` worker doesn't reset TicketAgent DOs or containers
-- Orchestrator updates (frequent — code changes, bug fixes) don't interrupt running agents
-- TicketAgent updates (infrequent — container image changes) use gradual rollout
+Deploying updates the Worker code and container images. Running TicketAgent containers are not immediately affected — they continue until their current work completes or their container is replaced.
 
 ## How It Works
 
 ### TicketAgent Containers (4-day lifetime, R2 session persistence)
 
-**Problem:** When you deploy the ticket-agent worker, container images update, and Cloudflare may replace running containers.
+**Problem:** When you deploy, container images update, and Cloudflare may replace running containers.
 
 **Solution:** Agent SDK sessions persist to R2 via FUSE mount, enabling seamless resume:
 
@@ -193,7 +184,7 @@ if (!shouldTrigger) {
 
 ## Deployment Process
 
-### Orchestrator Deploy (frequent — code changes, bug fixes)
+### Deploy
 
 ```bash
 cd orchestrator
@@ -202,28 +193,13 @@ wrangler deploy
 
 This:
 - Updates Worker code instantly
-- Builds new orchestrator container image
-- **Does NOT** touch TicketAgent DOs or containers
+- Builds new container images (orchestrator + agent)
 - Brief Orchestrator container restart (1-2s Slack reconnect)
+- Running TicketAgent containers may be gradually replaced
 
-**Impact:** Active agents continue work uninterrupted.
+**Impact:** Active agents resume mid-task with full conversation context preserved via R2 session persistence.
 
-### TicketAgent Deploy (infrequent — container image changes)
-
-```bash
-cd ticket-agent
-wrangler versions upload    # Upload new version
-wrangler versions deploy    # Gradual rollout (10% → 100%)
-```
-
-This:
-- Builds new agent container image
-- Cloudflare gradually replaces containers using new image
-- Containers restart and resume sessions from R2
-
-**Impact:** Agents resume mid-task with full conversation context preserved.
-
-### Step 2: Observe
+### Observe
 
 ```bash
 wrangler tail --name product-engineer
@@ -254,19 +230,18 @@ curl -H "X-API-Key: YOUR_KEY" \
 
 ## What Happens During Deployment
 
-| Component | Orchestrator Deploy | TicketAgent Deploy | Recovery Time |
-|-----------|---------------------|-------------------|---------------|
-| **Worker** | Updates instantly | No change | Immediate |
-| **Orchestrator DO** | Continues (no reset) | No change | N/A |
-| **Orchestrator Container** | Stops and restarts | No change | 1-2 seconds |
-| **TicketAgent DOs** | No change | Continue (no reset) | N/A |
-| **TicketAgent Containers** | No change | Gradual replacement, resume from R2 | 5-10 seconds per container |
+| Component | On Deploy | Recovery Time |
+|-----------|-----------|---------------|
+| **Worker** | Updates instantly | Immediate |
+| **Orchestrator DO** | Continues (no reset) | N/A |
+| **Orchestrator Container** | Stops and restarts | 1-2 seconds |
+| **TicketAgent DOs** | Continue (no reset) | N/A |
+| **TicketAgent Containers** | Gradual replacement, resume from R2 | 5-10 seconds per container |
 
 ## Secrets Configuration
 
-Both workers need access to the same secrets, but they're separate workers:
+All secrets are set once on the single worker:
 
-**Orchestrator secrets** (set once):
 ```bash
 cd orchestrator
 wrangler secret put WORKER_URL             # Deployed Worker URL (e.g., https://product-engineer.your-subdomain.workers.dev)
@@ -278,31 +253,11 @@ wrangler secret put SENTRY_DSN
 # Product-specific secrets (e.g., GITHUB_TOKEN_PRODUCT_A)
 ```
 
-**TicketAgent secrets** (same values as orchestrator):
-```bash
-cd ticket-agent
-wrangler secret put WORKER_URL             # Same as orchestrator
-wrangler secret put SLACK_BOT_TOKEN        # Same as orchestrator
-wrangler secret put LINEAR_API_KEY         # Same as orchestrator
-wrangler secret put ANTHROPIC_API_KEY      # Same as orchestrator
-wrangler secret put API_KEY                # Same as orchestrator
-wrangler secret put SENTRY_DSN             # Same as orchestrator
-# Product-specific secrets (same as orchestrator)
-# R2 FUSE mount secrets (new)
-wrangler secret put R2_ACCESS_KEY_ID
-wrangler secret put R2_SECRET_ACCESS_KEY
-wrangler secret put CF_ACCOUNT_ID
-```
-
-**Why duplicate secrets?** Workers don't share secrets. Each worker must have its own bindings.
-
 ## FAQ
 
 ### What if a ticket agent is mid-commit when I deploy?
 
-**Orchestrator deploy:** Agent keeps running. No interruption.
-
-**TicketAgent deploy:** Agent container may restart. The agent resumes the session from R2, preserving the conversation. The commit continues naturally.
+Agent container may restart. The agent resumes the session from R2, preserving the conversation. The commit continues naturally.
 
 ### What if someone @mentions the bot during deployment?
 
@@ -315,13 +270,11 @@ The Worker accepts the webhook, forwards it to the Orchestrator DO. If the conta
 
 ### How do I force a container to use new code?
 
-**For TicketAgent:** Deploy the ticket-agent worker with `wrangler versions upload && wrangler versions deploy`. Cloudflare gradually replaces containers.
-
-**For Orchestrator:** Deploy the orchestrator worker. The container restarts on next request.
+Deploy the worker: `cd orchestrator && wrangler deploy`. Cloudflare gradually replaces TicketAgent containers. The Orchestrator container restarts on next request.
 
 ### Can I deploy during a critical operation?
 
-**Yes.** Orchestrator deploys don't interrupt agents. TicketAgent deploys may restart containers, but agents resume from R2 with full context preserved.
+**Yes.** TicketAgent containers may restart, but agents resume from R2 with full context preserved.
 
 ### How do I know agents finished their work?
 
@@ -355,8 +308,8 @@ Check `wrangler tail` for mount errors.
 
 1. Create a test ticket
 2. Wait for the agent to start work and produce a few messages
-3. Deploy the ticket-agent worker: `cd ticket-agent && wrangler versions upload && wrangler versions deploy`
-4. In `wrangler tail --name ticket-agent-worker`, look for `[Agent] Resuming session from: ...`
+3. Deploy: `cd orchestrator && wrangler deploy`
+4. In `wrangler tail --name product-engineer`, look for `[Agent] Resuming session from: ...`
 5. Verify the agent continues the conversation with context preserved
 6. Check for `phoneHome("deploy_recovery")` in logs
 
@@ -394,8 +347,8 @@ Full integration tests require a deployed Cloudflare environment and are beyond 
 **Cause:** R2 mount failed or session files not found.
 
 **Fix:**
-1. Check R2 secrets are set: `wrangler secret list --name ticket-agent-worker`
-2. Check container logs for mount errors: `wrangler tail --name ticket-agent-worker`
+1. Check R2 secrets are set: `cd orchestrator && wrangler secret list`
+2. Check container logs for mount errors: `wrangler tail --name product-engineer`
 3. Verify R2 bucket exists: `wrangler r2 bucket list`
 
 ### Container fails to start after adding FUSE
@@ -406,10 +359,10 @@ Full integration tests require a deployed Cloudflare environment and are beyond 
 
 **Fallback:** If FUSE doesn't work in production, remove R2 mount from entrypoint.sh. Agents will start fresh after deploys (no session resume), but will still complete tickets.
 
-### Secrets out of sync between workers
+### Secrets missing
 
-**Symptom:** Agents fail to authenticate after split workers change.
+**Symptom:** Agents fail to authenticate.
 
-**Cause:** Secrets set in orchestrator but not in ticket-agent worker.
+**Cause:** Secrets not set on the worker.
 
-**Fix:** Run the same `wrangler secret put` commands in both `orchestrator/` and `ticket-agent/` directories.
+**Fix:** Run `cd orchestrator && wrangler secret list` to check, then `wrangler secret put <NAME>` for any missing secrets.
