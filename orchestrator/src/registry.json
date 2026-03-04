@@ -69,6 +69,27 @@
         "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
         "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
       }
+    },
+    "personal-crm": {
+      "repos": ["fryanpan/personal-crm"],
+      "slack_channel": "#personal-crm",
+      "slack_channel_id": "C0AHZKSEWSX",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "personal-crm"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "PERSONAL_CRM_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
     }
   }
 }

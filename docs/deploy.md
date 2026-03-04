@@ -94,9 +94,28 @@ In [api.slack.com/apps](https://api.slack.com/apps):
 
 1. **Socket Mode:** Settings → Socket Mode → Enable
 2. **App-Level Token:** Settings → Basic Information → App-Level Tokens → Generate with `connections:write` scope
-3. **Bot Token Scopes:** OAuth & Permissions → add `chat:write`, `app_mentions:read`, `channels:history`
+3. **Bot Token Scopes:** OAuth & Permissions → add the following scopes:
+   - `channels:join` - Join public channels
+   - `channels:manage` - Manage and create public channels
+   - `channels:read` - View public channel info
+   - `channels:write.invites` - Invite members to public channels
+   - `channels:write.topic` - Set public channel descriptions
+   - `chat:write` - Send messages
+   - `chat:write.public` - Send messages to channels the bot isn't in
+   - `files:read` - View files in channels
+   - `files:write` - Upload/edit files
+   - `groups:history` - View private channel messages
+   - `groups:read` - View private channel info
+   - `groups:write` - Manage and create private channels
+   - `groups:write.invites` - Invite members to private channels
+   - `groups:write.topic` - Set private channel descriptions
+   - `im:history` - View DM messages
+   - `im:read` - View DM info
+   - `im:write` - Start DMs
+   - `im:write.topic` - Set DM descriptions
 4. **Event Subscriptions:** Event Subscriptions → Subscribe to bot events: `app_mention`, `message.channels`
-5. **Invite bot** to each product's Slack channel (e.g., `#your-app`)
+5. **Reinstall app** after adding scopes (yellow banner will prompt you)
+6. **Invite bot** to each product's Slack channel (e.g., `#your-app`) - or the bot can join automatically with `channels:join`
 
 ## Step 5: Configure Linear Webhook
 
