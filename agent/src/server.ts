@@ -316,7 +316,7 @@ async function startSession(initialPrompt: string) {
     hooks: {
       SessionEnd: [
         {
-          hooks: [async (input, _toolUseID, _options) => {
+          hooks: [async (input: any, _toolUseID: any, _options: any) => {
             // Upload transcript to R2 when session ends
             await uploadTranscript(input.transcript_path);
             return { continue: true };
