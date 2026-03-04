@@ -58,6 +58,7 @@ Singleton Durable Object that owns all coordination:
 - Routes events to the correct TicketAgent container
 - Spawns new TicketAgent containers for new tickets
 - Its companion container (`containers/orchestrator/`) maintains a persistent Slack Socket Mode WebSocket connection, forwarding `@product-engineer` mentions to the DO
+- Tracks `agent_active` per ticket — set to `0` on terminal states (`merged`, `closed`, `deferred`, `failed`) so deployment-triggered webhook events do not re-spawn completed agents (see `docs/deployment-safety.md`)
 
 ### TicketAgent (`orchestrator/src/ticket-agent.ts`)
 Container class — one instance per ticket, lives up to 4 days:
@@ -85,11 +86,13 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 - GitHub tokens are per-product (different repo access)
 - All secrets are in Cloudflare Secrets Store, injected as env vars into sandboxes
 - The registry maps logical secret names to Cloudflare binding names
+- `[vars]` in `wrangler.toml` (e.g., `WORKER_URL`) are plaintext config — update them for each new deployment subdomain. They are not Cloudflare secrets and will not appear in `wrangler secret list`
 
 ### Testing
 - `cd orchestrator && bun test` for orchestrator tests (Worker, DO, TicketAgent, webhooks, registry)
 - `cd agent && bun test` for agent tests (prompt construction, tools)
 - End-to-end: create a test Linear ticket or Slack mention and watch the Slack channel
+- Deployment safety behavior (terminal state protection, container liveness, re-spawn prevention) is documented in `docs/deployment-safety.md` — when changing `orchestrator.ts` or `ticket-agent.ts`, check whether the doc needs updating (it contains embedded code snippets that drift)
 
 ## Linear
 - Team: Product Engineer (PE)
