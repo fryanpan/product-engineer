@@ -70,6 +70,12 @@ The pitch: this is a small, understandable repo that does something ambitious.
 
 Merging to `main` triggers automatic deployment via GitHub Actions (`.github/workflows/deploy.yml`).
 
+**One-time setup:** Create the R2 bucket for transcript storage (only needs to be done once):
+
+```bash
+npx wrangler r2 bucket create product-engineer-transcripts
+```
+
 For manual deployment:
 
 ```bash
