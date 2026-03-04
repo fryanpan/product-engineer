@@ -5,7 +5,7 @@
  */
 
 import { Hono } from "hono";
-import { getAgentIdentity, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
+import { getAgentIdentity, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
 
 // --- Shared helpers (exported for testing) ---
@@ -415,6 +415,20 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
+  // Resolve product early so we can get the right per-product GitHub token
+  const productName = resolveProductByRepo(payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  const productConfig = getProduct(productName);
+  const ghTokenBinding = productConfig?.secrets?.GITHUB_TOKEN;
+  const ghToken = ghTokenBinding ? (env as Record<string, unknown>)[ghTokenBinding] as string : undefined;
+  if (!ghToken) {
+    console.error(`[GitHub] No GitHub token configured for product ${productName}`);
+    return Response.json({ error: "No GitHub token for product" }, { status: 500 });
+  }
+
   // Extract PR info from the PR URL
   const prUrlMatch = payload.issue.pull_request.url.match(/\/pulls\/(\d+)$/);
   if (!prUrlMatch) {
@@ -423,7 +437,6 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
 
   // Fetch PR details to get the branch name
   const prNumber = prUrlMatch[1];
-  const ghToken = env.GITHUB_TOKEN;
   const prApiUrl = `https://api.github.com/repos/${payload.repository.full_name}/pulls/${prNumber}`;
 
   const prResponse = await fetch(prApiUrl, {
@@ -435,7 +448,7 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
 
   if (!prResponse.ok) {
     console.error(`[GitHub] Failed to fetch PR details: ${prResponse.status}`);
-    return Response.json({ ok: true, ignored: true, reason: "could not fetch PR details" });
+    return Response.json({ error: "Failed to fetch PR details" }, { status: 502 });
   }
 
   const prData = await prResponse.json() as { head: { ref: string } };
@@ -444,11 +457,6 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
 
   if (!taskId) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
-  }
-
-  const productName = resolveProductByRepo(payload.repository.full_name);
-  if (!productName) {
-    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
   await forwardToOrchestrator(env, {

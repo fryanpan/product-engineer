@@ -132,7 +132,8 @@ export function createTools(config: AgentConfig) {
         .optional()
         .describe("ID of the created or referenced Linear ticket"),
     },
-    async ({ status, reason, pr_url, linear_ticket_id }) => {
+    async ({ status, reason, pr_url, linear_ticket_id: explicitTicketId }) => {
+      const linear_ticket_id = explicitTicketId || config.ticketId;
       console.log(
         `[Agent] Status update: ${status}`,
         JSON.stringify({ reason, pr_url, linear_ticket_id }),
@@ -175,26 +176,52 @@ export function createTools(config: AgentConfig) {
       // Update Linear ticket if we have the ticket ID and API key
       if (linear_ticket_id && config.linearApiKey) {
         try {
-          await fetch("https://api.linear.app/graphql", {
+          // First, look up the workflow state ID by name from the issue's team
+          const stateRes = await fetch("https://api.linear.app/graphql", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: config.linearApiKey,
             },
             body: JSON.stringify({
-              query: `mutation($issueId: String!, $stateInput: WorkflowStateFilter!) {
-                issueUpdate(id: $issueId, input: { state: $stateInput }) {
-                  success
-                  issue { id state { name } }
+              query: `query($issueId: String!) {
+                issue(id: $issueId) {
+                  team { states { nodes { id name } } }
                 }
               }`,
-              variables: {
-                issueId: linear_ticket_id,
-                stateInput: { name: { eq: linearState } },
-              },
+              variables: { issueId: linear_ticket_id },
             }),
           });
-          console.log(`[Agent] Updated Linear ticket ${linear_ticket_id} to ${linearState}`);
+          const stateData = await stateRes.json() as {
+            data?: { issue?: { team?: { states?: { nodes?: { id: string; name: string }[] } } } };
+          };
+          const states = stateData.data?.issue?.team?.states?.nodes || [];
+          const targetState = states.find((s) => s.name === linearState);
+
+          if (!targetState) {
+            console.warn(`[Agent] Could not find Linear state "${linearState}" for ticket ${linear_ticket_id}`);
+          } else {
+            await fetch("https://api.linear.app/graphql", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: config.linearApiKey,
+              },
+              body: JSON.stringify({
+                query: `mutation($issueId: String!, $stateId: String!) {
+                  issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+                    success
+                    issue { id state { name } }
+                  }
+                }`,
+                variables: {
+                  issueId: linear_ticket_id,
+                  stateId: targetState.id,
+                },
+              }),
+            });
+            console.log(`[Agent] Updated Linear ticket ${linear_ticket_id} to ${linearState}`);
+          }
         } catch (err) {
           console.error("[Agent] Failed to update Linear ticket:", err);
         }
@@ -227,18 +254,24 @@ export function createTools(config: AgentConfig) {
               let statusText = status.replace(/_/g, " ").toUpperCase();
               if (["merged", "closed"].includes(status)) {
                 statusEmoji = "✅";
-                statusText = "**DONE**";
+                statusText = "*DONE*";
               } else if (status === "pr_open" || status === "in_review") {
                 statusEmoji = "👀";
               } else if (status === "failed") {
                 statusEmoji = "❌";
               }
 
-              // Update message to include status
-              const updatedText = `${statusEmoji} ${statusText}\n\n${originalText}`;
+              // Strip existing status header to prevent stacking on repeated updates
+              const cleanText = originalText.replace(/^[⏳✅👀❌] .+\n\n/, "");
+              const updatedText = `${statusEmoji} ${statusText}\n\n${cleanText}`;
 
-              await updateSlackMessage(updatedText, config.slackThreadTs, config);
-              console.log(`[Agent] Updated Slack thread ${config.slackThreadTs} with status: ${status}`);
+              const updateResult = await updateSlackMessage(updatedText, config.slackThreadTs, config);
+              const resultText = updateResult.content[0]?.text || "";
+              if (resultText.includes("failed") || resultText.includes("error")) {
+                console.error(`[Agent] Failed to update Slack thread: ${resultText}`);
+              } else {
+                console.log(`[Agent] Updated Slack thread ${config.slackThreadTs} with status: ${status}`);
+              }
             }
           }
         } catch (err) {
