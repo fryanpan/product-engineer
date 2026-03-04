@@ -86,7 +86,7 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 - GitHub tokens are per-product (different repo access)
 - All secrets are in Cloudflare Secrets Store, injected as env vars into sandboxes
 - The registry maps logical secret names to Cloudflare binding names
-- `[vars]` in `wrangler.toml` (e.g., `WORKER_URL`) are plaintext config — update them for each new deployment subdomain. They are not Cloudflare secrets and will not appear in `wrangler secret list`
+- `WORKER_URL` is a deployment-specific secret (not checked in) — set via `wrangler secret put WORKER_URL` on both orchestrator and ticket-agent workers
 
 ### LLM Monitoring
 - All Anthropic API traffic routes through Cloudflare AI Gateway for monitoring

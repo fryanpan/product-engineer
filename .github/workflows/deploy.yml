@@ -29,31 +29,32 @@ jobs:
       - name: Typecheck ticket-agent
         run: cd ticket-agent && npx tsc --noEmit
 
-  deploy-orchestrator:
-    needs: test
+  detect-changes:
     runs-on: ubuntu-latest
+    outputs:
+      orchestrator: ${{ steps.filter.outputs.orchestrator }}
+      ticket-agent: ${{ steps.filter.outputs.ticket-agent }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            orchestrator:
+              - 'orchestrator/**'
+              - 'containers/orchestrator/**'
+            ticket-agent:
+              - 'ticket-agent/**'
+              - 'agent/**'
+              - 'containers/agent/**'
 
-      - name: Install orchestrator dependencies
-        run: cd orchestrator && bun install
-
-      - name: Deploy orchestrator worker
-        run: cd orchestrator && npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
+  # Ticket-agent must deploy before orchestrator because the orchestrator
+  # references ticket-agent-worker as a cross-script Durable Object binding.
   deploy-ticket-agent:
-    needs: test
+    needs: [test, detect-changes]
+    if: needs.detect-changes.outputs.ticket-agent == 'true'
     runs-on: ubuntu-latest
-    # Only deploy ticket-agent when its code or the shared agent code changes
-    if: |
-      contains(github.event.head_commit.message, 'ticket-agent') ||
-      contains(github.event.head_commit.message, 'agent/') ||
-      contains(github.event.head_commit.message, 'TicketAgent')
     steps:
       - uses: actions/checkout@v4
 
@@ -67,6 +68,29 @@ jobs:
           cd ticket-agent
           npx wrangler versions upload
           npx wrangler versions deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-orchestrator:
+    needs: [test, detect-changes, deploy-ticket-agent]
+    # Run if orchestrator changed, regardless of whether ticket-agent deploy ran or was skipped
+    if: |
+      always() &&
+      needs.test.result == 'success' &&
+      needs.detect-changes.outputs.orchestrator == 'true' &&
+      (needs.deploy-ticket-agent.result == 'success' || needs.deploy-ticket-agent.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install orchestrator dependencies
+        run: cd orchestrator && bun install
+
+      - name: Deploy orchestrator worker
+        run: cd orchestrator && npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

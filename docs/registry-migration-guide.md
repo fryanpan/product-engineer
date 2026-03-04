@@ -33,13 +33,13 @@ curl -H "X-API-Key: $API_KEY" https://your-worker.workers.dev/api/products
 curl -H "X-API-Key: $API_KEY" https://your-worker.workers.dev/api/settings
 ```
 
-### Step 3: Update wrangler.toml
+### Step 3: Set WORKER_URL
 
-Update the `WORKER_URL` variable in `orchestrator/wrangler.toml` to match your actual deployed URL:
+Set `WORKER_URL` as a Cloudflare secret on both workers:
 
-```toml
-[vars]
-WORKER_URL = "https://your-actual-subdomain.workers.dev"
+```bash
+cd orchestrator && wrangler secret put WORKER_URL   # e.g., https://product-engineer.your-subdomain.workers.dev
+cd ../ticket-agent && wrangler secret put WORKER_URL # same value
 ```
 
 ### Step 4: Test
@@ -159,5 +159,5 @@ Tests now need to mock the Orchestrator DO and seed test data. See updated test 
 
 **Worker can't find products after deployment:**
 - Verify the DO database was seeded
-- Check that the `WORKER_URL` in `wrangler.toml` is correct
+- Check that `WORKER_URL` is set as a secret: `wrangler secret list`
 - Restart the Worker (create a new request to trigger isolate restart)
