@@ -14,7 +14,7 @@ A product engineer agent that turns tickets, feedback, and natural language requ
 
 1. **Accessible to non-technical users** — Linear ticket, Slack message, or feedback widget triggers the agent. No CLI, no git, no infrastructure knowledge required.
 2. **Streamlined value delivery** — Full Claude Code power (web search, subagents, skills). Human feedback via Slack threads at exactly the moments it's needed.
-3. **Scalable beyond one machine** — Cloudflare Containers run dozens of agents in parallel. Each repo has its own agent config (`CLAUDE.md` + skills).
+3. **Scalable beyond one machine** — Cloudflare Containers run up to 10 agents in parallel by default (configurable for higher concurrency). Each repo has its own agent config (`CLAUDE.md` + skills).
 4. **Layered security** — Ephemeral containers destroyed after each task. CI as ratchet. Streaming input for ambiguous requirements.
 
 Built on [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-sdk) + [Cloudflare Workers & Containers](https://developers.cloudflare.com/containers/).
@@ -51,15 +51,17 @@ graph TD
 
     Linear -->|HMAC-verified| Worker
     GitHub -->|signature-verified| Worker
-    Slack -->|WebSocket| Worker
+    SlackAPI -->|WebSocket| Slack
+    Slack -->|HTTP| Worker
 
     Worker --> Orch
     Orch --- DB
     Orch --> TA1 & TA2 & TA3
 
-    TA1 & TA2 & TA3 -->|status + heartbeats| Worker
+    Worker --> R2
+
+    TA1 & TA2 & TA3 -->|status + heartbeats + transcripts| Worker
     TA1 & TA2 & TA3 --> Gateway --> Anthropic
-    TA1 & TA2 & TA3 --> R2
     TA1 & TA2 & TA3 --> SlackAPI
     TA1 & TA2 & TA3 --> GitHubAPI
 ```
