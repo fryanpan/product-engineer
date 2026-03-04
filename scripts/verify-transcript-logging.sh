@@ -3,7 +3,7 @@
 
 set -e
 
-WORKER_URL="${WORKER_URL:-https://product-engineer.fryanpan.workers.dev}"
+WORKER_URL="${WORKER_URL:?Set WORKER_URL env var (e.g., https://product-engineer.your-subdomain.workers.dev)}"
 API_KEY="${API_KEY:-}"
 
 if [ -z "$API_KEY" ]; then

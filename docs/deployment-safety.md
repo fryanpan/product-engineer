@@ -269,6 +269,7 @@ Both workers need access to the same secrets, but they're separate workers:
 **Orchestrator secrets** (set once):
 ```bash
 cd orchestrator
+wrangler secret put WORKER_URL             # Deployed Worker URL (e.g., https://product-engineer.your-subdomain.workers.dev)
 wrangler secret put SLACK_BOT_TOKEN
 wrangler secret put LINEAR_API_KEY
 wrangler secret put ANTHROPIC_API_KEY
@@ -280,6 +281,7 @@ wrangler secret put SENTRY_DSN
 **TicketAgent secrets** (same values as orchestrator):
 ```bash
 cd ticket-agent
+wrangler secret put WORKER_URL             # Same as orchestrator
 wrangler secret put SLACK_BOT_TOKEN        # Same as orchestrator
 wrangler secret put LINEAR_API_KEY         # Same as orchestrator
 wrangler secret put ANTHROPIC_API_KEY      # Same as orchestrator
