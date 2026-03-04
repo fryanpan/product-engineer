@@ -18,7 +18,7 @@ export function resolveAgentEnvVars(
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
     LINEAR_API_KEY: env.LINEAR_API_KEY || "",
     SENTRY_DSN: env.SENTRY_DSN || "",
-    WORKER_URL: env.WORKER_URL || (() => { console.error("[TicketAgent] WORKER_URL not configured — set it in wrangler.toml [vars]"); return ""; })(),
+    WORKER_URL: env.WORKER_URL || (() => { console.error("[TicketAgent] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
     API_KEY: env.API_KEY || "",
     // R2 FUSE mount credentials for session persistence
     R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID || "",

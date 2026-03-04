@@ -381,6 +381,29 @@ STEP
 pause
 
 # ══════════════════════════════════════════════════════════════
+# 11. WORKER URL (deployment-specific)
+# ══════════════════════════════════════════════════════════════
+
+section "11. Worker URL"
+cat <<'STEP'
+
+  The orchestrator container needs WORKER_URL set to the deployed
+  Worker URL. This is how it forwards Slack events back to the Worker.
+
+  The URL is typically: https://product-engineer.<your-subdomain>.workers.dev
+
+STEP
+
+echo -n "  Enter your Worker URL (e.g., https://product-engineer.example.workers.dev): "
+read -r worker_url
+if [ -n "$worker_url" ] && [ "$worker_url" != "skip" ]; then
+  echo "$worker_url" | (cd "$ORCHESTRATOR_DIR" && npx wrangler secret put WORKER_URL 2>&1 | tail -1)
+  echo "  ✅ WORKER_URL set on orchestrator"
+else
+  echo "  ⏭  Skipped WORKER_URL (set it before deploying!)"
+fi
+
+# ══════════════════════════════════════════════════════════════
 # VERIFICATION
 # ══════════════════════════════════════════════════════════════
 
@@ -410,29 +433,6 @@ if [ -n "$GITHUB_REPO" ]; then
   gh secret list --repo "$GITHUB_REPO" 2>&1 | head -10 || echo "  (install gh CLI or check manually)"
 else
   echo "  (could not detect GitHub repo from git remote — check manually)"
-fi
-
-# ══════════════════════════════════════════════════════════════
-# 11. WORKER URL (deployment-specific)
-# ══════════════════════════════════════════════════════════════
-
-section "11. Worker URL"
-cat <<'STEP'
-
-  The orchestrator container needs WORKER_URL set to the deployed
-  Worker URL. This is how it forwards Slack events back to the Worker.
-
-  The URL is typically: https://product-engineer.<your-subdomain>.workers.dev
-
-STEP
-
-echo -n "  Enter your Worker URL (e.g., https://product-engineer.example.workers.dev): "
-read -r worker_url
-if [ -n "$worker_url" ] && [ "$worker_url" != "skip" ]; then
-  echo "$worker_url" | (cd "$ORCHESTRATOR_DIR" && npx wrangler secret put WORKER_URL 2>&1 | tail -1)
-  echo "  ✅ WORKER_URL set on orchestrator"
-else
-  echo "  ⏭  Skipped WORKER_URL (set it before deploying!)"
 fi
 
 cat <<'DONE'
