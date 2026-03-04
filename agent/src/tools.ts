@@ -309,9 +309,9 @@ export function createTools(config: AgentConfig) {
           return { content: [{ type: "text" as const, text: `Failed to list transcripts: ${res.status}` }] };
         }
 
-        const data = await res.json<{ transcripts: Array<{ ticketId: string; r2Key: string; uploadedAt: string; product: string; status: string }> }>();
+        const data = (await res.json()) as { transcripts: Array<{ ticketId: string; r2Key: string; uploadedAt: string; product: string; status: string }> };
         const transcriptList = data.transcripts
-          .map((t) => `- ${t.ticketId} (${t.product}, ${t.status}) — ${t.r2Key}`)
+          .map((t: { ticketId: string; product: string; status: string; r2Key: string }) => `- ${t.ticketId} (${t.product}, ${t.status}) — ${t.r2Key}`)
           .join("\n");
 
         return {
