@@ -584,6 +584,11 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
 
       if (rows.length > 0) {
         const ticket = rows[0];
+        // Re-activate agent on thread reply — user is explicitly engaging
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
+          ticket.id,
+        );
         const event: TicketEvent = {
           type: "slack_reply",
           source: "slack",
