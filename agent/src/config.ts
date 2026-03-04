@@ -60,6 +60,8 @@ export interface AgentConfig {
   linearApiKey: string;
   workerUrl: string;
   apiKey: string;
+  ticketIdentifier?: string;  // e.g., "BC-84"
+  ticketTitle?: string;        // Brief title for display
 }
 
 export function loadConfig(): AgentConfig {
@@ -81,5 +83,7 @@ export function loadConfig(): AgentConfig {
     linearApiKey: process.env.LINEAR_API_KEY || "",
     workerUrl: required("WORKER_URL"),
     apiKey: process.env.API_KEY || "",
+    ticketIdentifier: process.env.TICKET_IDENTIFIER || undefined,
+    ticketTitle: process.env.TICKET_TITLE || undefined,
   };
 }

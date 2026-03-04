@@ -230,49 +230,39 @@ export function createTools(config: AgentConfig) {
       // Update top-level Slack message with status
       if (config.slackThreadTs) {
         try {
-          // Get original message first to preserve ticket info
-          const historyRes = await fetch(
-            `https://slack.com/api/conversations.history?channel=${encodeURIComponent(config.slackChannel)}&latest=${config.slackThreadTs}&inclusive=true&limit=1`,
-            {
-              headers: {
-                Authorization: `Bearer ${config.slackBotToken}`,
-              },
-            },
-          );
+          // Build status indicator
+          let statusEmoji = "⏳";
+          let statusText = status.replace(/_/g, " ").toUpperCase();
+          if (["merged", "closed"].includes(status)) {
+            statusEmoji = "✅";
+            statusText = "DONE";
+          } else if (status === "pr_open" || status === "in_review") {
+            statusEmoji = "👀";
+            statusText = "IN REVIEW";
+          } else if (status === "failed") {
+            statusEmoji = "❌";
+            statusText = "FAILED";
+          }
 
-          if (historyRes.ok) {
-            const historyData = (await historyRes.json()) as {
-              ok: boolean;
-              messages?: Array<{ text: string }>;
-            };
+          // Generate brief summary from ticket title (first sentence or first 100 chars)
+          const ticketIdentifier = config.ticketIdentifier || config.ticketId;
+          let briefSummary = config.ticketTitle || "Working on task";
 
-            if (historyData.ok && historyData.messages?.[0]) {
-              const originalText = historyData.messages[0].text;
+          // Truncate to ~100 chars and ensure it ends cleanly
+          if (briefSummary.length > 100) {
+            const firstSentence = briefSummary.match(/^[^.!?]+[.!?]/);
+            briefSummary = firstSentence ? firstSentence[0] : briefSummary.slice(0, 100) + "...";
+          }
 
-              // Build status indicator
-              let statusEmoji = "⏳";
-              let statusText = status.replace(/_/g, " ").toUpperCase();
-              if (["merged", "closed"].includes(status)) {
-                statusEmoji = "✅";
-                statusText = "*DONE*";
-              } else if (status === "pr_open" || status === "in_review") {
-                statusEmoji = "👀";
-              } else if (status === "failed") {
-                statusEmoji = "❌";
-              }
+          // Compact format: emoji STATUS - TICKET-ID: brief summary
+          const updatedText = `${statusEmoji} ${statusText} - ${ticketIdentifier}: ${briefSummary}`;
 
-              // Strip existing status header to prevent stacking on repeated updates
-              const cleanText = originalText.replace(/^[⏳✅👀❌] .+\n\n/, "");
-              const updatedText = `${statusEmoji} ${statusText}\n\n${cleanText}`;
-
-              const updateResult = await updateSlackMessage(updatedText, config.slackThreadTs, config);
-              const resultText = updateResult.content[0]?.text || "";
-              if (resultText.includes("failed") || resultText.includes("error")) {
-                console.error(`[Agent] Failed to update Slack thread: ${resultText}`);
-              } else {
-                console.log(`[Agent] Updated Slack thread ${config.slackThreadTs} with status: ${status}`);
-              }
-            }
+          const updateResult = await updateSlackMessage(updatedText, config.slackThreadTs, config);
+          const resultText = updateResult.content[0]?.text || "";
+          if (resultText.includes("failed") || resultText.includes("error")) {
+            console.error(`[Agent] Failed to update Slack thread: ${resultText}`);
+          } else {
+            console.log(`[Agent] Updated Slack thread ${config.slackThreadTs} with status: ${status}`);
           }
         } catch (err) {
           console.error("[Agent] Failed to update Slack message:", err);
