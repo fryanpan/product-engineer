@@ -88,6 +88,12 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 - The registry maps logical secret names to Cloudflare binding names
 - `[vars]` in `wrangler.toml` (e.g., `WORKER_URL`) are plaintext config — update them for each new deployment subdomain. They are not Cloudflare secrets and will not appear in `wrangler secret list`
 
+### LLM Monitoring
+- All Anthropic API traffic routes through Cloudflare AI Gateway for monitoring
+- Configure gateway in `registry.json` under `cloudflare_ai_gateway` (account ID + gateway ID)
+- Dashboard shows: requests, tokens, costs, errors, cache hit rates
+- See `docs/cloudflare-ai-gateway.md` for setup and analytics details
+
 ### Testing
 - `cd orchestrator && bun test` for orchestrator tests (Worker, DO, TicketAgent, webhooks, registry)
 - `cd agent && bun test` for agent tests (prompt construction, tools)

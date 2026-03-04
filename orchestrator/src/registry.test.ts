@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   getAgentIdentity,
+  getAIGatewayConfig,
   getProduct,
   getProducts,
   getProductByLinearProject,
@@ -96,5 +97,23 @@ describe("isOurTeam", () => {
     expect(isOurTeam("00000000-0000-0000-0000-000000000000")).toBe(false);
     expect(isOurTeam("")).toBe(false);
     expect(isOurTeam("random-id")).toBe(false);
+  });
+});
+
+describe("getAIGatewayConfig", () => {
+  it("returns null or valid config object", () => {
+    const config = getAIGatewayConfig();
+
+    // Registry.json may or may not have cloudflare_ai_gateway configured
+    if (config === null) {
+      expect(config).toBeNull();
+    } else {
+      // If configured, should have required fields
+      expect(typeof config).toBe("object");
+      expect(typeof config.account_id).toBe("string");
+      expect(typeof config.gateway_id).toBe("string");
+      expect(config.account_id.length).toBeGreaterThan(0);
+      expect(config.gateway_id.length).toBeGreaterThan(0);
+    }
   });
 });

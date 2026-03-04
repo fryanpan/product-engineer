@@ -1,0 +1,25 @@
+{
+  "linear_team_id": "01328a7f-d761-4176-8bbf-004a397dc6f7",
+  "agent_linear_email": "bcagent13@gmail.com",
+  "agent_linear_name": "BC Agent",
+  "cloudflare_ai_gateway": {
+    "account_id": "YOUR_CLOUDFLARE_ACCOUNT_ID",
+    "gateway_id": "YOUR_GATEWAY_SLUG"
+  },
+  "products": {
+    "health-tool": {
+      "repos": ["fryanpan/health-tool"],
+      "slack_channel": "#health-tool",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Health Tool"
+        }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY"
+      }
+    }
+  }
+}
