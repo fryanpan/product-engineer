@@ -115,7 +115,8 @@ export class Orchestrator extends Container<Bindings> {
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         agent_active INTEGER NOT NULL DEFAULT 1,
-        last_heartbeat TEXT
+        last_heartbeat TEXT,
+        transcript_r2_key TEXT
       )
     `);
     // Migration: add agent_active column for existing deployments
@@ -135,6 +136,16 @@ export class Orchestrator extends Container<Bindings> {
       const message = err instanceof Error ? err.message : "";
       if (!message.includes("duplicate column") && !message.includes("already exists")) {
         console.error("[Orchestrator] Failed to add last_heartbeat column:", err);
+        throw err;
+      }
+    }
+    // Migration: add transcript_r2_key column for transcript storage
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN transcript_r2_key TEXT`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (!message.includes("duplicate column") && !message.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add transcript_r2_key column:", err);
         throw err;
       }
     }
@@ -162,6 +173,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.handleHeartbeat(request);
       case "/check-health":
         return this.checkAgentHealth();
+      case "/transcripts":
+        return this.listTranscripts(request);
       default:
         return Response.json({ error: "not found" }, { status: 404 });
     }
@@ -254,12 +267,13 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
-    const { ticketId, status, pr_url, branch_name, slack_thread_ts } = await request.json<{
+    const { ticketId, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key } = await request.json<{
       ticketId: string;
       status?: string;
       pr_url?: string;
       branch_name?: string;
       slack_thread_ts?: string;
+      transcript_r2_key?: string;
     }>();
 
     // Log phone-home payloads so they appear in wrangler tail
@@ -291,6 +305,10 @@ export class Orchestrator extends Container<Bindings> {
     if (slack_thread_ts) {
       updates.push("slack_thread_ts = ?");
       values.push(slack_thread_ts);
+    }
+    if (transcript_r2_key) {
+      updates.push("transcript_r2_key = ?");
+      values.push(transcript_r2_key);
     }
 
     values.push(ticketId);
@@ -515,6 +533,34 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
       "SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 50",
     ).toArray();
     return Response.json({ tickets: rows });
+  }
+
+  private listTranscripts(request: Request): Response {
+    const url = new URL(request.url);
+    const limit = parseInt(url.searchParams.get("limit") || "50", 10);
+    const sinceHours = url.searchParams.get("sinceHours") ? parseInt(url.searchParams.get("sinceHours")!, 10) : undefined;
+
+    let query = `
+      SELECT id as ticketId, product, status, transcript_r2_key as r2Key, updated_at as uploadedAt
+      FROM tickets
+      WHERE transcript_r2_key IS NOT NULL
+    `;
+
+    if (sinceHours) {
+      query += ` AND (julianday('now') - julianday(updated_at)) * 24 < ${sinceHours}`;
+    }
+
+    query += ` ORDER BY updated_at DESC LIMIT ${limit}`;
+
+    const rows = this.ctx.storage.sql.exec(query).toArray() as Array<{
+      ticketId: string;
+      product: string;
+      status: string;
+      r2Key: string;
+      uploadedAt: string;
+    }>;
+
+    return Response.json({ transcripts: rows });
   }
 
   private async handleSlackEvent(request: Request): Promise<Response> {

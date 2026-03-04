@@ -57,15 +57,20 @@ wrangler secret put SENTRY_ACCESS_TOKEN   # Sentry User Auth Token (org:read, pr
 wrangler secret put CONTEXT7_API_KEY      # Context7 API key (optional — works without, lower rate limits)
 ```
 
-### Per-product GitHub tokens
+### Per-organization GitHub tokens
 
-Each product in the registry needs its own fine-grained PAT. The naming convention is `<PRODUCT>_GITHUB_TOKEN`, where `<PRODUCT>` matches the uppercased, underscored product key from the registry.
+Products from the same GitHub organization can share a single token. Use org-level tokens (e.g., `FRYANPAN_ORG_GITHUB_TOKEN`) for all repos in that org.
 
 ```bash
-# Example: if your registry has products "my-app" and "other-tool":
+# Example: if all your products are in the "your-org" GitHub org:
+wrangler secret put YOUR_ORG_GITHUB_TOKEN    # Fine-grained PAT for all your-org/* repos
+
+# Or use per-product tokens if you need different permissions:
 wrangler secret put MY_APP_GITHUB_TOKEN      # Fine-grained PAT for your-org/my-app
 wrangler secret put OTHER_TOOL_GITHUB_TOKEN  # Fine-grained PAT for your-org/other-tool
 ```
+
+In `registry.json`, set `"GITHUB_TOKEN": "YOUR_ORG_GITHUB_TOKEN"` for all products in that org.
 
 ## Step 3: Populate Slack Channel IDs
 
@@ -94,9 +99,28 @@ In [api.slack.com/apps](https://api.slack.com/apps):
 
 1. **Socket Mode:** Settings → Socket Mode → Enable
 2. **App-Level Token:** Settings → Basic Information → App-Level Tokens → Generate with `connections:write` scope
-3. **Bot Token Scopes:** OAuth & Permissions → add `chat:write`, `app_mentions:read`, `channels:history`
+3. **Bot Token Scopes:** OAuth & Permissions → add the following scopes:
+   - `channels:join` - Join public channels
+   - `channels:manage` - Manage and create public channels
+   - `channels:read` - View public channel info
+   - `channels:write.invites` - Invite members to public channels
+   - `channels:write.topic` - Set public channel descriptions
+   - `chat:write` - Send messages
+   - `chat:write.public` - Send messages to channels the bot isn't in
+   - `files:read` - View files in channels
+   - `files:write` - Upload/edit files
+   - `groups:history` - View private channel messages
+   - `groups:read` - View private channel info
+   - `groups:write` - Manage and create private channels
+   - `groups:write.invites` - Invite members to private channels
+   - `groups:write.topic` - Set private channel descriptions
+   - `im:history` - View DM messages
+   - `im:read` - View DM info
+   - `im:write` - Start DMs
+   - `im:write.topic` - Set DM descriptions
 4. **Event Subscriptions:** Event Subscriptions → Subscribe to bot events: `app_mention`, `message.channels`
-5. **Invite bot** to each product's Slack channel (e.g., `#your-app`)
+5. **Reinstall app** after adding scopes (yellow banner will prompt you)
+6. **Invite bot** to each product's Slack channel (e.g., `#your-app`) - or the bot can join automatically with `channels:join`
 
 ## Step 5: Configure Linear Webhook
 

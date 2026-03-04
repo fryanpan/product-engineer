@@ -66,6 +66,39 @@ function phoneHome(phase: string, detail?: string) {
 
 phoneHome("server_started", `uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 
+// Upload transcript to R2 via the worker
+async function uploadTranscript(transcriptPath: string) {
+  try {
+    console.log(`[Agent] Uploading transcript from ${transcriptPath}...`);
+    const transcriptContent = await Bun.file(transcriptPath).text();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const r2Key = `${config.ticketId}-${timestamp}.jsonl`;
+
+    const uploadRes = await fetch(`${config.workerUrl}/api/internal/upload-transcript`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Key": config.apiKey,
+      },
+      body: JSON.stringify({
+        ticketId: config.ticketId,
+        r2Key,
+        transcript: transcriptContent,
+      }),
+    });
+
+    if (!uploadRes.ok) {
+      const errorText = await uploadRes.text();
+      console.error(`[Agent] Transcript upload failed: ${uploadRes.status} — ${errorText}`);
+      return;
+    }
+
+    console.log(`[Agent] Transcript uploaded successfully: ${r2Key}`);
+  } catch (err) {
+    console.error("[Agent] Transcript upload error:", err);
+  }
+}
+
 // Heartbeat every 2 minutes while the session is active
 const heartbeatInterval = setInterval(() => {
   if (sessionStatus === "completed" || sessionStatus === "error") {
@@ -199,6 +232,17 @@ async function startSession(initialPrompt: string) {
         lastStderr = data.slice(0, 500);
         console.error(`[Agent][SDK stderr] ${data.slice(0, 300)}`);
         // Don't phone home every stderr chunk — it's available via /status
+      },
+      hooks: {
+        SessionEnd: [
+          {
+            hooks: [async (input, _toolUseID, _options) => {
+              // Upload transcript to R2 when session ends
+              await uploadTranscript(input.transcript_path);
+              return { continue: true };
+            }],
+          },
+        ],
       },
     },
   });

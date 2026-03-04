@@ -26,6 +26,10 @@ bindings = [
   { name = "TICKET_AGENT", class_name = "TicketAgent" }
 ]
 
+[[r2_buckets]]
+binding = "TRANSCRIPTS"
+bucket_name = "product-engineer-transcripts"
+
 [vars]
 WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
 

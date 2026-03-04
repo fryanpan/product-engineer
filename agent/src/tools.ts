@@ -287,5 +287,82 @@ export function createTools(config: AgentConfig) {
     },
   );
 
-  return { tools: [notifySlack, askQuestion, updateTaskStatus] };
+  const listTranscripts = tool(
+    "list_transcripts",
+    "List available agent transcripts. Use this to find transcripts for analysis. Returns tickets with their transcript R2 keys.",
+    {
+      limit: z.number().optional().describe("Maximum number of transcripts to return (default 50)"),
+      sinceHours: z.number().optional().describe("Only return transcripts from the last N hours"),
+    },
+    async ({ limit = 50, sinceHours }) => {
+      try {
+        const params = new URLSearchParams({ limit: limit.toString() });
+        if (sinceHours) params.append("sinceHours", sinceHours.toString());
+
+        const res = await fetch(`${config.workerUrl}/api/transcripts?${params}`, {
+          headers: {
+            "X-API-Key": config.apiKey,
+          },
+        });
+
+        if (!res.ok) {
+          return { content: [{ type: "text" as const, text: `Failed to list transcripts: ${res.status}` }] };
+        }
+
+        const data = await res.json<{ transcripts: Array<{ ticketId: string; r2Key: string; uploadedAt: string; product: string; status: string }> }>();
+        const transcriptList = data.transcripts
+          .map((t) => `- ${t.ticketId} (${t.product}, ${t.status}) — ${t.r2Key}`)
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Found ${data.transcripts.length} transcripts:\n${transcriptList}`,
+            },
+          ],
+        };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error listing transcripts: ${err}` }] };
+      }
+    },
+  );
+
+  const fetchTranscript = tool(
+    "fetch_transcript",
+    "Fetch the full JSONL transcript for a specific ticket. Use this to analyze agent behavior and decision-making.",
+    {
+      r2Key: z.string().describe("The R2 key for the transcript (from list_transcripts)"),
+    },
+    async ({ r2Key }) => {
+      try {
+        const res = await fetch(`${config.workerUrl}/api/transcripts/${encodeURIComponent(r2Key)}`, {
+          headers: {
+            "X-API-Key": config.apiKey,
+          },
+        });
+
+        if (!res.ok) {
+          return { content: [{ type: "text" as const, text: `Failed to fetch transcript: ${res.status}` }] };
+        }
+
+        const transcript = await res.text();
+        const lines = transcript.split("\n").filter((l) => l.trim());
+        const summary = `Transcript: ${r2Key}\nLines: ${lines.length}\nSize: ${transcript.length} bytes\n\nFirst 10 lines:\n${lines.slice(0, 10).join("\n")}`;
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: summary,
+            },
+          ],
+        };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error fetching transcript: ${err}` }] };
+      }
+    },
+  );
+
+  return { tools: [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript] };
 }
