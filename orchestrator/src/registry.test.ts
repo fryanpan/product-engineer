@@ -26,6 +26,30 @@ describe("getProduct", () => {
     expect(pe!.repos).toEqual(["fryanpan/product-engineer"]);
     expect(pe!.slack_channel).toBe("#product-engineer");
     expect(pe!.triggers.linear?.project_name).toBe("Product Engineer");
+
+    const aiProjectSupport = getProduct("ai-project-support");
+    expect(aiProjectSupport).not.toBeNull();
+    expect(aiProjectSupport!.repos).toEqual(["fryanpan/ai-project-support"]);
+    expect(aiProjectSupport!.slack_channel).toBe("#project-support");
+    expect(aiProjectSupport!.triggers.linear?.project_name).toBe("Project Support");
+
+    const blogAssistant = getProduct("blog-assistant");
+    expect(blogAssistant).not.toBeNull();
+    expect(blogAssistant!.repos).toEqual(["fryanpan/blog-assistant"]);
+    expect(blogAssistant!.slack_channel).toBe("#blog-assistant");
+    expect(blogAssistant!.triggers.linear?.project_name).toBe("Blog Assistant");
+
+    const givewellImpact = getProduct("givewell-impact");
+    expect(givewellImpact).not.toBeNull();
+    expect(givewellImpact!.repos).toEqual(["fryanpan/givewell-impact"]);
+    expect(givewellImpact!.slack_channel).toBe("#nonprofit-impact");
+    expect(givewellImpact!.triggers.linear?.project_name).toBe("Nonprofit Impact");
+
+    const personalFinance = getProduct("personal-finance");
+    expect(personalFinance).not.toBeNull();
+    expect(personalFinance!.repos).toEqual(["fryanpan/personal-finance"]);
+    expect(personalFinance!.slack_channel).toBe("#personal-finance");
+    expect(personalFinance!.triggers.linear?.project_name).toBe("Personal Finance");
   });
 
   it("returns null for unknown products", () => {
@@ -57,6 +81,22 @@ describe("getProductByLinearProject", () => {
     const result5 = getProductByLinearProject("Product Engineer");
     expect(result5).not.toBeNull();
     expect(result5!.name).toBe("product-engineer");
+
+    const result6 = getProductByLinearProject("Project Support");
+    expect(result6).not.toBeNull();
+    expect(result6!.name).toBe("ai-project-support");
+
+    const result7 = getProductByLinearProject("Blog Assistant");
+    expect(result7).not.toBeNull();
+    expect(result7!.name).toBe("blog-assistant");
+
+    const result8 = getProductByLinearProject("Nonprofit Impact");
+    expect(result8).not.toBeNull();
+    expect(result8!.name).toBe("givewell-impact");
+
+    const result9 = getProductByLinearProject("Personal Finance");
+    expect(result9).not.toBeNull();
+    expect(result9!.name).toBe("personal-finance");
   });
 
   it("returns null for unknown projects", () => {
@@ -72,9 +112,17 @@ describe("getProducts", () => {
     expect(Object.keys(products)).toContain("health-tool");
     expect(Object.keys(products)).toContain("bike-tool");
     expect(Object.keys(products)).toContain("product-engineer");
+    expect(Object.keys(products)).toContain("ai-project-support");
+    expect(Object.keys(products)).toContain("blog-assistant");
+    expect(Object.keys(products)).toContain("givewell-impact");
+    expect(Object.keys(products)).toContain("personal-finance");
     expect(products["health-tool"].slack_channel).toBe("#health-tool");
     expect(products["bike-tool"].slack_channel).toBe("#bike-tool");
     expect(products["product-engineer"].slack_channel).toBe("#product-engineer");
+    expect(products["ai-project-support"].slack_channel).toBe("#project-support");
+    expect(products["blog-assistant"].slack_channel).toBe("#blog-assistant");
+    expect(products["givewell-impact"].slack_channel).toBe("#nonprofit-impact");
+    expect(products["personal-finance"].slack_channel).toBe("#personal-finance");
   });
 });
 

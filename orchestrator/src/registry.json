@@ -90,6 +90,86 @@
         "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
         "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
       }
+    },
+    "ai-project-support": {
+      "repos": ["fryanpan/ai-project-support"],
+      "slack_channel": "#project-support",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Project Support"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
+    },
+    "blog-assistant": {
+      "repos": ["fryanpan/blog-assistant"],
+      "slack_channel": "#blog-assistant",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Blog Assistant"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
+    },
+    "givewell-impact": {
+      "repos": ["fryanpan/givewell-impact"],
+      "slack_channel": "#nonprofit-impact",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Nonprofit Impact"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
+    },
+    "personal-finance": {
+      "repos": ["fryanpan/personal-finance"],
+      "slack_channel": "#personal-finance",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Personal Finance"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_API_KEY": "LINEAR_API_KEY",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      }
     }
   }
 }
