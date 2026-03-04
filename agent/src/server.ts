@@ -129,6 +129,7 @@ let lastAssistantText = "";
 let sessionMessageCount = 0;
 let sessionError = "";
 let lastStderr = "";
+let currentSessionId = "";
 
 function createMessageGenerator(): AsyncGenerator<SDKUserMessage> {
   const queue: SDKUserMessage[] = [];
@@ -199,9 +200,82 @@ async function cloneRepos() {
   repoCloned = true;
 }
 
+// Check if a session exists for this ticket and return the session ID
+async function findExistingSession(): Promise<string | null> {
+  try {
+    const home = process.env.HOME || "/home/agent";
+    const sessionDir = `${home}/.claude/projects`;
+
+    // Check if the sessions directory exists (R2 mount should have created it)
+    const dirExists = await Bun.file(sessionDir).exists().catch(() => false);
+    if (!dirExists) {
+      console.log("[Agent] No session directory found — starting fresh");
+      return null;
+    }
+
+    // List files in the session directory
+    const proc = Bun.spawn(["ls", "-1", sessionDir]);
+    const output = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+
+    if (exitCode !== 0) {
+      console.log("[Agent] Failed to list session directory");
+      return null;
+    }
+
+    // Look for session files matching this ticket ID
+    // Session files are typically named like: <ticket-id>-<timestamp>-<session-id>
+    const files = output.trim().split("\n").filter(Boolean);
+    const sessionFiles = files.filter(f => f.startsWith(config.ticketId) && f.endsWith(".jsonl"));
+
+    if (sessionFiles.length === 0) {
+      console.log("[Agent] No existing session files found");
+      return null;
+    }
+
+    // Use the most recent session file (last in sorted order)
+    const latestSession = sessionFiles.sort().pop()!;
+    console.log(`[Agent] Found existing session file: ${latestSession}`);
+
+    // Extract session ID from filename if possible
+    // Filename format varies, but we can try to parse it
+    // For now, return a marker that we found a session
+    return latestSession;
+  } catch (err) {
+    console.error("[Agent] Error checking for existing session:", err);
+    return null;
+  }
+}
+
 async function startSession(initialPrompt: string) {
   if (sessionActive) return;
   sessionStatus = "starting_session";
+
+  // Check for existing session to resume
+  const existingSession = await findExistingSession();
+  const isResuming = existingSession !== null;
+
+  if (isResuming) {
+    console.log(`[Agent] Resuming existing session from: ${existingSession}`);
+    phoneHome("deploy_recovery", `resuming session: ${existingSession}`);
+
+    // Notify Slack about recovery
+    const recoveryMessage = `🔄 **Container restarted — resuming work**\n\nRecovering from deploy. Session files found: \`${existingSession}\`\n\nContinuing where I left off...`;
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.slackBotToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: config.slackChannel,
+        text: recoveryMessage,
+        ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
+      }),
+    }).catch((err) => console.error("[Agent] Failed to post recovery message to Slack:", err));
+  } else {
+    console.log("[Agent] Starting fresh session");
+  }
 
   console.log("[Agent] Creating tools and MCP servers...");
   const { tools } = createTools(config);
@@ -213,38 +287,53 @@ async function startSession(initialPrompt: string) {
   // messageYielder is now assigned — safe to mark session active
   sessionActive = true;
 
-  messageYielder!(userMessage(initialPrompt));
-  console.log(`[Agent] Initial prompt queued (${initialPrompt.length} chars)`);
+  if (isResuming) {
+    // When resuming, tell the agent to continue where it left off
+    messageYielder!(userMessage("Your container was restarted during a deploy. Please continue where you left off. Check your previous work (git status, git log) and resume the task."));
+    console.log("[Agent] Resume continuation prompt queued");
+  } else {
+    messageYielder!(userMessage(initialPrompt));
+    console.log(`[Agent] Initial prompt queued (${initialPrompt.length} chars)`);
+  }
 
-  phoneHome("session_starting", `prompt_chars=${initialPrompt.length}`);
+  phoneHome("session_starting", `prompt_chars=${initialPrompt.length} resuming=${isResuming}`);
   console.log("[Agent] Starting Agent SDK query()...");
+
+  // Build query options
+  const queryOptions: any = {
+    systemPrompt: { type: "preset", preset: "claude_code" },
+    settingSources: ["project"],
+    maxTurns: 200,
+    permissionMode: "bypassPermissions",
+    mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
+    // Force node runtime — cli.js is a Node bundle, Bun may have compat issues
+    executable: "node",
+    stderr: (data: string) => {
+      lastStderr = data.slice(0, 500);
+      console.error(`[Agent][SDK stderr] ${data.slice(0, 300)}`);
+      // Don't phone home every stderr chunk — it's available via /status
+    },
+    hooks: {
+      SessionEnd: [
+        {
+          hooks: [async (input: any, _toolUseID: any, _options: any) => {
+            // Upload transcript to R2 when session ends
+            await uploadTranscript(input.transcript_path);
+            return { continue: true };
+          }],
+        },
+      ],
+    },
+  };
+
+  // Resume the most recent session if we found existing session files
+  if (isResuming) {
+    queryOptions.continue = true;
+  }
+
   const session = query({
     prompt: messages,
-    options: {
-      systemPrompt: { type: "preset", preset: "claude_code" },
-      settingSources: ["project"],
-      maxTurns: 200,
-      permissionMode: "bypassPermissions",
-      mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
-      // Force node runtime — cli.js is a Node bundle, Bun may have compat issues
-      executable: "node",
-      stderr: (data: string) => {
-        lastStderr = data.slice(0, 500);
-        console.error(`[Agent][SDK stderr] ${data.slice(0, 300)}`);
-        // Don't phone home every stderr chunk — it's available via /status
-      },
-      hooks: {
-        SessionEnd: [
-          {
-            hooks: [async (input, _toolUseID, _options) => {
-              // Upload transcript to R2 when session ends
-              await uploadTranscript(input.transcript_path);
-              return { continue: true };
-            }],
-          },
-        ],
-      },
-    },
+    options: queryOptions,
   });
   console.log("[Agent] query() returned, starting consumption loop...");
 
@@ -254,7 +343,16 @@ async function startSession(initialPrompt: string) {
       phoneHome("session_running");
       for await (const message of session) {
         sessionMessageCount++;
-        if (sessionMessageCount === 1) phoneHome("first_message");
+
+        // Capture session ID from first message for logging
+        if (sessionMessageCount === 1) {
+          if (message.session_id) {
+            currentSessionId = message.session_id;
+            console.log(`[Agent] Session ID: ${currentSessionId}`);
+          }
+          phoneHome("first_message", `session_id=${currentSessionId}`);
+        }
+
         if (message.type === "assistant" && message.message?.content) {
           for (const block of message.message.content) {
             if (block.type === "text") {

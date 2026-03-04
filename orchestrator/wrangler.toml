@@ -13,17 +13,11 @@ image = "../containers/orchestrator/Dockerfile"
 instance_type = "lite"
 max_instances = 1
 
-# Per-ticket agents — one per active ticket, runs Claude Agent SDK
-[[containers]]
-class_name = "TicketAgent"
-image = "../agent/Dockerfile"
-instance_type = "basic"
-max_instances = 10
-
 [durable_objects]
 bindings = [
   { name = "ORCHESTRATOR", class_name = "Orchestrator" },
-  { name = "TICKET_AGENT", class_name = "TicketAgent" }
+  # TicketAgent lives in its own worker for zero-downtime deploys
+  { name = "TICKET_AGENT", class_name = "TicketAgent", script_name = "ticket-agent-worker" }
 ]
 
 [[r2_buckets]]
