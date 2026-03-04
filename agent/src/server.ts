@@ -321,6 +321,14 @@ app.post("/event", async (c) => {
         repos: config.repos,
         data: event.payload as TaskPayload["data"],
       };
+
+      // Extract ticket metadata for Slack status updates
+      if (taskType === "ticket") {
+        const ticketData = event.payload as any;
+        config.ticketIdentifier = ticketData.identifier;
+        config.ticketTitle = ticketData.title;
+      }
+
       const prompt = buildPrompt(taskPayload);
       await startSession(prompt);
     } else if (messageYielder) {
