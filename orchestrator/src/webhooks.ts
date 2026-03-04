@@ -238,6 +238,12 @@ githubWebhook.post("/", async (c) => {
   if (event === "pull_request_review") {
     return handlePullRequestReview(rawBody, c.env);
   }
+  if (event === "pull_request_review_comment") {
+    return handlePullRequestReviewComment(rawBody, c.env);
+  }
+  if (event === "issue_comment") {
+    return handleIssueComment(rawBody, c.env);
+  }
 
   return c.json({ ok: true, ignored: true });
 });
@@ -331,6 +337,136 @@ async function handlePullRequestReview(rawBody: string, env: Bindings) {
   });
 
   return Response.json({ ok: true, product: productName, taskId, reviewState: payload.review.state });
+}
+
+async function handlePullRequestReviewComment(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    comment: {
+      body: string;
+      user: { login: string };
+      html_url: string;
+      path: string;
+      line: number;
+    };
+    pull_request: {
+      head: { ref: string };
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  if (payload.action !== "created") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const branch = payload.pull_request.head.ref;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const productName = resolveProductByRepo(payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "pr_review_comment",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      pr_url: payload.pull_request.html_url,
+      comment_url: payload.comment.html_url,
+      comment_body: payload.comment.body,
+      commenter: payload.comment.user.login,
+      file_path: payload.comment.path,
+      line: payload.comment.line,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId });
+}
+
+async function handleIssueComment(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    issue: {
+      pull_request?: { url: string };
+      html_url: string;
+    };
+    comment: {
+      body: string;
+      user: { login: string };
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle comments on PRs
+  if (!payload.issue.pull_request) {
+    return Response.json({ ok: true, ignored: true, reason: "not a PR comment" });
+  }
+
+  if (payload.action !== "created") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  // Extract PR info from the PR URL
+  const prUrlMatch = payload.issue.pull_request.url.match(/\/pulls\/(\d+)$/);
+  if (!prUrlMatch) {
+    return Response.json({ ok: true, ignored: true, reason: "could not parse PR number" });
+  }
+
+  // Fetch PR details to get the branch name
+  const prNumber = prUrlMatch[1];
+  const ghToken = env.GITHUB_TOKEN;
+  const prApiUrl = `https://api.github.com/repos/${payload.repository.full_name}/pulls/${prNumber}`;
+
+  const prResponse = await fetch(prApiUrl, {
+    headers: {
+      Authorization: `Bearer ${ghToken}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  if (!prResponse.ok) {
+    console.error(`[GitHub] Failed to fetch PR details: ${prResponse.status}`);
+    return Response.json({ ok: true, ignored: true, reason: "could not fetch PR details" });
+  }
+
+  const prData = await prResponse.json() as { head: { ref: string } };
+  const branch = prData.head.ref;
+  const taskId = extractTaskId(branch);
+
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const productName = resolveProductByRepo(payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "pr_comment",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      pr_url: payload.issue.html_url,
+      comment_url: payload.comment.html_url,
+      comment_body: payload.comment.body,
+      commenter: payload.comment.user.login,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId });
 }
 
 export { linearWebhook, githubWebhook };

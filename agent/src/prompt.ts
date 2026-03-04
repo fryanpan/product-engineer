@@ -115,8 +115,12 @@ export function buildEventPrompt(event: TicketEvent): string {
   switch (event.type) {
     case "pr_review":
       return `A PR review was submitted:\n\n**State:** ${payload.review_state || payload.state}\n**Reviewer:** ${payload.reviewer || "unknown"}\n**Body:**\n<user_input>\n${payload.review_body || payload.body || "(no comment)"}\n</user_input>\n\nRespond to the review. If changes are requested, make them, push, and notify Slack.`;
+    case "pr_review_comment":
+      return `A review comment was posted on your PR:\n\n**Commenter:** ${payload.commenter || "unknown"}\n**File:** ${payload.file_path || "unknown"}\n**Line:** ${payload.line || "unknown"}\n**Comment:**\n<user_input>\n${payload.comment_body || "(no comment)"}\n</user_input>\n\nRespond to the comment. If changes are needed, make them, push, and notify Slack.`;
+    case "pr_comment":
+      return `A comment was posted on your PR:\n\n**Commenter:** ${payload.commenter || "unknown"}\n**Comment:**\n<user_input>\n${payload.comment_body || "(no comment)"}\n</user_input>\n\nRespond to the comment. If changes are needed, make them, push, and notify Slack.`;
     case "pr_merged":
-      return `The PR has been merged. Update the task status, notify Slack, and do a brief retro.`;
+      return `The PR has been merged. Update the task status to "merged", notify Slack, and do a brief retro.`;
     case "ci_status":
       return `CI status update:\n\n**Status:** ${payload.status}\n**Description:** ${payload.description || ""}\n\nIf CI failed, investigate and fix. If it passed, continue with the workflow.`;
     case "slack_reply":
