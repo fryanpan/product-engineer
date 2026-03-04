@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeEach } from "bun:test";
 import {
   getAgentIdentity,
   getAIGatewayConfig,
@@ -7,161 +7,157 @@ import {
   getProductByLinearProject,
   isOurTeam,
   loadRegistry,
+  clearRegistryCache,
 } from "./registry";
+import { createMockOrchestratorStub, TEST_REGISTRY } from "./test-helpers";
 
-describe("getProduct", () => {
-  it("returns correct config for known products", () => {
-    const health = getProduct("health-tool");
-    expect(health).not.toBeNull();
-    expect(health!.repos).toEqual(["fryanpan/health-tool"]);
-    expect(health!.slack_channel).toBe("#health-tool");
-    expect(health!.triggers.linear?.project_name).toBe("Health Tool");
+describe("Registry with DO backend", () => {
+  let mockOrchestrator: DurableObjectStub;
 
-    const bike = getProduct("bike-tool");
-    expect(bike).not.toBeNull();
-    expect(bike!.repos).toEqual(["fryanpan/bike-tool"]);
-
-    const pe = getProduct("product-engineer");
-    expect(pe).not.toBeNull();
-    expect(pe!.repos).toEqual(["fryanpan/product-engineer"]);
-    expect(pe!.slack_channel).toBe("#product-engineer");
-    expect(pe!.triggers.linear?.project_name).toBe("Product Engineer");
-
-    const aiProjectSupport = getProduct("ai-project-support");
-    expect(aiProjectSupport).not.toBeNull();
-    expect(aiProjectSupport!.repos).toEqual(["fryanpan/ai-project-support"]);
-    expect(aiProjectSupport!.slack_channel).toBe("#project-support");
-    expect(aiProjectSupport!.triggers.linear?.project_name).toBe("Project Support");
-
-    const blogAssistant = getProduct("blog-assistant");
-    expect(blogAssistant).not.toBeNull();
-    expect(blogAssistant!.repos).toEqual(["fryanpan/blog-assistant"]);
-    expect(blogAssistant!.slack_channel).toBe("#blog-assistant");
-    expect(blogAssistant!.triggers.linear?.project_name).toBe("Blog Assistant");
-
-    const givewellImpact = getProduct("givewell-impact");
-    expect(givewellImpact).not.toBeNull();
-    expect(givewellImpact!.repos).toEqual(["fryanpan/givewell-impact"]);
-    expect(givewellImpact!.slack_channel).toBe("#nonprofit-impact");
-    expect(givewellImpact!.triggers.linear?.project_name).toBe("Nonprofit Impact");
-
-    const personalFinance = getProduct("personal-finance");
-    expect(personalFinance).not.toBeNull();
-    expect(personalFinance!.repos).toEqual(["fryanpan/personal-finance"]);
-    expect(personalFinance!.slack_channel).toBe("#personal-finance");
-    expect(personalFinance!.triggers.linear?.project_name).toBe("Personal Finance");
+  beforeEach(() => {
+    // Clear cache before each test to ensure fresh data
+    clearRegistryCache();
+    mockOrchestrator = createMockOrchestratorStub(TEST_REGISTRY);
   });
 
-  it("returns null for unknown products", () => {
-    expect(getProduct("nonexistent")).toBeNull();
-    expect(getProduct("")).toBeNull();
-    expect(getProduct("HEALTH-TOOL")).toBeNull(); // case-sensitive
-  });
-});
+  describe("getProduct", () => {
+    it("returns correct config for known products", async () => {
+      const testApp = await getProduct(mockOrchestrator, "test-app");
+      expect(testApp).not.toBeNull();
+      expect(testApp!.repos).toEqual(["test-org/test-app"]);
+      expect(testApp!.slack_channel).toBe("#test-app");
+      expect(testApp!.triggers.linear?.project_name).toBe("Test App");
 
-describe("getProductByLinearProject", () => {
-  it("matches case-insensitively", () => {
-    const result1 = getProductByLinearProject("Health Tool");
-    expect(result1).not.toBeNull();
-    expect(result1!.name).toBe("health-tool");
-    expect(result1!.config.repos).toEqual(["fryanpan/health-tool"]);
+      const anotherApp = await getProduct(mockOrchestrator, "another-app");
+      expect(anotherApp).not.toBeNull();
+      expect(anotherApp!.repos).toEqual(["test-org/another-app"]);
+      expect(anotherApp!.slack_channel).toBe("#another-app");
+      expect(anotherApp!.triggers.linear?.project_name).toBe("Another App");
 
-    const result2 = getProductByLinearProject("health tool");
-    expect(result2).not.toBeNull();
-    expect(result2!.name).toBe("health-tool");
+      const multiRepo = await getProduct(mockOrchestrator, "multi-repo-app");
+      expect(multiRepo).not.toBeNull();
+      expect(multiRepo!.repos).toEqual(["test-org/frontend", "test-org/backend"]);
+    });
 
-    const result3 = getProductByLinearProject("HEALTH TOOL");
-    expect(result3).not.toBeNull();
-    expect(result3!.name).toBe("health-tool");
-
-    const result4 = getProductByLinearProject("bike tool");
-    expect(result4).not.toBeNull();
-    expect(result4!.name).toBe("bike-tool");
-
-    const result5 = getProductByLinearProject("Product Engineer");
-    expect(result5).not.toBeNull();
-    expect(result5!.name).toBe("product-engineer");
-
-    const result6 = getProductByLinearProject("Project Support");
-    expect(result6).not.toBeNull();
-    expect(result6!.name).toBe("ai-project-support");
-
-    const result7 = getProductByLinearProject("Blog Assistant");
-    expect(result7).not.toBeNull();
-    expect(result7!.name).toBe("blog-assistant");
-
-    const result8 = getProductByLinearProject("Nonprofit Impact");
-    expect(result8).not.toBeNull();
-    expect(result8!.name).toBe("givewell-impact");
-
-    const result9 = getProductByLinearProject("Personal Finance");
-    expect(result9).not.toBeNull();
-    expect(result9!.name).toBe("personal-finance");
+    it("returns null for unknown products", async () => {
+      expect(await getProduct(mockOrchestrator, "nonexistent")).toBeNull();
+      expect(await getProduct(mockOrchestrator, "")).toBeNull();
+      expect(await getProduct(mockOrchestrator, "TEST-APP")).toBeNull(); // case-sensitive
+    });
   });
 
-  it("returns null for unknown projects", () => {
-    expect(getProductByLinearProject("Unknown Project")).toBeNull();
-    expect(getProductByLinearProject("")).toBeNull();
-    expect(getProductByLinearProject("health-tool")).toBeNull(); // slug, not project name
-  });
-});
+  describe("getProductByLinearProject", () => {
+    it("matches case-insensitively", async () => {
+      const result1 = await getProductByLinearProject(mockOrchestrator, "Test App");
+      expect(result1).not.toBeNull();
+      expect(result1!.name).toBe("test-app");
+      expect(result1!.config.repos).toEqual(["test-org/test-app"]);
 
-describe("getProducts", () => {
-  it("returns all products", () => {
-    const products = getProducts();
-    expect(Object.keys(products)).toContain("health-tool");
-    expect(Object.keys(products)).toContain("bike-tool");
-    expect(Object.keys(products)).toContain("product-engineer");
-    expect(Object.keys(products)).toContain("ai-project-support");
-    expect(Object.keys(products)).toContain("blog-assistant");
-    expect(Object.keys(products)).toContain("givewell-impact");
-    expect(Object.keys(products)).toContain("personal-finance");
-    expect(products["health-tool"].slack_channel).toBe("#health-tool");
-    expect(products["bike-tool"].slack_channel).toBe("#bike-tool");
-    expect(products["product-engineer"].slack_channel).toBe("#product-engineer");
-    expect(products["ai-project-support"].slack_channel).toBe("#project-support");
-    expect(products["blog-assistant"].slack_channel).toBe("#blog-assistant");
-    expect(products["givewell-impact"].slack_channel).toBe("#nonprofit-impact");
-    expect(products["personal-finance"].slack_channel).toBe("#personal-finance");
-  });
-});
+      const result2 = await getProductByLinearProject(mockOrchestrator, "test app");
+      expect(result2).not.toBeNull();
+      expect(result2!.name).toBe("test-app");
 
-describe("getAgentIdentity", () => {
-  it("returns configured agent identity", () => {
-    const identity = getAgentIdentity();
-    expect(identity.linear_email).toBe("bcagent13@gmail.com");
-    expect(identity.linear_name).toBe("BC Agent");
-  });
-});
+      const result3 = await getProductByLinearProject(mockOrchestrator, "TEST APP");
+      expect(result3).not.toBeNull();
+      expect(result3!.name).toBe("test-app");
 
-describe("isOurTeam", () => {
-  it("returns true for Team Bryan's ID", () => {
-    const registry = loadRegistry();
-    expect(isOurTeam(registry.linear_team_id)).toBe(true);
-    expect(isOurTeam("01328a7f-d761-4176-8bbf-004a397dc6f7")).toBe(true);
+      const result4 = await getProductByLinearProject(mockOrchestrator, "another app");
+      expect(result4).not.toBeNull();
+      expect(result4!.name).toBe("another-app");
+
+      const result5 = await getProductByLinearProject(mockOrchestrator, "Multi Repo");
+      expect(result5).not.toBeNull();
+      expect(result5!.name).toBe("multi-repo-app");
+    });
+
+    it("returns null for unknown projects", async () => {
+      expect(await getProductByLinearProject(mockOrchestrator, "Unknown Project")).toBeNull();
+      expect(await getProductByLinearProject(mockOrchestrator, "")).toBeNull();
+      expect(await getProductByLinearProject(mockOrchestrator, "test-app")).toBeNull(); // slug, not project name
+    });
   });
 
-  it("returns false for other team IDs", () => {
-    expect(isOurTeam("00000000-0000-0000-0000-000000000000")).toBe(false);
-    expect(isOurTeam("")).toBe(false);
-    expect(isOurTeam("random-id")).toBe(false);
+  describe("getProducts", () => {
+    it("returns all products", async () => {
+      const products = await getProducts(mockOrchestrator);
+      expect(Object.keys(products)).toContain("test-app");
+      expect(Object.keys(products)).toContain("another-app");
+      expect(Object.keys(products)).toContain("multi-repo-app");
+      expect(products["test-app"].slack_channel).toBe("#test-app");
+      expect(products["another-app"].slack_channel).toBe("#another-app");
+      expect(products["multi-repo-app"].slack_channel).toBe("#multi-repo");
+    });
   });
-});
 
-describe("getAIGatewayConfig", () => {
-  it("returns null or valid config object", () => {
-    const config = getAIGatewayConfig();
+  describe("getAgentIdentity", () => {
+    it("returns configured agent identity", async () => {
+      const identity = await getAgentIdentity(mockOrchestrator);
+      expect(identity.linear_email).toBe("agent@example.com");
+      expect(identity.linear_name).toBe("Test Agent");
+    });
+  });
 
-    // Registry.json may or may not have cloudflare_ai_gateway configured
-    if (config === null) {
+  describe("isOurTeam", () => {
+    it("returns true for our team ID", async () => {
+      const registry = await loadRegistry(mockOrchestrator);
+      expect(await isOurTeam(mockOrchestrator, registry.linear_team_id)).toBe(true);
+      expect(await isOurTeam(mockOrchestrator, "00000000-0000-0000-0000-000000000001")).toBe(true);
+    });
+
+    it("returns false for other team IDs", async () => {
+      expect(await isOurTeam(mockOrchestrator, "00000000-0000-0000-0000-000000000000")).toBe(false);
+      expect(await isOurTeam(mockOrchestrator, "")).toBe(false);
+      expect(await isOurTeam(mockOrchestrator, "random-id")).toBe(false);
+    });
+  });
+
+  describe("getAIGatewayConfig", () => {
+    it("returns null when not configured", async () => {
+      const config = await getAIGatewayConfig(mockOrchestrator);
       expect(config).toBeNull();
-    } else {
-      // If configured, should have required fields
-      expect(typeof config).toBe("object");
-      expect(typeof config.account_id).toBe("string");
-      expect(typeof config.gateway_id).toBe("string");
-      expect(config.account_id.length).toBeGreaterThan(0);
-      expect(config.gateway_id.length).toBeGreaterThan(0);
-    }
+    });
+
+    it("returns config when configured", async () => {
+      const registryWithGateway = {
+        ...TEST_REGISTRY,
+        cloudflare_ai_gateway: {
+          account_id: "test-account-id",
+          gateway_id: "test-gateway-id",
+        },
+      };
+
+      const mockWithGateway = createMockOrchestratorStub(registryWithGateway);
+      clearRegistryCache();
+
+      const config = await getAIGatewayConfig(mockWithGateway);
+      expect(config).not.toBeNull();
+      expect(config!.account_id).toBe("test-account-id");
+      expect(config!.gateway_id).toBe("test-gateway-id");
+    });
+  });
+
+  describe("caching", () => {
+    it("caches registry after first load", async () => {
+      // First call loads from DO
+      const registry1 = await loadRegistry(mockOrchestrator);
+
+      // Second call should return cached version (same object reference)
+      const registry2 = await loadRegistry(mockOrchestrator);
+
+      expect(registry1).toBe(registry2);
+    });
+
+    it("clears cache when clearRegistryCache is called", async () => {
+      const registry1 = await loadRegistry(mockOrchestrator);
+
+      clearRegistryCache();
+
+      const registry2 = await loadRegistry(mockOrchestrator);
+
+      // Should be different object references after cache clear
+      expect(registry1).not.toBe(registry2);
+      // But content should be the same
+      expect(registry1.linear_team_id).toBe(registry2.linear_team_id);
+    });
   });
 });

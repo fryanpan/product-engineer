@@ -1,24 +1,26 @@
 import { describe, test, expect } from "bun:test";
 import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
+import { TEST_REGISTRY } from "./test-helpers";
+import type { ProductConfig } from "./registry";
 
 describe("buildTicketEvent", () => {
   test("creates event from Linear webhook data", () => {
     const event = buildTicketEvent("linear", "ticket_created", {
       id: "LIN-123",
-      product: "health-tool",
+      product: "test-app",
       title: "Fix login",
       description: "Login is broken",
     });
     expect(event.type).toBe("ticket_created");
     expect(event.source).toBe("linear");
     expect(event.ticketId).toBe("LIN-123");
-    expect(event.product).toBe("health-tool");
+    expect(event.product).toBe("test-app");
   });
 
   test("creates event from GitHub PR review", () => {
     const event = buildTicketEvent("github", "pr_review", {
       ticketId: "LIN-123",
-      product: "health-tool",
+      product: "test-app",
       review: { state: "changes_requested", body: "Fix the types" },
     });
     expect(event.type).toBe("pr_review");
@@ -27,7 +29,7 @@ describe("buildTicketEvent", () => {
 
   test("creates event from Slack mention", () => {
     const event = buildTicketEvent("slack", "slack_mention", {
-      product: "health-tool",
+      product: "test-app",
       text: "fix the login bug",
       user: "U12345",
       channel: "C12345",
@@ -40,43 +42,40 @@ describe("buildTicketEvent", () => {
 
   test("includes channel in Slack event", () => {
     const event = buildTicketEvent("slack", "slack_mention", {
-      product: "health-tool",
+      product: "test-app",
       text: "deploy to prod",
-      channel: "C0AHQK8LB34",
+      channel: "C000000APP1",
       threadTs: "1234567890.999999",
     });
-    expect(event.slackChannel).toBe("C0AHQK8LB34");
+    expect(event.slackChannel).toBe("C000000APP1");
     expect(event.slackThreadTs).toBe("1234567890.999999");
   });
 });
 
 describe("resolveProductFromChannel", () => {
-  test("returns product name when channel ID matches health-tool", () => {
-    expect(resolveProductFromChannel("C0AHQK8LB34")).toBe("health-tool");
+  const products = TEST_REGISTRY.products as Record<string, ProductConfig>;
+
+  test("returns product name when channel ID matches", () => {
+    expect(resolveProductFromChannel(products, "C000000APP1")).toBe("test-app");
+    expect(resolveProductFromChannel(products, "C000000APP2")).toBe("another-app");
   });
 
-  test("returns product name when channel ID matches bike-tool", () => {
-    expect(resolveProductFromChannel("C0AHVFLB15G")).toBe("bike-tool");
-  });
-
-  test("returns product name when channel name matches health-tool", () => {
-    expect(resolveProductFromChannel("#health-tool")).toBe("health-tool");
-  });
-
-  test("returns product name when channel name matches bike-tool", () => {
-    expect(resolveProductFromChannel("#bike-tool")).toBe("bike-tool");
+  test("returns product name when channel name matches", () => {
+    expect(resolveProductFromChannel(products, "#test-app")).toBe("test-app");
+    expect(resolveProductFromChannel(products, "#another-app")).toBe("another-app");
+    expect(resolveProductFromChannel(products, "#multi-repo")).toBe("multi-repo-app");
   });
 
   test("returns null for unknown channel ID", () => {
-    expect(resolveProductFromChannel("C9999999999")).toBeNull();
+    expect(resolveProductFromChannel(products, "C9999999999")).toBeNull();
   });
 
   test("returns null for unknown channel name", () => {
-    expect(resolveProductFromChannel("#nonexistent")).toBeNull();
+    expect(resolveProductFromChannel(products, "#nonexistent")).toBeNull();
   });
 
   test("returns null for empty string", () => {
-    expect(resolveProductFromChannel("")).toBeNull();
+    expect(resolveProductFromChannel(products, "")).toBeNull();
   });
 });
 

@@ -1,13 +1,13 @@
 import { Container } from "@cloudflare/containers";
 import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
-import { getAIGatewayConfig } from "./registry";
+import type { CloudflareAIGateway } from "./registry";
 
 // Pure helper — exported for testing
-// gatewayConfig is optional for testing — defaults to registry lookup
+// gatewayConfig is optional — pass null to disable, pass config to enable
 export function resolveAgentEnvVars(
   config: TicketAgentConfig,
   env: Record<string, string>,
-  gatewayConfig?: ReturnType<typeof getAIGatewayConfig>,
+  gatewayConfig?: CloudflareAIGateway | null,
 ): Record<string, string> {
   const vars: Record<string, string> = {
     PRODUCT: config.product,
@@ -40,9 +40,9 @@ export function resolveAgentEnvVars(
   // Cloudflare AI Gateway — route all Anthropic API traffic through gateway
   // The Agent SDK reads ANTHROPIC_BASE_URL automatically to proxy all requests
   // See docs/cloudflare-ai-gateway.md for setup and analytics features
-  const gateway = gatewayConfig ?? getAIGatewayConfig();
-  if (gateway) {
-    vars.ANTHROPIC_BASE_URL = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(gateway.account_id)}/${encodeURIComponent(gateway.gateway_id)}/anthropic`;
+  // gatewayConfig is loaded from registry by caller and passed in
+  if (gatewayConfig) {
+    vars.ANTHROPIC_BASE_URL = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(gatewayConfig.account_id)}/${encodeURIComponent(gatewayConfig.gateway_id)}/anthropic`;
   }
 
   return vars;

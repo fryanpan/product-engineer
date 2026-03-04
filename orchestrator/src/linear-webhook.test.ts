@@ -2,16 +2,33 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import { Hono } from "hono";
 import { linearWebhook } from "./webhooks";
 import type { Bindings } from "./types";
+import { createMockOrchestratorStub, TEST_REGISTRY, type MockRegistryData } from "./test-helpers";
+import { clearRegistryCache } from "./registry";
 
-// Mock orchestrator DO that captures events sent to it
+// Mock orchestrator DO that captures events sent to it AND serves registry data
 let sentEvents: unknown[] = [];
-const mockOrchestratorStub = {
-  fetch: async (req: Request) => {
-    const body = await req.json();
-    sentEvents.push(body);
-    return Response.json({ ok: true });
-  },
-};
+
+function createMockOrchestratorWithEvents(registryData: MockRegistryData) {
+  const baseStub = createMockOrchestratorStub(registryData);
+
+  return {
+    fetch: async (req: Request) => {
+      const url = new URL(req.url);
+
+      // Handle event forwarding
+      if (url.pathname === "/event") {
+        const body = await req.json();
+        sentEvents.push(body);
+        return Response.json({ ok: true });
+      }
+
+      // Delegate to base stub for registry lookups
+      return baseStub.fetch(req);
+    },
+  } as unknown as DurableObjectStub;
+}
+
+let mockOrchestratorStub: DurableObjectStub;
 
 const mockOrchestratorNamespace = {
   idFromName: (_name: string) => "mock-id",
@@ -79,6 +96,8 @@ async function postWebhook(app: ReturnType<typeof makeApp>, body: unknown, env: 
 describe("linear webhook handler", () => {
   beforeEach(() => {
     sentEvents = [];
+    clearRegistryCache();
+    mockOrchestratorStub = createMockOrchestratorWithEvents(TEST_REGISTRY);
   });
 
   it("ignores non-Issue events", async () => {
@@ -92,7 +111,7 @@ describe("linear webhook handler", () => {
         title: "test",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        teamId: TEST_REGISTRY.linear_team_id,
       },
     }, env);
 
@@ -114,7 +133,7 @@ describe("linear webhook handler", () => {
         description: "",
         priority: 1,
         teamId: "unknown-team-id",
-        project: { id: "p1", name: "Health Tool" },
+        project: { id: "p1", name: "Test App" },
       },
     }, env);
 
@@ -136,7 +155,7 @@ describe("linear webhook handler", () => {
         title: "test",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        teamId: TEST_REGISTRY.linear_team_id,
         // no project field
       },
     }, env);
@@ -160,17 +179,17 @@ describe("linear webhook handler", () => {
         title: "Fix the login bug",
         description: "Users cannot log in",
         priority: 2,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        teamId: TEST_REGISTRY.linear_team_id,
         labelIds: ["label-a"],
-        project: { id: "p1", name: "Health Tool" },
+        project: { id: "p1", name: "Test App" },
       },
     }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.product).toBe("health-tool");
-    expect(json.project).toBe("Health Tool");
+    expect(json.product).toBe("test-app");
+    expect(json.project).toBe("Test App");
     expect(json.ticketId).toBe("issue-123");
 
     expect(sentEvents).toHaveLength(1);
@@ -178,7 +197,7 @@ describe("linear webhook handler", () => {
     expect(event.type).toBe("ticket_created");
     expect(event.source).toBe("linear");
     expect(event.ticketId).toBe("issue-123");
-    expect(event.product).toBe("health-tool");
+    expect(event.product).toBe("test-app");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.id).toBe("issue-123");
     expect(payload.identifier).toBe("HT-42");
@@ -198,16 +217,16 @@ describe("linear webhook handler", () => {
         title: "Another issue",
         description: "Test without identifier",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        teamId: TEST_REGISTRY.linear_team_id,
         labelIds: [],
-        project: { id: "p1", name: "Health Tool" },
+        project: { id: "p1", name: "Test App" },
       },
     }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.product).toBe("health-tool");
+    expect(json.product).toBe("test-app");
 
     expect(sentEvents).toHaveLength(1);
     const event = sentEvents[0] as Record<string, unknown>;
@@ -232,8 +251,8 @@ describe("linear webhook handler", () => {
         title: "Progress issue",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
         state: { name: "In Progress" },
       },
     }, env);
@@ -253,8 +272,8 @@ describe("linear webhook handler", () => {
         title: "Done issue",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
         state: { name: "Done" },
       },
     }, env);
@@ -274,8 +293,8 @@ describe("linear webhook handler", () => {
         title: "Removed issue",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
       },
     }, env);
 
@@ -296,16 +315,16 @@ describe("linear webhook handler", () => {
         title: "Assigned to agent",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
-        assignee: { id: "user-1", name: "BC Agent", email: "bcagent13@gmail.com" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
+        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
       },
     }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.product).toBe("health-tool");
+    expect(json.product).toBe("test-app");
     expect(sentEvents).toHaveLength(1);
   });
 
@@ -320,16 +339,16 @@ describe("linear webhook handler", () => {
         title: "Assigned by name",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
-        assignee: { id: "user-1", name: "BC Agent" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
+        assignee: { id: "user-1", name: "Test Agent" },
       },
     }, env);
 
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.product).toBe("health-tool");
+    expect(json.product).toBe("test-app");
     expect(sentEvents).toHaveLength(1);
   });
 
@@ -344,8 +363,8 @@ describe("linear webhook handler", () => {
         title: "Assigned to someone else",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
         assignee: { id: "user-2", name: "Someone Else", email: "other@example.com" },
       },
     }, env);
@@ -370,10 +389,10 @@ describe("linear webhook handler", () => {
         title: "Completed task",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
         state: { name: "Done" },
-        assignee: { id: "user-1", name: "BC Agent", email: "bcagent13@gmail.com" },
+        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
       },
     }, env);
 
@@ -392,10 +411,10 @@ describe("linear webhook handler", () => {
         title: "Canceled task",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
-        project: { id: "p1", name: "Health Tool" },
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
         state: { name: "Canceled" },
-        assignee: { id: "user-1", name: "BC Agent", email: "bcagent13@gmail.com" },
+        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
       },
     }, env);
 
@@ -417,7 +436,7 @@ describe("linear webhook handler", () => {
         title: "Unknown project issue",
         description: "",
         priority: 1,
-        teamId: "01328a7f-d761-4176-8bbf-004a397dc6f7",
+        teamId: TEST_REGISTRY.linear_team_id,
         project: { id: "p99", name: "Unknown Product" },
       },
     }, env);
