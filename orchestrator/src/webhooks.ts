@@ -100,7 +100,7 @@ interface LinearWebhookPayload {
   type: string;
   data: {
     id: string;
-    identifier: string;
+    identifier?: string | null;
     title: string;
     description: string;
     priority: number;
