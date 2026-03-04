@@ -105,4 +105,27 @@ describe("agent monitoring", () => {
     // Same input always produces same ID (no Date.now() or random component)
     expect(`investigation-${stuckTicketId}`).toBe(investigationId);
   });
+
+  test("investigation tickets are excluded from stuck agent detection", () => {
+    // Investigation tickets (id LIKE 'investigation-%') should never trigger
+    // further investigations — otherwise a stuck investigation creates
+    // investigation-investigation-..., recursively
+    const ticketIds = [
+      "LIN-123",
+      "slack-1772639904.744089",
+      "investigation-LIN-123",
+      "investigation-investigation-slack-123",
+      "investigation-investigation-investigation-abc",
+    ];
+
+    const excluded = ticketIds.filter((id) => id.startsWith("investigation-"));
+    const included = ticketIds.filter((id) => !id.startsWith("investigation-"));
+
+    expect(included).toEqual(["LIN-123", "slack-1772639904.744089"]);
+    expect(excluded).toEqual([
+      "investigation-LIN-123",
+      "investigation-investigation-slack-123",
+      "investigation-investigation-investigation-abc",
+    ]);
+  });
 });

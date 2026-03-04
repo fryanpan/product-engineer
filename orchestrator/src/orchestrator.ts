@@ -340,6 +340,7 @@ export class Orchestrator extends Container<Bindings> {
       `SELECT id, product, status, last_heartbeat, slack_thread_ts, slack_channel, created_at
        FROM tickets
        WHERE agent_active = 1
+         AND id NOT LIKE 'investigation-%'
          AND last_heartbeat IS NOT NULL
          AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > ?`,
       stuckThreshold,
