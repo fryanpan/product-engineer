@@ -24,10 +24,16 @@ export interface AgentIdentity {
   linear_name: string;
 }
 
+export interface CloudflareAIGateway {
+  account_id: string;
+  gateway_id: string;
+}
+
 export interface Registry {
   linear_team_id: string;
   agent_linear_email: string;
   agent_linear_name: string;
+  cloudflare_ai_gateway?: CloudflareAIGateway;
   products: Record<string, ProductConfig>;
 }
 
@@ -69,4 +75,8 @@ export function getAgentIdentity(): AgentIdentity {
     linear_email: registry.agent_linear_email,
     linear_name: registry.agent_linear_name,
   };
+}
+
+export function getAIGatewayConfig(): CloudflareAIGateway | null {
+  return registry.cloudflare_ai_gateway || null;
 }

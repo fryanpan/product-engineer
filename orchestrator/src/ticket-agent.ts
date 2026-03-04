@@ -1,10 +1,13 @@
 import { Container } from "@cloudflare/containers";
 import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
+import { getAIGatewayConfig } from "./registry";
 
 // Pure helper — exported for testing
+// gatewayConfig is optional for testing — defaults to registry lookup
 export function resolveAgentEnvVars(
   config: TicketAgentConfig,
   env: Record<string, string>,
+  gatewayConfig?: ReturnType<typeof getAIGatewayConfig>,
 ): Record<string, string> {
   const vars: Record<string, string> = {
     PRODUCT: config.product,
@@ -32,6 +35,14 @@ export function resolveAgentEnvVars(
   // gh CLI reads GH_TOKEN for headless auth
   if (vars.GITHUB_TOKEN) {
     vars.GH_TOKEN = vars.GITHUB_TOKEN;
+  }
+
+  // Cloudflare AI Gateway — route all Anthropic API traffic through gateway
+  // The Agent SDK reads ANTHROPIC_BASE_URL automatically to proxy all requests
+  // See docs/cloudflare-ai-gateway.md for setup and analytics features
+  const gateway = gatewayConfig ?? getAIGatewayConfig();
+  if (gateway) {
+    vars.ANTHROPIC_BASE_URL = `https://gateway.ai.cloudflare.com/v1/${gateway.account_id}/${gateway.gateway_id}/anthropic`;
   }
 
   return vars;

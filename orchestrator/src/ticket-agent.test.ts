@@ -98,3 +98,59 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.GITHUB_TOKEN).toBe("");
   });
 });
+
+describe("resolveAgentEnvVars - AI Gateway", () => {
+  test("sets ANTHROPIC_BASE_URL when AI Gateway is configured", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {},
+    };
+    const env = {} as Record<string, string>;
+    const gatewayConfig = {
+      account_id: "abc123def456",
+      gateway_id: "pe-gateway",
+    };
+
+    const vars = resolveAgentEnvVars(config, env, gatewayConfig);
+    expect(vars.ANTHROPIC_BASE_URL).toBe(
+      "https://gateway.ai.cloudflare.com/v1/abc123def456/pe-gateway/anthropic"
+    );
+  });
+
+  test("does not set ANTHROPIC_BASE_URL when AI Gateway is not configured", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {},
+    };
+    const env = {} as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env, null);
+    expect(vars.ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
+  test("formats gateway URL correctly with special characters", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {},
+    };
+    const env = {} as Record<string, string>;
+    const gatewayConfig = {
+      account_id: "12345-abcde-67890",
+      gateway_id: "prod-gateway-v2",
+    };
+
+    const vars = resolveAgentEnvVars(config, env, gatewayConfig);
+    expect(vars.ANTHROPIC_BASE_URL).toBe(
+      "https://gateway.ai.cloudflare.com/v1/12345-abcde-67890/prod-gateway-v2/anthropic"
+    );
+  });
+});

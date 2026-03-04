@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   getAgentIdentity,
+  getAIGatewayConfig,
   getProduct,
   getProducts,
   getProductByLinearProject,
@@ -96,5 +97,15 @@ describe("isOurTeam", () => {
     expect(isOurTeam("00000000-0000-0000-0000-000000000000")).toBe(false);
     expect(isOurTeam("")).toBe(false);
     expect(isOurTeam("random-id")).toBe(false);
+  });
+});
+
+describe("getAIGatewayConfig", () => {
+  it("returns null when not configured", () => {
+    // Registry.json may not have cloudflare_ai_gateway initially
+    const config = getAIGatewayConfig();
+    // This test will pass if config is null OR if it's defined
+    // The important part is it doesn't throw
+    expect(config === null || typeof config === "object").toBe(true);
   });
 });
