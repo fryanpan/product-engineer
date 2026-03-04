@@ -109,6 +109,21 @@ app.post("/api/internal/status", async (c) => {
   }));
 });
 
+// Internal: heartbeat from agent containers
+app.post("/api/orchestrator/heartbeat", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/heartbeat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
 app.get("/api/orchestrator/tickets", async (c) => {
   const apiKey = c.req.header("X-API-Key");
   if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
@@ -139,7 +154,16 @@ export default Sentry.withSentry(
   (env: Bindings) => ({ dsn: env.SENTRY_DSN }),
   {
     fetch: app.fetch,
-    // No-op: absorbs any lingering cron triggers during rollout transitions
-    async scheduled() {},
+    async scheduled(_controller, env: Bindings, _ctx) {
+      console.log("[Worker] Running scheduled agent health check");
+      try {
+        const orchestrator = getOrchestrator(env);
+        const response = await orchestrator.fetch(new Request("http://internal/check-health"));
+        const result = await response.json<{ ok: boolean; stuck_agents: unknown[] }>();
+        console.log(`[Worker] Health check complete: ${result.stuck_agents.length} stuck agents found`);
+      } catch (err) {
+        console.error("[Worker] Health check failed:", err);
+      }
+    },
   },
 );

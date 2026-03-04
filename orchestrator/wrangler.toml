@@ -29,6 +29,10 @@ bindings = [
 [vars]
 WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
 
+# Health check cron: runs every 10 minutes to detect stuck agents
+[triggers]
+crons = ["*/10 * * * *"]
+
 # v1 was the original queue-based architecture (now replaced)
 [[migrations]]
 tag = "v1"

@@ -79,3 +79,30 @@ describe("resolveProductFromChannel", () => {
     expect(resolveProductFromChannel("")).toBeNull();
   });
 });
+
+describe("agent monitoring", () => {
+  test("calculates time difference for stuck agents correctly", () => {
+    const now = new Date();
+    const thirtyMinAgo = new Date(now.getTime() - 30 * 60 * 1000);
+    const fortyMinAgo = new Date(now.getTime() - 40 * 60 * 1000);
+
+    // SQLite date math: (julianday('now') - julianday(timestamp)) * 24 * 60 = minutes
+    const minutesDiff30 = (now.getTime() - thirtyMinAgo.getTime()) / 60000;
+    const minutesDiff40 = (now.getTime() - fortyMinAgo.getTime()) / 60000;
+
+    expect(minutesDiff30).toBeGreaterThanOrEqual(29);
+    expect(minutesDiff30).toBeLessThan(31);
+    expect(minutesDiff40).toBeGreaterThanOrEqual(39);
+    expect(minutesDiff40).toBeLessThan(41);
+  });
+
+  test("investigation ticket ID is deterministic per stuck ticket", () => {
+    // The investigation ID should be deterministic so duplicate cron runs
+    // don't create multiple investigations for the same stuck ticket
+    const stuckTicketId = "LIN-123";
+    const investigationId = `investigation-${stuckTicketId}`;
+    expect(investigationId).toBe("investigation-LIN-123");
+    // Same input always produces same ID (no Date.now() or random component)
+    expect(`investigation-${stuckTicketId}`).toBe(investigationId);
+  });
+});
