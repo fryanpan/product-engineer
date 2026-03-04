@@ -54,7 +54,7 @@ export class Orchestrator extends Container<Bindings> {
       SLACK_APP_TOKEN: (env as any).SLACK_APP_TOKEN,
       SLACK_BOT_TOKEN: (env as any).SLACK_BOT_TOKEN,
       SENTRY_DSN: (env as any).SENTRY_DSN || "",
-      WORKER_URL: (env as any).WORKER_URL || (() => { console.error("[Orchestrator] WORKER_URL not configured — set it in wrangler.toml [vars]"); return ""; })(),
+      WORKER_URL: (env as any).WORKER_URL || (() => { console.error("[Orchestrator] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
     };
   }
 

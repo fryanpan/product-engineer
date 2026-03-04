@@ -114,11 +114,10 @@ Merging to `main` triggers automatic deployment via GitHub Actions (`.github/wor
 npx wrangler r2 bucket create product-engineer-transcripts
 ```
 
-For manual deployment (ticket-agent must deploy first — orchestrator depends on it):
+For manual deployment:
 
 ```bash
-cd ticket-agent && npx wrangler deploy
-cd ../orchestrator && npx wrangler deploy
+cd orchestrator && npx wrangler deploy
 ```
 
 ## Development
