@@ -2,38 +2,74 @@
 
 Autonomous agent that turns tickets into shipped code.
 
-## The Problem
+## Goal
 
-For small teams, the bottleneck isn't coding — it's the coordination overhead around it. Every ticket requires context-switching into a repo, understanding the codebase, implementing, testing, creating a PR, and communicating progress. Most of that loop doesn't require human judgment.
+A product engineer agent that turns tickets, feedback, and natural language requests into shipped code — with human involvement only at the moments when it matters.
 
-## What This Does
+- **Minutes** from request to delivered value for simple changes
+- **< 1 hour** for complex multi-file features
+- **Hands-on time** limited to moments requiring human judgment
 
-- **Linear ticket, Slack mention, or feedback** triggers an autonomous agent
-- **Agent** clones the repo, reads its `CLAUDE.md` + skills, implements the change, and opens a PR
-- **Minutes** for simple changes, **under an hour** for complex features — human involvement only when it matters
+## Key Outcomes
+
+1. **Accessible to non-technical users** — Linear ticket, Slack message, or feedback widget triggers the agent. No CLI, no git, no infrastructure knowledge required.
+2. **Streamlined value delivery** — Full Claude Code power (web search, subagents, skills). Human feedback via Slack threads at exactly the moments it's needed.
+3. **Scalable beyond one machine** — Cloudflare Containers run dozens of agents in parallel. Each repo has its own agent config (`CLAUDE.md` + skills).
+4. **Layered security** — Ephemeral containers destroyed after each task. CI as ratchet. Streaming input for ambiguous requirements.
 
 Built on [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-sdk) + [Cloudflare Workers & Containers](https://developers.cloudflare.com/containers/).
 
 ## How It Works
 
-```
-Webhooks (Linear, GitHub)     Slack Socket Mode
-         |                            |
-         v                            v
-Worker (stateless) --> Orchestrator DO (singleton, always-on)
-                         | SQLite: tickets, metadata
-                         |
-         +---------------------------------+
-         |               |               |
-         v               v               v
-   TicketAgent #1   TicketAgent #2   TicketAgent #3
-   (per-ticket)     (per-ticket)     (per-ticket)
+```mermaid
+graph TD
+    subgraph Triggers
+        Linear["Linear Webhooks"]
+        GitHub["GitHub Webhooks"]
+        Slack["Slack Socket Mode\n(persistent container)"]
+    end
+
+    subgraph Cloudflare
+        Worker["Worker\n(stateless)"]
+        Orch["Orchestrator DO\n(singleton)"]
+        DB[("SQLite")]
+        R2["R2\n(transcripts)"]
+    end
+
+    subgraph Per-Ticket Containers
+        TA1["TicketAgent #1"]
+        TA2["TicketAgent #2"]
+        TA3["TicketAgent #3"]
+    end
+
+    subgraph External
+        Gateway["CF AI Gateway\n(monitoring + cost tracking)"]
+        Anthropic["Anthropic API"]
+        SlackAPI["Slack API"]
+        GitHubAPI["GitHub API"]
+    end
+
+    Linear -->|HMAC-verified| Worker
+    GitHub -->|signature-verified| Worker
+    Slack -->|WebSocket| Worker
+
+    Worker --> Orch
+    Orch --- DB
+    Orch --> TA1 & TA2 & TA3
+
+    TA1 & TA2 & TA3 -->|status + heartbeats| Worker
+    TA1 & TA2 & TA3 --> Gateway --> Anthropic
+    TA1 & TA2 & TA3 --> R2
+    TA1 & TA2 & TA3 --> SlackAPI
+    TA1 & TA2 & TA3 --> GitHubAPI
 ```
 
 1. **Triggers** arrive via Linear webhooks, GitHub webhooks, or Slack `@product-engineer` mentions
 2. **Orchestrator** (Durable Object) routes each event to a per-ticket agent container
 3. **Agent** clones the product repo, loads its `CLAUDE.md` + skill files, implements the task, and creates a PR
 4. **Communication** happens in Slack threads — the agent posts progress and asks clarifying questions when needed
+5. **All LLM traffic** routes through [Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md) for monitoring, cost tracking, and error visibility
+6. **Transcripts** are stored in R2 for debugging and audit
 
 ## Design Philosophy
 
