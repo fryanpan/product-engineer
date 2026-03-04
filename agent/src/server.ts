@@ -287,8 +287,11 @@ async function startSession(initialPrompt: string) {
   // messageYielder is now assigned — safe to mark session active
   sessionActive = true;
 
-  // Only queue initial prompt if starting fresh (not resuming)
-  if (!isResuming) {
+  if (isResuming) {
+    // When resuming, tell the agent to continue where it left off
+    messageYielder!(userMessage("Your container was restarted during a deploy. Please continue where you left off. Check your previous work (git status, git log) and resume the task."));
+    console.log("[Agent] Resume continuation prompt queued");
+  } else {
     messageYielder!(userMessage(initialPrompt));
     console.log(`[Agent] Initial prompt queued (${initialPrompt.length} chars)`);
   }
@@ -323,10 +326,10 @@ async function startSession(initialPrompt: string) {
     },
   };
 
-  // Add resume parameter if we found an existing session
-  // Note: The Agent SDK resume feature requires the session ID, not the filename
-  // For now, we'll rely on the SDK automatically finding sessions in ~/.claude/projects/
-  // If resuming doesn't work automatically, we may need to extract the session ID from the filename
+  // Resume the most recent session if we found existing session files
+  if (isResuming) {
+    queryOptions.continue = true;
+  }
 
   const session = query({
     prompt: messages,

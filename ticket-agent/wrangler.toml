@@ -18,6 +18,9 @@ bindings = [
   { name = "TICKET_AGENT", class_name = "TicketAgent" }
 ]
 
-# Note: Variables are NOT needed in this worker — the orchestrator worker
-# passes all config via /initialize when spawning agents.
-# Secrets are bound at container start time via envVars.
+[vars]
+WORKER_URL = "https://product-engineer.fryanpan.workers.dev"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TicketAgent"]

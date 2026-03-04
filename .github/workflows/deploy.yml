@@ -26,6 +26,9 @@ jobs:
           cd orchestrator && bun test
           cd ../agent && bun test
 
+      - name: Typecheck ticket-agent
+        run: cd ticket-agent && npx tsc --noEmit
+
   deploy-orchestrator:
     needs: test
     runs-on: ubuntu-latest
@@ -46,6 +49,11 @@ jobs:
   deploy-ticket-agent:
     needs: test
     runs-on: ubuntu-latest
+    # Only deploy ticket-agent when its code or the shared agent code changes
+    if: |
+      contains(github.event.head_commit.message, 'ticket-agent') ||
+      contains(github.event.head_commit.message, 'agent/') ||
+      contains(github.event.head_commit.message, 'TicketAgent')
     steps:
       - uses: actions/checkout@v4
 
