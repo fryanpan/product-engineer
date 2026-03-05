@@ -51,12 +51,17 @@ Examples: database schema changes, API contract changes, deleting data, force pu
     - **Low risk** (auto-merge): CSS, text, layout, docs, tests, config
     - **High risk** (request review): data model, auth, APIs, security, dependencies
 13. Notify Slack with the PR link and risk assessment.
-14. **For low-risk PRs**:
-    - Run `/task-retro` to reflect and take actions
-    - After completing retro actions, merge the PR
+14. **Decide whether to auto-merge or request review:**
+    - **Auto-merge** if ALL of these are true:
+      - Risk is low (CSS, text, layout, docs, tests, config)
+      - Changes are self-contained and well-tested
+      - No architectural or behavioral changes
+    - **Request review** otherwise (high risk, unclear impact, or you're uncertain)
+15. **If auto-merging:**
+    - Run `/task-retro` to reflect, take actions, and post to Slack
+    - After completing retro, merge the PR
     - Update status to `merged`
-    - Post retro to Slack
-15. **For high-risk PRs, stay alive for review:**
+16. **If requesting review, stay alive:**
     - Remain active for up to 1 hour after PR creation
     - You'll receive GitHub review comments automatically
     - You'll receive Slack messages if the user responds
@@ -86,10 +91,11 @@ Examples: database schema changes, API contract changes, deleting data, force pu
 
 1. Update status to `merged`
 2. Notify Slack: "PR merged successfully"
-3. **Run `/task-retro`**: Follow the task-retro skill to:
+3. **Run `/task-retro` (if not already done)**: Follow the task-retro skill to:
    - Reflect on what worked and what didn't
    - **Take concrete actions** (update learnings, fix issues, create tickets, etc.)
    - Post retro to Slack with actions taken
+   - Note: If you auto-merged a low-risk PR, you already did this before merging — don't duplicate it
 4. Only after completing the retro and taking actions, consider the task complete
 
 ### On receiving a CI failure
