@@ -44,6 +44,39 @@ export function extractTaskId(branch: string): string | null {
   return branch.match(/^(?:feedback|ticket)\/(.+)$/)?.[1] ?? null;
 }
 
+// Helper to reduce repetition across webhook handlers
+async function routeWebhookEvent(
+  env: Bindings,
+  branch: string | undefined,
+  repo: string,
+  eventData: { type: string; payload: Record<string, unknown> },
+): Promise<Response> {
+  if (!branch) {
+    return Response.json({ ok: true, ignored: true, reason: "no branch" });
+  }
+
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, repo);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: eventData.type,
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: { ...eventData.payload, branch, repo },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId });
+}
+
 export async function resolveProductByRepo(
   orchestratorStub: DurableObjectStub,
   repoFullName: string,
@@ -253,6 +286,21 @@ githubWebhook.post("/", async (c) => {
   if (event === "issue_comment") {
     return handleIssueComment(rawBody, c.env);
   }
+  if (event === "check_run") {
+    return handleCheckRun(rawBody, c.env);
+  }
+  if (event === "check_suite") {
+    return handleCheckSuite(rawBody, c.env);
+  }
+  if (event === "workflow_run") {
+    return handleWorkflowRun(rawBody, c.env);
+  }
+  if (event === "status") {
+    return handleStatus(rawBody, c.env);
+  }
+  if (event === "deployment_status") {
+    return handleDeploymentStatus(rawBody, c.env);
+  }
 
   return c.json({ ok: true, ignored: true });
 });
@@ -260,17 +308,15 @@ githubWebhook.post("/", async (c) => {
 async function handlePullRequest(rawBody: string, env: Bindings) {
   const payload = JSON.parse(rawBody) as {
     action: string;
+    label?: { name: string };
     pull_request: {
       merged: boolean;
       head: { ref: string };
       html_url: string;
+      number: number;
     };
     repository: { full_name: string };
   };
-
-  if (payload.action !== "closed" || !payload.pull_request.merged) {
-    return Response.json({ ok: true, ignored: true });
-  }
 
   const branch = payload.pull_request.head.ref;
   const taskId = extractTaskId(branch);
@@ -284,19 +330,71 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  await forwardToOrchestrator(env, {
-    type: "pr_merged",
-    source: "github",
-    ticketId: taskId,
-    product: productName,
-    payload: {
-      pr_url: payload.pull_request.html_url,
-      branch,
-      repo: payload.repository.full_name,
-    },
-  });
+  // Handle different PR actions
+  if (payload.action === "closed" && payload.pull_request.merged) {
+    await forwardToOrchestrator(env, {
+      type: "pr_merged",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+  }
 
-  return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+  if (payload.action === "synchronize") {
+    // New commits pushed to PR
+    await forwardToOrchestrator(env, {
+      type: "pr_updated",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        pr_number: payload.pull_request.number,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, status: "pr_updated" });
+  }
+
+  if (payload.action === "reopened") {
+    await forwardToOrchestrator(env, {
+      type: "pr_reopened",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, status: "pr_reopened" });
+  }
+
+  if (payload.action === "labeled" || payload.action === "unlabeled") {
+    await forwardToOrchestrator(env, {
+      type: payload.action === "labeled" ? "pr_labeled" : "pr_unlabeled",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        label: payload.label?.name,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, label: payload.label?.name });
+  }
+
+  return Response.json({ ok: true, ignored: true, reason: `action not handled: ${payload.action}` });
 }
 
 async function handlePullRequestReview(rawBody: string, env: Bindings) {
@@ -488,6 +586,154 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
   });
 
   return Response.json({ ok: true, product: productName, taskId });
+}
+
+async function handleCheckRun(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    check_run: {
+      name: string;
+      conclusion: string | null;
+      output: { title: string; summary: string };
+      html_url: string;
+      check_suite: { head_branch: string };
+      pull_requests: Array<{ number: number }>;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle failed checks
+  if (payload.action !== "completed" || payload.check_run.conclusion === "success") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  return routeWebhookEvent(env, payload.check_run.check_suite?.head_branch, payload.repository.full_name, {
+    type: "ci_failure",
+    payload: {
+      check_name: payload.check_run.name,
+      conclusion: payload.check_run.conclusion,
+      output_title: payload.check_run.output.title,
+      output_summary: payload.check_run.output.summary,
+      check_url: payload.check_run.html_url,
+    },
+  });
+}
+
+async function handleWorkflowRun(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    workflow_run: {
+      name: string;
+      conclusion: string | null;
+      html_url: string;
+      head_branch: string;
+      pull_requests: Array<{ number: number; head: { ref: string } }>;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle failed workflows
+  if (payload.action !== "completed" || payload.workflow_run.conclusion === "success") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  return routeWebhookEvent(env, payload.workflow_run.head_branch, payload.repository.full_name, {
+    type: "workflow_failure",
+    payload: {
+      workflow_name: payload.workflow_run.name,
+      conclusion: payload.workflow_run.conclusion,
+      workflow_url: payload.workflow_run.html_url,
+    },
+  });
+}
+
+async function handleCheckSuite(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    check_suite: {
+      conclusion: string | null;
+      status: string;
+      html_url: string;
+      head_branch: string;
+      pull_requests: Array<{ number: number }>;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle completed check suites (success or failure)
+  if (payload.action !== "completed") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const eventType = payload.check_suite.conclusion === "success" ? "checks_passed" : "checks_failed";
+
+  return routeWebhookEvent(env, payload.check_suite.head_branch, payload.repository.full_name, {
+    type: eventType,
+    payload: {
+      conclusion: payload.check_suite.conclusion,
+      status: payload.check_suite.status,
+      suite_url: payload.check_suite.html_url,
+    },
+  });
+}
+
+async function handleStatus(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    state: string;
+    description: string;
+    context: string;
+    target_url: string | null;
+    branches: Array<{ name: string }>;
+    repository: { full_name: string };
+  };
+
+  // Only handle failure/error states
+  if (payload.state !== "failure" && payload.state !== "error") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const branch = payload.branches?.[0]?.name;
+  return routeWebhookEvent(env, branch, payload.repository.full_name, {
+    type: "status_failure",
+    payload: {
+      state: payload.state,
+      context: payload.context,
+      description: payload.description,
+      target_url: payload.target_url,
+    },
+  });
+}
+
+async function handleDeploymentStatus(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    deployment_status: {
+      state: string;
+      description: string;
+      environment: string;
+      target_url: string | null;
+    };
+    deployment: {
+      ref: string;
+      task: string;
+      environment: string;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle failure/error states
+  if (payload.deployment_status.state !== "failure" && payload.deployment_status.state !== "error") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  return routeWebhookEvent(env, payload.deployment.ref, payload.repository.full_name, {
+    type: "deployment_failure",
+    payload: {
+      state: payload.deployment_status.state,
+      environment: payload.deployment_status.environment,
+      description: payload.deployment_status.description,
+      target_url: payload.deployment_status.target_url,
+    },
+  });
 }
 
 export { linearWebhook, githubWebhook };
