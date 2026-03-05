@@ -672,13 +672,13 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async checkAgentHealth(): Promise<Response> {
-    // Find all active tickets (agent_active = 1) that haven't sent a heartbeat in 30+ minutes
+    // Report-only: find active tickets with stale heartbeats for diagnostics.
+    // No longer marks agents inactive or creates investigation tickets.
     const stuckThreshold = 30; // minutes
     const rows = this.ctx.storage.sql.exec(
-      `SELECT id, product, status, last_heartbeat, slack_thread_ts, slack_channel, created_at
+      `SELECT id, product, status, last_heartbeat
        FROM tickets
        WHERE agent_active = 1
-         AND id NOT LIKE '%investigation-%'
          AND last_heartbeat IS NOT NULL
          AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > ?`,
       stuckThreshold,
@@ -687,170 +687,23 @@ export class Orchestrator extends Container<Bindings> {
       product: string;
       status: string;
       last_heartbeat: string;
-      slack_thread_ts: string | null;
-      slack_channel: string | null;
-      created_at: string;
     }>;
 
-    if (rows.length === 0) {
-      return Response.json({ ok: true, stuck_agents: [] });
-    }
-
-    console.log(`[Orchestrator] Found ${rows.length} stuck agents`);
-
-    const results = [];
-    for (const ticket of rows) {
-      const minutesStuck = Math.floor(
+    const staleAgents = rows.map((ticket) => ({
+      ticketId: ticket.id,
+      product: ticket.product,
+      status: ticket.status,
+      minutesStuck: Math.floor(
         (Date.now() - new Date(ticket.last_heartbeat).getTime()) / 60000,
-      );
+      ),
+      lastHeartbeat: ticket.last_heartbeat,
+    }));
 
-      console.log(
-        `[Orchestrator] Stuck agent detected: ${ticket.id} (${minutesStuck}min since last heartbeat)`,
-      );
-
-      // Try to fetch agent status for diagnostics
-      let agentStatus = "unknown";
-      let agentError = "";
-      try {
-        const id = this.env.TICKET_AGENT.idFromName(ticket.id);
-        const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
-        const statusRes = await agent.fetch(new Request("http://internal/status"));
-        if (statusRes.ok) {
-          const status = await statusRes.json<{
-            sessionActive: boolean;
-            sessionStatus: string;
-            sessionError: string;
-            sessionMessageCount: number;
-          }>();
-          agentStatus = status.sessionStatus;
-          agentError = status.sessionError;
-        }
-      } catch (err) {
-        console.error(`[Orchestrator] Failed to fetch status for ${ticket.id}:`, err);
-        agentError = String(err);
-      }
-
-      // Mark the stuck ticket inactive so subsequent cron runs don't create duplicate investigations
-      this.ctx.storage.sql.exec(
-        "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-        ticket.id,
-      );
-      console.log(`[Orchestrator] Marked stuck ticket ${ticket.id} as inactive`);
-
-      // Create investigation ticket
-      await this.createInvestigationTicket({
-        stuckTicketId: ticket.id,
-        product: ticket.product,
-        minutesStuck,
-        lastHeartbeat: ticket.last_heartbeat,
-        status: ticket.status,
-        agentStatus,
-        agentError,
-        slackChannel: ticket.slack_channel || undefined,
-        slackThreadTs: ticket.slack_thread_ts || undefined,
-      });
-
-      results.push({
-        ticketId: ticket.id,
-        product: ticket.product,
-        minutesStuck,
-        agentStatus,
-        investigationCreated: true,
-      });
+    if (staleAgents.length > 0) {
+      console.log(`[Orchestrator] Health check: ${staleAgents.length} stale agents found`);
     }
 
-    return Response.json({ ok: true, stuck_agents: results });
-  }
-
-  private async createInvestigationTicket(details: {
-    stuckTicketId: string;
-    product: string;
-    minutesStuck: number;
-    lastHeartbeat: string;
-    status: string;
-    agentStatus: string;
-    agentError: string;
-    slackChannel?: string;
-    slackThreadTs?: string;
-  }) {
-    const {
-      stuckTicketId,
-      product,
-      minutesStuck,
-      lastHeartbeat,
-      status,
-      agentStatus,
-      agentError,
-      slackChannel,
-      slackThreadTs,
-    } = details;
-
-    // Create a Linear ticket for investigation
-    const title = `Stuck agent detected: ${stuckTicketId}`;
-    const description = `## Agent Stuck Alert
-
-**Ticket:** ${stuckTicketId}
-**Product:** ${product}
-**Minutes stuck:** ${minutesStuck}
-**Last heartbeat:** ${lastHeartbeat}
-**Ticket status:** ${status}
-**Agent session status:** ${agentStatus}
-${agentError ? `**Agent error:** \`\`\`\n${agentError}\n\`\`\`` : ""}
-
-The agent has not sent a heartbeat in over ${minutesStuck} minutes. This typically indicates:
-- Agent process crashed
-- Agent is in an infinite loop
-- Container was terminated
-- Network connectivity issue
-
-## Next Steps
-1. Check wrangler tail logs for the ticket
-2. Inspect agent /status endpoint
-3. If stuck in a loop, kill the agent container
-4. If a bug is identified, fix and deploy
-5. Restart the ticket if fixable
-
-## Logs
-Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
-`;
-
-    try {
-      // Post notification to Slack
-      if (slackChannel) {
-        await fetch("https://slack.com/api/chat.postMessage", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            channel: slackChannel,
-            text: `🚨 *Agent stuck detected*\nTicket: ${stuckTicketId}\nStuck for: ${minutesStuck} minutes\nCreating investigation ticket...`,
-            ...(slackThreadTs && { thread_ts: slackThreadTs }),
-          }),
-        });
-      }
-
-      // Record investigation in DB but do NOT spawn an agent container.
-      // Investigation agents were causing a cascade: they get stuck too,
-      // triggering more investigations, filling all container slots.
-      const investigationId = sanitizeTicketId(`investigation-${stuckTicketId}`);
-
-      // Upsert — idempotent if cron fires twice simultaneously
-      this.ctx.storage.sql.exec(
-        `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel, status, agent_active)
-         VALUES (?, ?, ?, ?, 'investigation', 0)
-         ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')`,
-        investigationId,
-        product,
-        slackThreadTs || null,
-        slackChannel || null,
-      );
-
-      console.log(`[Orchestrator] Investigation recorded: ${investigationId} (no agent spawned)`);
-    } catch (err) {
-      console.error(`[Orchestrator] Failed to create investigation ticket:`, err);
-    }
+    return Response.json({ ok: true, stale_agents: staleAgents });
   }
 
   private listTickets(): Response {

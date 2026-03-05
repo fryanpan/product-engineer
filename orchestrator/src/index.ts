@@ -345,16 +345,5 @@ export default Sentry.withSentry(
   (env: Bindings) => ({ dsn: env.SENTRY_DSN }),
   {
     fetch: app.fetch,
-    async scheduled(_controller, env: Bindings, _ctx) {
-      console.log("[Worker] Running scheduled agent health check");
-      try {
-        const orchestrator = getOrchestrator(env);
-        const response = await orchestrator.fetch(new Request("http://internal/check-health"));
-        const result = await response.json<{ ok: boolean; stuck_agents: unknown[] }>();
-        console.log(`[Worker] Health check complete: ${result.stuck_agents.length} stuck agents found`);
-      } catch (err) {
-        console.error("[Worker] Health check failed:", err);
-      }
-    },
   },
 );

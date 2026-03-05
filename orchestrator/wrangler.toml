@@ -34,10 +34,6 @@ bucket_name = "product-engineer-transcripts"
 # Value: the deployed Worker URL (e.g., "https://product-engineer.your-subdomain.workers.dev")
 # The orchestrator container uses this to forward Slack events back to the Worker.
 
-# Health check cron: runs every 10 minutes to detect stuck agents
-[triggers]
-crons = ["*/10 * * * *"]
-
 # v1 was the original queue-based architecture (now replaced)
 [[migrations]]
 tag = "v1"
