@@ -153,11 +153,57 @@ async function reportTokenUsage() {
 
 phoneHome("server_started", `uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 
-// Upload transcript to R2 via the worker
-async function uploadTranscript(transcriptPath: string) {
+// Find the most recent transcript file for the current session
+async function findCurrentTranscript(): Promise<string | null> {
   try {
-    console.log(`[Agent] Uploading transcript from ${transcriptPath}...`);
-    const transcriptContent = await Bun.file(transcriptPath).text();
+    const home = process.env.HOME || "/home/agent";
+    const cwd = process.cwd().replace(/\//g, "-");
+    const sessionDir = `${home}/.claude/projects/${cwd}`;
+
+    // Check if directory exists
+    const dirExists = await Bun.file(sessionDir).exists().catch(() => false);
+    if (!dirExists) {
+      return null;
+    }
+
+    // List all .jsonl files in the directory
+    const proc = Bun.spawn(["ls", "-1t", sessionDir]);
+    const output = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+
+    if (exitCode !== 0) {
+      return null;
+    }
+
+    // Find the most recent transcript file
+    // Files can be named: <session-id>.jsonl or agent-<hash>.jsonl
+    const files = output.trim().split("\n").filter(Boolean);
+    const transcriptFiles = files.filter(f => f.endsWith(".jsonl"));
+
+    if (transcriptFiles.length === 0) {
+      return null;
+    }
+
+    // Return the most recent (first in time-sorted list)
+    return `${sessionDir}/${transcriptFiles[0]}`;
+  } catch (err) {
+    console.error("[Agent] Error finding transcript:", err);
+    return null;
+  }
+}
+
+// Upload transcript to R2 via the worker
+async function uploadTranscript(transcriptPath?: string) {
+  try {
+    // If no path provided, find the current session's transcript
+    const path = transcriptPath || await findCurrentTranscript();
+    if (!path) {
+      console.log("[Agent] No transcript file found to upload");
+      return;
+    }
+
+    console.log(`[Agent] Uploading transcript from ${path}...`);
+    const transcriptContent = await Bun.file(path).text();
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const r2Key = `${config.ticketId}-${timestamp}.jsonl`;
 
@@ -206,6 +252,31 @@ const heartbeatInterval = setInterval(() => {
 
   phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount}`);
 }, 120_000);
+
+// Periodic transcript backup every 5 minutes to capture work-in-progress
+const transcriptBackupInterval = setInterval(() => {
+  if (sessionStatus === "completed" || sessionStatus === "error") {
+    clearInterval(transcriptBackupInterval);
+    return;
+  }
+  if (sessionStatus === "running" && sessionActive) {
+    console.log("[Agent] Periodic transcript backup...");
+    uploadTranscript().catch((err) => console.error("[Agent] Periodic backup failed:", err));
+  }
+}, 300_000); // 5 minutes
+
+// Signal handlers to upload transcript on container shutdown
+async function handleShutdown(signal: string) {
+  console.log(`[Agent] Received ${signal}, uploading transcript before shutdown...`);
+  clearInterval(heartbeatInterval);
+  clearInterval(transcriptBackupInterval);
+  await uploadTranscript();
+  phoneHome("container_shutdown", signal);
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+process.on("SIGINT", () => handleShutdown("SIGINT"));
 
 let sessionActive = false;
 let messageYielder: ((msg: SDKUserMessage) => void) | null = null;
@@ -561,6 +632,13 @@ async function startSession(initialPrompt: string) {
       sessionStatus = "error";
       sessionActive = false;
       phoneHome("session_error", `${String(err).slice(0, 150)} | stderr=${lastStderr.slice(0, 100)}`);
+
+      // Upload transcript on error to capture work done before crash
+      try {
+        await uploadTranscript();
+      } catch (uploadErr) {
+        console.error("[Agent] Failed to upload transcript after error:", uploadErr);
+      }
     }
   })();
 }
