@@ -56,7 +56,7 @@ export function resolveAgentEnvVars(
 
 export class TicketAgent extends Container<Bindings> {
   defaultPort = 3000;
-  sleepAfter = "96h"; // 4 days
+  sleepAfter = "2h";
 
   private configLoaded = false;
 
@@ -118,6 +118,19 @@ export class TicketAgent extends Container<Bindings> {
   override onError(error: unknown) {
     console.error("[TicketAgent] Container error:", error);
     throw error;
+  }
+
+  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
+    // If this ticket has active work, keep the container alive
+    const config = this.getConfig();
+    if (config) {
+      try {
+        await this.containerFetch("http://localhost/health", { method: "GET" }, this.defaultPort);
+      } catch {
+        console.log(`[TicketAgent] Container not healthy for ${config.ticketId}, will auto-resume on restart`);
+      }
+    }
+    return super.alarm(alarmProps);
   }
 
   async fetch(request: Request): Promise<Response> {
