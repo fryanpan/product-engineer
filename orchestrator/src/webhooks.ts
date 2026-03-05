@@ -8,6 +8,11 @@ import { Hono } from "hono";
 import { getAgentIdentity, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
 
+function getOrchestrator(env: Bindings): DurableObjectStub {
+  const id = env.ORCHESTRATOR.idFromName("main");
+  return env.ORCHESTRATOR.get(id);
+}
+
 // --- Shared helpers (exported for testing) ---
 
 export async function verifyHmac(
@@ -48,11 +53,6 @@ export async function resolveProductByRepo(
     if (config.repos.includes(repoFullName)) return name;
   }
   return null;
-}
-
-function getOrchestrator(env: Bindings): DurableObjectStub {
-  const id = env.ORCHESTRATOR.idFromName("main");
-  return env.ORCHESTRATOR.get(id);
 }
 
 function forwardToOrchestrator(env: Bindings, event: Record<string, unknown>) {

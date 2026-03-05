@@ -272,7 +272,7 @@ async function cloneRepos() {
   const chmod = Bun.spawn(["chmod", "600", `${home}/.netrc`]);
   await chmod.exited;
 
-  for (const repo of config.repos) {
+  await Promise.all(config.repos.map(async (repo) => {
     const repoName = repo.split("/").pop()!;
     if (!/^[a-zA-Z0-9._-]+$/.test(repoName)) {
       throw new Error(`Invalid repo name: ${repoName}`);
@@ -292,7 +292,7 @@ async function cloneRepos() {
     }
     console.log(`[Agent] Cloned ${repo} successfully`);
     phoneHome("clone_done", repoName);
-  }
+  }));
 
   // Set working directory to the first repo so Agent SDK tools operate on it
   const primaryRepo = config.repos[0].split("/").pop()!;
@@ -542,6 +542,7 @@ async function startSession(initialPrompt: string) {
       }
       console.log("[Agent] Session ended normally");
       sessionStatus = "completed";
+      sessionActive = false;
       phoneHome("session_completed", `msgs=${sessionMessageCount}`);
 
       // Report token usage

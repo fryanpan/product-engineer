@@ -86,7 +86,7 @@ graph TD
 
 The pitch: this is a small, understandable repo that does something ambitious.
 
-- **Slim core** — ~600-line orchestrator, ~130-line agent entrypoint. That's it.
+- **Slim core** — ~1k-line orchestrator, ~600-line agent server. Everything else is English skills.
 - **English over code** — agent behavior is defined in `SKILL.md` files, not TypeScript logic. Changing how the agent works means editing markdown.
 - **Ride rapidly improving components** — Claude Agent SDK, Cloudflare Containers, and Claude itself are evolving fast. Depend on them instead of reimplementing.
 - **No cruft** — every abstraction earns its place. If a component can be deleted without breaking anything, delete it.
@@ -150,6 +150,8 @@ The agent comes with several built-in skills for managing projects and products:
 - **`/setup-product`** — Step-by-step guide for manual product registration
 - **`/retro`** — Run a retrospective with transcript analysis and capture learnings
 - **`/persist-plan`** — Save internal plans to `docs/product/plans/`
+- **`/cross-project-review`** — Periodic review across all products to find patterns and share learnings
+- **`/task-retro`** — Per-task retrospective the agent runs after completing each task
 
 See `.claude/skills/` for the full list and details.
 
