@@ -129,7 +129,46 @@ In [api.slack.com/apps](https://api.slack.com/apps):
 5. **Reinstall app** after adding scopes (yellow banner will prompt you)
 6. **Invite bot** to each product's Slack channel (e.g., `#your-app`) - or the bot can join automatically with `channels:join`
 
-## Step 5: Configure Linear Webhook
+## Step 5: Configure Linear Settings
+
+### Set Linear Team ID
+
+The orchestrator needs to know which Linear team to accept webhooks from. Get your team ID from Linear:
+
+```bash
+# Using Linear GraphQL API
+curl -X POST https://api.linear.app/graphql \
+  -H "Authorization: YOUR_LINEAR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "{ teams { nodes { id name } } }"}' \
+  | jq '.data.teams.nodes[] | {name, id}'
+```
+
+Or use the Linear MCP tool if already configured:
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$WORKER_URL/api/settings/linear_team_id" \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"value": "YOUR_TEAM_ID"}'
+```
+
+Also configure the agent's Linear identity:
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$WORKER_URL/api/settings/agent_linear_email" \
+  -X PUT -H "Content-Type: application/json" \
+  -d '{"value": "agent@example.com"}'
+
+curl -H "X-API-Key: $API_KEY" \
+  "$WORKER_URL/api/settings/agent_linear_name" \
+  -X PUT -H "Content-Type: application/json" \
+  -d '{"value": "Your Agent Name"}'
+```
+
+### Configure Linear Webhook
 
 1. Linear Settings → API → Webhooks
 2. Add webhook:
@@ -145,7 +184,13 @@ For each product repo (e.g., `your-org/your-app`):
 2. Payload URL: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/github`
 3. Content type: `application/json`
 4. Secret: same value as `GITHUB_WEBHOOK_SECRET`
-5. Events: Pull requests, Pull request reviews
+5. Events:
+   - Pull requests
+   - Pull request reviews
+   - Pull request review comments
+   - Issue comments
+   - Check runs (for CI failure detection)
+   - Workflow runs (for GitHub Actions failures)
 
 ## Step 7: Configure Notion Integration
 

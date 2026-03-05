@@ -253,6 +253,12 @@ githubWebhook.post("/", async (c) => {
   if (event === "issue_comment") {
     return handleIssueComment(rawBody, c.env);
   }
+  if (event === "check_run") {
+    return handleCheckRun(rawBody, c.env);
+  }
+  if (event === "workflow_run") {
+    return handleWorkflowRun(rawBody, c.env);
+  }
 
   return c.json({ ok: true, ignored: true });
 });
@@ -488,6 +494,108 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
   });
 
   return Response.json({ ok: true, product: productName, taskId });
+}
+
+async function handleCheckRun(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    check_run: {
+      name: string;
+      conclusion: string | null;
+      output: { title: string; summary: string };
+      html_url: string;
+      pull_requests: Array<{ number: number; head: { ref: string } }>;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle failed checks
+  if (payload.action !== "completed" || payload.check_run.conclusion === "success") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  // Must be associated with a PR
+  if (!payload.check_run.pull_requests || payload.check_run.pull_requests.length === 0) {
+    return Response.json({ ok: true, ignored: true, reason: "not associated with PR" });
+  }
+
+  const pr = payload.check_run.pull_requests[0];
+  const branch = pr.head.ref;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "ci_failure",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      check_name: payload.check_run.name,
+      conclusion: payload.check_run.conclusion,
+      output_title: payload.check_run.output.title,
+      output_summary: payload.check_run.output.summary,
+      check_url: payload.check_run.html_url,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId, check: payload.check_run.name });
+}
+
+async function handleWorkflowRun(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    workflow_run: {
+      name: string;
+      conclusion: string | null;
+      html_url: string;
+      head_branch: string;
+      pull_requests: Array<{ number: number; head: { ref: string } }>;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle failed workflows
+  if (payload.action !== "completed" || payload.workflow_run.conclusion === "success") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const branch = payload.workflow_run.head_branch;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "workflow_failure",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      workflow_name: payload.workflow_run.name,
+      conclusion: payload.workflow_run.conclusion,
+      workflow_url: payload.workflow_run.html_url,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId, workflow: payload.workflow_run.name });
 }
 
 export { linearWebhook, githubWebhook };
