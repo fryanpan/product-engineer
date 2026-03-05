@@ -754,6 +754,35 @@ export class Orchestrator extends Container<Bindings> {
     return Response.json({ transcripts: rows });
   }
 
+  private async postSlackError(channel: string, threadTs: string, message: string): Promise<void> {
+    try {
+      const res = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel,
+          thread_ts: threadTs,
+          text: message,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error(`[Orchestrator] Failed to post Slack error: ${res.status}`);
+        return;
+      }
+
+      const data = await res.json() as { ok: boolean; error?: string };
+      if (!data.ok) {
+        console.error(`[Orchestrator] Slack API error: ${data.error}`);
+      }
+    } catch (err) {
+      console.error("[Orchestrator] Failed to post Slack error:", err);
+    }
+  }
+
   private async handleSlackEvent(request: Request): Promise<Response> {
     const slackEvent = await request.json<{
       type: string;
@@ -811,6 +840,20 @@ export class Orchestrator extends Container<Bindings> {
     const product = resolveProductFromChannel(products, slackEvent.channel || "");
     if (!product) {
       console.warn(`[Orchestrator] No product mapped to channel ${slackEvent.channel}`);
+
+      // Post error message to Slack so users know what went wrong
+      const registeredChannels = Object.values(products)
+        .map(p => `• <#${p.slack_channel_id || p.slack_channel}>`)
+        .join("\n");
+
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackEvent.ts || "",
+        `❌ This channel is not registered with Product Engineer.\n\n` +
+        `**Registered channels:**\n${registeredChannels}\n\n` +
+        `To register this channel, update the product registry in the Orchestrator database.`
+      );
+
       return Response.json({ error: "no product for channel" }, { status: 404 });
     }
 
