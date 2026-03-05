@@ -74,7 +74,9 @@ Static config mapping products to their repos, secrets, Slack channels, and trig
 ## Conventions
 
 ### Adding a New Product
-Use the `/setup-product` skill. It walks through registry entry, secret provisioning, trigger configuration, and testing.
+- For **existing repos**: Use `/add-project` skill to register the repo with the orchestrator
+- For **new projects**: Use `/create-project` skill to scaffold a new repo and register it
+- For **manual setup**: Use `/setup-product` skill for step-by-step guidance on registry entry, secret provisioning, trigger configuration, and testing
 
 ### Modifying Agent Behavior
 Agent decision-making is encoded in English skills (`.claude/skills/`), not TypeScript. To change how the agent works:
