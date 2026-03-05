@@ -58,9 +58,9 @@ Examples: database schema changes, API contract changes, deleting data, force pu
       - No architectural or behavioral changes
     - **Request review** otherwise (high risk, unclear impact, or you're uncertain)
 15. **If auto-merging:**
-    - Run `/task-retro` to reflect, take actions, and post to Slack
-    - After completing retro, merge the PR
+    - Merge the PR
     - Update status to `merged`
+    - Run `/task-retro` to reflect, take actions, and post the retro to Slack
 16. **If requesting review, stay alive:**
     - Remain active for up to 1 hour after PR creation
     - You'll receive GitHub review comments automatically
@@ -82,7 +82,7 @@ Examples: database schema changes, API contract changes, deleting data, force pu
    - Merge the PR
    - Update status to `merged`
    - Notify Slack
-   - Do a brief retro
+   - Run `/task-retro` to reflect, take actions, and post the retro to Slack
 5. If you should wait for manual merge:
    - Notify Slack that the PR is ready
    - Stay alive for further feedback or merge event
