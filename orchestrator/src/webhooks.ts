@@ -563,7 +563,8 @@ async function handleCheckRun(rawBody: string, env: Bindings) {
       conclusion: string | null;
       output: { title: string; summary: string };
       html_url: string;
-      pull_requests: Array<{ number: number; head: { ref: string } }>;
+      check_suite: { head_branch: string };
+      pull_requests: Array<{ number: number }>;
     };
     repository: { full_name: string };
   };
@@ -573,13 +574,12 @@ async function handleCheckRun(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
-  // Must be associated with a PR
-  if (!payload.check_run.pull_requests || payload.check_run.pull_requests.length === 0) {
-    return Response.json({ ok: true, ignored: true, reason: "not associated with PR" });
+  // Must have a branch (from check_suite)
+  const branch = payload.check_run.check_suite?.head_branch;
+  if (!branch) {
+    return Response.json({ ok: true, ignored: true, reason: "no branch" });
   }
 
-  const pr = payload.check_run.pull_requests[0];
-  const branch = pr.head.ref;
   const taskId = extractTaskId(branch);
   if (!taskId) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
@@ -664,7 +664,8 @@ async function handleCheckSuite(rawBody: string, env: Bindings) {
       conclusion: string | null;
       status: string;
       html_url: string;
-      pull_requests: Array<{ number: number; head: { ref: string } }>;
+      head_branch: string;
+      pull_requests: Array<{ number: number }>;
     };
     repository: { full_name: string };
   };
@@ -674,13 +675,11 @@ async function handleCheckSuite(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
-  // Must be associated with a PR
-  if (!payload.check_suite.pull_requests || payload.check_suite.pull_requests.length === 0) {
-    return Response.json({ ok: true, ignored: true, reason: "not associated with PR" });
+  const branch = payload.check_suite.head_branch;
+  if (!branch) {
+    return Response.json({ ok: true, ignored: true, reason: "no branch" });
   }
 
-  const pr = payload.check_suite.pull_requests[0];
-  const branch = pr.head.ref;
   const taskId = extractTaskId(branch);
   if (!taskId) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
