@@ -2,6 +2,54 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-05 - Fix Agent Lifecycle Issues
+
+Fix five agent lifecycle bugs: disable broken investigation flow, add git-branch auto-resume, reduce container TTL, fix skill compliance (merge policy, retro, code review).
+
+### Time Breakdown
+
+| Started (PT) | Phase | Hands-On | Agent | Problems |
+|---------|-------|------------|----------|----------|
+| 5:45pm | Initial request | 2m | | OAuth expired, retried at 6:40pm |
+| 6:40pm | Investigation + planning | 3m | 9m | |
+| 6:49pm | Implementation (subagent-driven) | 1m | 17m | |
+| 7:06pm | Code review + fixes | 3m | 16m | Codex CLI not installed |
+| 7:22pm | Simplify review + fixes | | 6m | |
+
+### Metrics
+
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~48 min (effective, excluding auth error gap) |
+| Hands-on | ~9 min (19%) |
+| Automated agent time | ~48 min (81%) |
+| Retro analysis time | ~5 min |
+
+### Key Observations
+
+1. High autonomy ratio — after 2 direction-setting messages, session was almost entirely agent-driven
+2. Code review caught a real alarm restart bug (same pattern as 8e93fcb investigation cascade)
+3. Simplify review found 7 concrete issues: duplicate types, missing MIME normalization, sequential fetches
+4. All behavioral fixes were English-only (SKILL.md edits) — validates "English over code" design
+5. Root cause of these bugs: insufficient edge case planning for multi-agent lifecycle features
+
+### Feedback
+
+**What worked:** Session went smoothly, high autonomy, good code review coverage
+
+**What didn't:** These bugs should have been caught earlier. Multi-agent behavior is hard to tune — 2+ days spent on these issues. Need more upfront planning and edge case review.
+
+### Actions Taken
+
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Edge cases not caught during planning | workflow-conventions.md | Added multi-agent edge case matrix requirement to Planning section |
+| Alarm restart bug repeated known pattern | learnings.md | Added alarm restart loop learning to Container SDK section |
+| No multi-agent lifecycle learnings | learnings.md | New "Multi-Agent Lifecycle" section with edge case planning guidance |
+| Stale TTL example in learnings | learnings.md | Updated `"96h"` example to `"2h"` |
+| Stale TTL in security.md | security.md | Updated 2 references from "4 days" to "2 hours" |
+| CI typecheck failure | config.ts | Extracted `ContentBlock` interface to fix type narrowing |
+
 ## 2026-03-03 - Product Engineer: From Zero to Working Agent
 
 Full build-out of the Product Engineer system: orchestrator, agent, containers, deployment, and first successful autonomous ticket completion.

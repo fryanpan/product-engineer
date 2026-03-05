@@ -16,68 +16,53 @@ import type {
   CommandData,
   TicketEvent,
   SlackFile,
+  MessageContent,
+  ContentBlock,
 } from "./config";
-
-type MessageContent =
-  | string
-  | Array<{
-      type: "text" | "image";
-      text?: string;
-      source?: {
-        type: "base64";
-        media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-        data: string;
-      };
-    }>;
+import { normalizeImageMediaType } from "./config";
 
 /**
- * Fetch Slack files and convert images to base64 content blocks.
+ * Fetch Slack image files and convert to base64 content blocks.
  * Non-images are skipped (agent can use fetch_slack_file tool if needed).
+ * Fetches all images in parallel.
  */
 async function fetchSlackFiles(
   files: SlackFile[],
   slackBotToken: string,
-): Promise<MessageContent[number][]> {
-  const contentBlocks: MessageContent[number][] = [];
+): Promise<ContentBlock[]> {
+  const imageFiles = files.filter(f => f.mimetype.startsWith("image/"));
+  if (imageFiles.length === 0) return [];
 
-  for (const file of files) {
-    const isImage = file.mimetype.startsWith("image/");
-    if (!isImage) continue; // Skip non-images for now
-
-    try {
+  const results = await Promise.allSettled(
+    imageFiles.map(async (file): Promise<ContentBlock> => {
       const res = await fetch(file.url_private, {
         headers: { Authorization: `Bearer ${slackBotToken}` },
       });
 
       if (!res.ok) {
-        console.error(`[Prompt] Failed to fetch Slack file ${file.name}: ${res.status}`);
-        continue;
+        throw new Error(`HTTP ${res.status} for ${file.name}`);
       }
 
       const arrayBuffer = await res.arrayBuffer();
       const base64 = Buffer.from(arrayBuffer).toString("base64");
 
-      // Map common image types
-      const mimeTypeMap: Record<string, "image/png" | "image/jpeg" | "image/gif" | "image/webp"> = {
-        "image/png": "image/png",
-        "image/jpeg": "image/jpeg",
-        "image/jpg": "image/jpeg",
-        "image/gif": "image/gif",
-        "image/webp": "image/webp",
-      };
-
-      const media_type = mimeTypeMap[file.mimetype] || "image/png";
-
-      contentBlocks.push({
+      return {
         type: "image",
         source: {
           type: "base64",
-          media_type,
+          media_type: normalizeImageMediaType(file.mimetype),
           data: base64,
         },
-      });
-    } catch (err) {
-      console.error(`[Prompt] Error fetching Slack file ${file.name}:`, err);
+      };
+    }),
+  );
+
+  const contentBlocks: ContentBlock[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      contentBlocks.push(result.value);
+    } else {
+      console.error(`[Prompt] Failed to fetch Slack file:`, result.reason);
     }
   }
 
@@ -92,7 +77,7 @@ export async function buildPrompt(
 
 ## Your Task
 
-${await formatTask(task, slackBotToken)}
+${formatTask(task)}
 
 ## Repos
 
@@ -136,14 +121,14 @@ Use the repo's existing CLAUDE.md, skills, and conventions. Don't fight the code
   if (files && files.length > 0) {
     const imageBlocks = await fetchSlackFiles(files, slackBotToken);
     if (imageBlocks.length > 0) {
-      return [{ type: "text", text: header }, ...imageBlocks];
+      return [{ type: "text" as const, text: header }, ...imageBlocks];
     }
   }
 
   return header;
 }
 
-async function formatTask(task: TaskPayload, slackBotToken: string): Promise<string> {
+function formatTask(task: TaskPayload): string {
   switch (task.type) {
     case "feedback":
       return formatFeedback(task.data as FeedbackData);
@@ -218,14 +203,14 @@ export async function buildEventPrompt(
       let message = `The user replied via Slack:\n\n<user_input>\n${payload.text}\n</user_input>`;
 
       if (files && files.length > 0) {
-        const fileList = files.map((f: any) => `- ${f.name} (${f.mimetype}, ${(f.size / 1024).toFixed(1)} KB)`).join("\n");
+        const fileList = files.map(f => `- ${f.name} (${f.mimetype}, ${(f.size / 1024).toFixed(1)} KB)`).join("\n");
         message += `\n\n**Attachments:**\n${fileList}`;
 
         // Fetch images and return structured content
         const imageBlocks = await fetchSlackFiles(files, slackBotToken);
         if (imageBlocks.length > 0) {
           return [
-            { type: "text", text: message + `\n\nContinue processing with this information.` },
+            { type: "text" as const, text: message + `\n\nContinue processing with this information.` },
             ...imageBlocks,
           ];
         }
@@ -236,4 +221,42 @@ export async function buildEventPrompt(
     default:
       return `New event: ${event.type}\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
   }
+}
+
+export function buildResumePrompt(
+  branch: string,
+  gitLog: string,
+  gitStatus: string,
+  prInfo: string,
+): string {
+  return `Your container was restarted (deploy, crash, or TTL expiry). Your previous work is saved on branch \`${branch}\`.
+
+## Git State
+
+**Recent commits:**
+\`\`\`
+${gitLog || "(no commits on branch)"}
+\`\`\`
+
+**Working directory status:**
+\`\`\`
+${gitStatus || "(clean)"}
+\`\`\`
+
+**PR status:**
+\`\`\`
+${prInfo}
+\`\`\`
+
+## What To Do
+
+1. Review the git log and status above to understand where you left off
+2. If a PR exists and is approved, merge it
+3. If a PR exists with requested changes, address them
+4. If no PR exists, continue implementing and create one when ready
+5. Follow the product-engineer skill for the rest of the workflow
+
+**CRITICAL — Headless Execution Rules:**
+- **NEVER use plan mode.** Do NOT call EnterPlanMode or ExitPlanMode.
+- **No interactive UI tools.** Use the \`ask_question\` MCP tool for human input.`;
 }

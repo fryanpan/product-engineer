@@ -7,7 +7,7 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { AgentConfig } from "./config";
+import { normalizeImageMediaType, type AgentConfig } from "./config";
 
 type ToolResult = { content: { type: "text"; text: string }[] };
 
@@ -379,7 +379,6 @@ export function createTools(config: AgentConfig) {
           // For images, return as base64 in an image content block so Claude can view it
           const arrayBuffer = await res.arrayBuffer();
           const base64 = Buffer.from(arrayBuffer).toString("base64");
-          const imageType = mimetype?.split("/")[1] || "png";
 
           return {
             content: [
@@ -387,7 +386,7 @@ export function createTools(config: AgentConfig) {
                 type: "image" as const,
                 source: {
                   type: "base64" as const,
-                  media_type: mimetype as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+                  media_type: normalizeImageMediaType(mimetype || "image/png"),
                   data: base64,
                 },
               },

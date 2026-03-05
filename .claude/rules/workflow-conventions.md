@@ -19,6 +19,7 @@ Project-specific conventions that guide how superpowers plugin skills behave in 
   - System design with component diagram (mermaid) and interfaces table
   - Execution strategy: chunking, sequencing vs parallelism, risk notes
   - Testing & deployment strategy
+- For **multi-agent and lifecycle features** (orchestrator, TicketAgent, container management): plans MUST include an explicit edge case matrix — enumerate what happens at each lifecycle boundary (container restart, deploy, alarm fire, terminal state transition, session complete). Two separate bugs (investigation cascade, alarm restart) had the same root cause: not considering "what happens when the container restarts for a ticket that's already done?"
 
 ## Execution Strategy
 

@@ -20,7 +20,7 @@ export function resolveAgentEnvVars(
     SENTRY_DSN: env.SENTRY_DSN || "",
     WORKER_URL: env.WORKER_URL || (() => { console.error("[TicketAgent] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
     API_KEY: env.API_KEY || "",
-    // R2 FUSE mount credentials for session persistence
+    // R2 credentials for transcript backup (not session persistence)
     R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID || "",
     R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY || "",
     CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
@@ -56,7 +56,7 @@ export function resolveAgentEnvVars(
 
 export class TicketAgent extends Container<Bindings> {
   defaultPort = 3000;
-  sleepAfter = "96h"; // 4 days
+  sleepAfter = "2h";
 
   private configLoaded = false;
 
@@ -120,6 +120,46 @@ export class TicketAgent extends Container<Bindings> {
     throw error;
   }
 
+  private isTerminal(): boolean {
+    this.initDb();
+    const row = this.ctx.storage.sql.exec(
+      "SELECT value FROM config WHERE key = 'terminal'"
+    ).toArray()[0] as { value: string } | undefined;
+    return row?.value === "true";
+  }
+
+  markTerminal() {
+    this.initDb();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO config (key, value) VALUES ('terminal', 'true')
+       ON CONFLICT(key) DO UPDATE SET value = 'true'`
+    );
+  }
+
+  override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
+    // Don't restart containers for completed tickets
+    if (this.isTerminal()) {
+      return super.alarm(alarmProps);
+    }
+
+    // If this ticket has active work, keep the container alive
+    const config = this.getConfig();
+    if (config) {
+      try {
+        const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
+        const status = await res.json<{ sessionStatus: string }>();
+        // If session completed or errored, mark terminal so we don't keep restarting
+        if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
+          console.log(`[TicketAgent] Session ${status.sessionStatus} for ${config.ticketId}, marking terminal`);
+          this.markTerminal();
+        }
+      } catch {
+        console.log(`[TicketAgent] Container not healthy for ${config.ticketId}, will auto-resume on restart`);
+      }
+    }
+    return super.alarm(alarmProps);
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -153,6 +193,10 @@ export class TicketAgent extends Container<Bindings> {
             { status: 503 },
           );
         }
+      }
+      case "/mark-terminal": {
+        this.markTerminal();
+        return Response.json({ ok: true });
       }
       case "/health": {
         return Response.json({ ok: true, service: "ticket-agent-do" });

@@ -26,56 +26,97 @@ Deploying updates the Worker code and container images. Running TicketAgent cont
 
 ## How It Works
 
-### TicketAgent Containers (4-day lifetime, R2 session persistence)
+### TicketAgent Containers (2h TTL, git-branch persistence)
 
 **Problem:** When you deploy, container images update, and Cloudflare may replace running containers.
 
-**Solution:** Agent SDK sessions persist to R2 via FUSE mount, enabling seamless resume:
+**Solution:** Git branches are the persistence layer. Agents commit and push frequently during work, so the branch always reflects the latest state. On container restart, the agent auto-resumes by cloning the repo, checking out the existing branch, and starting a new session with full git context.
 
-- R2 bucket `product-engineer-sessions` is mounted at `~/.claude/projects/` in each container
-- Agent SDK writes session files to this mount (conversation history, state)
-- When a container restarts (deploy, DO reset, etc.), the agent checks for existing session files
-- If found, the agent resumes the session instead of starting fresh — conversation context preserved
+- Agent creates a branch (`ticket/<id>` or `feedback/<id>`) at work start
+- Commits and pushes frequently during implementation — the branch is the persistence layer
+- On container restart, the agent auto-resumes: clones repo, checks for existing remote branch, checks it out, starts a new session with git context
+- No R2 dependency for session persistence (R2 is still used for transcript backup)
+- Container TTL is 2h (not 96h/4 days) — short-lived containers with reliable resume
 
-**Implementation:**
+**Implementation — branch detection** (`agent/src/server.ts`):
 
 ```typescript
-// agent/src/server.ts
-async function findExistingSession(): Promise<string | null> {
-  const sessionDir = `${process.env.HOME}/.claude/projects`;
-  const files = await listFiles(sessionDir);
-  const sessionFiles = files.filter(f => f.startsWith(config.ticketId));
-  return sessionFiles.length > 0 ? sessionFiles.sort().pop()! : null;
-}
+async function checkAndCheckoutWorkBranch(): Promise<string | null> {
+  const branchPrefixes = [`ticket/${config.ticketId}`, `feedback/${config.ticketId}`];
 
-async function startSession(initialPrompt: string) {
-  const existingSession = await findExistingSession();
-  if (existingSession) {
-    console.log(`[Agent] Resuming session from: ${existingSession}`);
-    phoneHome("deploy_recovery", `resuming: ${existingSession}`);
+  for (const branch of branchPrefixes) {
+    const check = Bun.spawn(["git", "ls-remote", "--heads", "origin", branch]);
+    const output = await new Response(check.stdout).text();
+    const exitCode = await check.exited;
+
+    if (exitCode === 0 && output.trim().length > 0) {
+      console.log(`[Agent] Found existing branch on remote: ${branch}`);
+      const checkout = Bun.spawn(["git", "checkout", branch]);
+      const checkoutExit = await checkout.exited;
+      if (checkoutExit !== 0) {
+        // Branch doesn't exist locally, create tracking branch
+        const track = Bun.spawn(["git", "checkout", "-b", branch, `origin/${branch}`]);
+        await track.exited;
+      }
+      return branch;
+    }
   }
-  // Agent SDK loads session files from ~/.claude/projects/ automatically
-  const session = query({ prompt: messages, options: { ... } });
+
+  return null;
 }
 ```
 
-**R2 FUSE mount** (`agent/entrypoint.sh`):
+**Implementation — auto-resume on container start** (`agent/src/server.ts`):
 
-```bash
-s3fs "product-engineer-sessions" "$HOME/.claude/projects" \
-  -o passwd_file="$HOME/.passwd-s3fs" \
-  -o url="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-  -o use_path_request_style
+```typescript
+// Auto-resume: if container restarts with a ticket config, check for existing
+// work branch and resume the session without waiting for an event.
+// This fires after the server is listening, so /health can respond while we resume.
+setTimeout(async () => {
+  if (sessionActive) return; // Event already triggered a session
+
+  try {
+    await cloneRepos();
+    const branch = await checkAndCheckoutWorkBranch();
+
+    if (branch) {
+      console.log(`[Agent] Auto-resuming from branch: ${branch}`);
+      phoneHome("auto_resume", `branch=${branch}`);
+
+      // Get git state for context
+      const logProc = Bun.spawn(["git", "log", "--oneline", "-10"]);
+      const gitLog = await new Response(logProc.stdout).text();
+
+      const statusProc = Bun.spawn(["git", "status", "--short"]);
+      const gitStatus = await new Response(statusProc.stdout).text();
+
+      // Check for existing PR
+      const prProc = Bun.spawn(["gh", "pr", "view", "--json", "url,state,title", branch]);
+      const prOutput = await new Response(prProc.stdout).text();
+      const prExit = await prProc.exited;
+      const prInfo = prExit === 0 ? prOutput.trim() : "No PR found";
+
+      const resumePrompt = buildResumePrompt(branch, gitLog.trim(), gitStatus.trim(), prInfo);
+
+      // Notify Slack about recovery
+      if (config.slackChannel && config.slackBotToken) {
+        await fetch("https://slack.com/api/chat.postMessage", { ... });
+      }
+
+      await startSession(resumePrompt);
+    } else {
+      console.log("[Agent] No existing work branch found — waiting for event");
+    }
+  } catch (err) {
+    console.error("[Agent] Auto-resume failed:", err);
+    phoneHome("auto_resume_failed", String(err).slice(0, 200));
+  }
+}, 5000); // Wait 5s for container to stabilize
 ```
 
-**Result:** Container replacement doesn't lose work. Agent resumes mid-task with full context.
+**Result:** Container replacement doesn't lose work. The agent clones, checks out its branch, reads git log/status/PR state, and resumes with a rich context prompt. No session files or FUSE mounts required.
 
-**Important limitation:** The R2 FUSE mount only persists **Agent SDK session files** (conversation history, internal state). It does NOT persist:
-- Git changes (uncommitted work, branches)
-- Cloned repos
-- Working directory state (`/workspace`)
-
-**Why this works:** Agents commit and push immediately after making changes. By the time a deploy happens, code is already on GitHub. If a container restarts mid-commit, the agent resumes and re-attempts the operation. This assumption is core to the design — agents must push work immediately, not accumulate uncommitted changes.
+**Why this works:** The branch on the remote always has the latest pushed commits. Even if the agent was mid-task, the resume prompt includes git log, working tree status, and PR info so the new session can pick up where the old one left off. This is simpler and more reliable than persisting opaque session files.
 
 ### Orchestrator Container (always-on, restarts gracefully)
 
@@ -197,7 +238,7 @@ This:
 - Brief Orchestrator container restart (1-2s Slack reconnect)
 - Running TicketAgent containers may be gradually replaced
 
-**Impact:** Active agents resume mid-task with full conversation context preserved via R2 session persistence.
+**Impact:** Active agents auto-resume mid-task by checking out their git branch and starting a new session with full git context.
 
 ### Observe
 
@@ -208,8 +249,8 @@ wrangler tail --name product-engineer
 Watch for:
 - `[Orchestrator] Container stopped` — Orchestrator restarting
 - `[Orchestrator] Container started successfully` — Reconnected
-- `[Agent] Resuming session from: ...` — Agent recovered from deploy
-- `[Agent] deploy_recovery` — Successful session resume
+- `[Agent] Auto-resuming from branch: ...` — Agent recovered from deploy
+- `[Agent] auto_resume` — Successful branch-based resume
 - `[Agent] heartbeat` — Active agents continuing work
 - `[Orchestrator] Marking agent inactive` — Agents finishing work
 
@@ -236,7 +277,7 @@ curl -H "X-API-Key: YOUR_KEY" \
 | **Orchestrator DO** | Continues (no reset) | N/A |
 | **Orchestrator Container** | Stops and restarts | 1-2 seconds |
 | **TicketAgent DOs** | Continue (no reset) | N/A |
-| **TicketAgent Containers** | Gradual replacement, resume from R2 | 5-10 seconds per container |
+| **TicketAgent Containers** | Gradual replacement, auto-resume from git branch | 10-15 seconds |
 
 ## Secrets Configuration
 
@@ -257,7 +298,7 @@ wrangler secret put SENTRY_DSN
 
 ### What if a ticket agent is mid-commit when I deploy?
 
-Agent container may restart. The agent resumes the session from R2, preserving the conversation. The commit continues naturally.
+Agent container may restart. On restart, the agent clones the repo, checks out the existing work branch, and starts a new session with git context (log, status, PR info). Any uncommitted changes are lost, but since agents commit and push frequently, the gap is minimal — the new session picks up from the latest pushed commit.
 
 ### What if someone @mentions the bot during deployment?
 
@@ -274,7 +315,7 @@ Deploy the worker: `cd orchestrator && wrangler deploy`. Cloudflare gradually re
 
 ### Can I deploy during a critical operation?
 
-**Yes.** TicketAgent containers may restart, but agents resume from R2 with full context preserved.
+**Yes.** TicketAgent containers may restart, but agents auto-resume from their git branch with full context (git log, status, PR state).
 
 ### How do I know agents finished their work?
 
@@ -288,11 +329,9 @@ curl -H "X-API-Key: YOUR_KEY" \
 
 Tickets with `agent_active: 0` have finished.
 
-### What if R2 mount fails?
+### What if R2 is unavailable?
 
-The entrypoint script logs the failure and starts the agent server anyway. Session resume won't work, but the agent can still complete the ticket (starting fresh). The agent logs `R2 credentials not provided — session persistence disabled`.
-
-Check `wrangler tail` for mount errors.
+R2 is only used for transcript backup, not session persistence. If R2 is down, agents continue working normally — session resume uses git branches, not R2. Transcript uploads will fail silently and can be retried later.
 
 ## Testing Deployment Safety
 
@@ -304,21 +343,14 @@ Check `wrangler tail` for mount errors.
 4. Observe that the agent continues without interruption
 5. Verify the agent completes the PR and reports success
 
-### Manual Test: TicketAgent Deploy with Session Resume
+### Manual Test: TicketAgent Deploy with Git-Branch Resume
 
 1. Create a test ticket
-2. Wait for the agent to start work and produce a few messages
+2. Wait for the agent to start work and push at least one commit
 3. Deploy: `cd orchestrator && wrangler deploy`
-4. In `wrangler tail --name product-engineer`, look for `[Agent] Resuming session from: ...`
-5. Verify the agent continues the conversation with context preserved
-6. Check for `phoneHome("deploy_recovery")` in logs
-
-### Manual Test: R2 FUSE Mount Verification
-
-1. Deploy with R2 secrets configured
-2. SSH into a running container (if possible) or check logs
-3. Look for `[Entrypoint] R2 bucket mounted at ~/.claude/projects`
-4. Agent logs should show session files being found: `[Agent] Found existing session file: ...`
+4. In `wrangler tail --name product-engineer`, look for `[Agent] Auto-resuming from branch: ...`
+5. Verify the agent continues working on the same branch with context preserved
+6. Check for `phoneHome("auto_resume")` in logs
 
 ### Manual Test: Terminal State Protection
 
@@ -333,7 +365,7 @@ Check `wrangler tail` for mount errors.
 The deployment safety logic is tested via:
 - `orchestrator/src/orchestrator.test.ts` — unit tests for `buildTicketEvent`, `resolveProductFromChannel`
 - `orchestrator/src/linear-webhook.test.ts` — webhook handling including terminal state filtering (Done, Canceled, Cancelled), agent assignment triggers, and unknown project rejection
-- `orchestrator/src/ticket-agent.test.ts` — `resolveAgentEnvVars` includes R2 credentials
+- `orchestrator/src/ticket-agent.test.ts` — `resolveAgentEnvVars` includes required env vars
 - Manual smoke tests (above)
 
 Full integration tests require a deployed Cloudflare environment and are beyond the scope of the test suite.
@@ -342,22 +374,15 @@ Full integration tests require a deployed Cloudflare environment and are beyond 
 
 ### Agent stuck after deploy
 
-**Symptom:** Agent stops responding after a deploy, no `deploy_recovery` in logs.
+**Symptom:** Agent stops responding after a deploy, no `auto_resume` in logs.
 
-**Cause:** R2 mount failed or session files not found.
+**Cause:** Auto-resume failed — likely a git clone or branch checkout error.
 
 **Fix:**
-1. Check R2 secrets are set: `cd orchestrator && wrangler secret list`
-2. Check container logs for mount errors: `wrangler tail --name product-engineer`
-3. Verify R2 bucket exists: `wrangler r2 bucket list`
-
-### Container fails to start after adding FUSE
-
-**Symptom:** Container exits immediately, logs show FUSE errors.
-
-**Cause:** FUSE requires elevated privileges. Cloudflare Containers may not support FUSE.
-
-**Fallback:** If FUSE doesn't work in production, remove R2 mount from entrypoint.sh. Agents will start fresh after deploys (no session resume), but will still complete tickets.
+1. Check container logs for errors: `wrangler tail --name product-engineer`
+2. Look for `[Agent] Auto-resume failed:` messages
+3. Verify the work branch exists on the remote: `git ls-remote --heads origin ticket/<id>` or `feedback/<id>`
+4. Verify GitHub token is valid: check the product's `GITHUB_TOKEN_*` secret
 
 ### Secrets missing
 
