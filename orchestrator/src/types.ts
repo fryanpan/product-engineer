@@ -26,6 +26,7 @@ export interface TicketAgentConfig {
   repos: string[];
   slackChannel: string;
   secrets: Record<string, string>; // logical name → binding name
+  gatewayConfig?: { account_id: string; gateway_id: string } | null;
 }
 
 export interface Bindings {

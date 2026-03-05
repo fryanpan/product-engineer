@@ -66,7 +66,11 @@ export class TicketAgent extends Container<Bindings> {
     // On first construction (no config yet), envVars stays {} — /initialize sets it.
     const config = this.getConfig();
     if (config) {
-      this.envVars = resolveAgentEnvVars(config, env as unknown as Record<string, string>);
+      this.envVars = resolveAgentEnvVars(
+        config,
+        env as unknown as Record<string, string>,
+        config.gatewayConfig
+      );
     }
   }
 
@@ -98,7 +102,11 @@ export class TicketAgent extends Container<Bindings> {
       JSON.stringify(config),
     );
     // Update instance envVars so containerFetch auto-restarts use correct values
-    this.envVars = resolveAgentEnvVars(config, this.env as unknown as Record<string, string>);
+    this.envVars = resolveAgentEnvVars(
+      config,
+      this.env as unknown as Record<string, string>,
+      config.gatewayConfig
+    );
   }
 
   override onStop(params: { exitCode: number; reason: string }) {
