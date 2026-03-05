@@ -73,6 +73,12 @@ Static config mapping products to their repos, secrets, Slack channels, and trig
 
 ## Conventions
 
+### Git Workflow
+- **All changes must go through pull requests** — no direct pushes to main
+- A GitHub Actions workflow enforces this policy and will fail if direct pushes are detected
+- Create a feature branch, push it, and open a PR for review before merging
+- The Product Engineer agent follows this workflow automatically
+
 ### Adding a New Product
 - For **existing repos**: Use `/add-project` skill to register the repo with the orchestrator
 - For **new projects**: Use `/create-project` skill to scaffold a new repo and register it

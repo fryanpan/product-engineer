@@ -820,28 +820,27 @@ export class Orchestrator extends Container<Bindings> {
         return Response.json({ ok: true, ticketId: ticket.id });
       }
 
-      // Thread reply but no ticket found - user is replying to something that's not tracked
+      // Thread reply but no ticket found
+      // If it's a regular message (not an @mention), silently ignore
       if (slackEvent.type === "message") {
+        return Response.json({ ok: true, ignored: true, reason: "thread not tracked" });
+      }
+
+      // If it's an @mention in a thread with no ticket, let the user know
+      if (slackEvent.type === "app_mention") {
         await this.postSlackError(
           slackEvent.channel || "",
           slackEvent.thread_ts,
           `ℹ️ This thread is not associated with an active Product Engineer task.\n\n` +
-          `If you want to start a new task, mention me with @product-engineer in your message.`
+          `If you want to start a new task, mention me with @product-engineer in a new message (not a reply).`
         );
-        return Response.json({ ok: true, ignored: true, reason: "thread not tracked" });
+        return Response.json({ ok: true, ignored: true, reason: "app_mention in untracked thread" });
       }
     }
 
     // Only create tickets from app_mention events
     if (slackEvent.type !== "app_mention") {
-      // This shouldn't happen (Socket Mode only forwards app_mention and thread messages),
-      // but if it does, let the user know
-      await this.postSlackError(
-        slackEvent.channel || "",
-        slackEvent.ts || "",
-        `ℹ️ I only respond to direct mentions (@product-engineer).\n\n` +
-        `Please mention me to start a new task.`
-      );
+      // Silently ignore non-mention events (normal Slack chatter)
       return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
     }
 
