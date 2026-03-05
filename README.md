@@ -141,15 +141,24 @@ cd agent && bun test
 
 End-to-end: create a test Linear ticket or Slack mention and watch the Slack channel.
 
+## Available Skills
+
+The agent comes with several built-in skills for managing projects and products:
+
+- **`/add-project`** — Add an existing GitHub repo to the Product Engineer registry
+- **`/create-project`** — Scaffold a new project from scratch and connect it to Product Engineer (uses `ai-project-support` templates if available)
+- **`/setup-product`** — Step-by-step guide for manual product registration
+- **`/retro`** — Run a retrospective with transcript analysis and capture learnings
+- **`/persist-plan`** — Save internal plans to `docs/product/plans/`
+
+See `.claude/skills/` for the full list and details.
+
 ## Further Reading
 
 - [`CLAUDE.md`](CLAUDE.md) — detailed architecture and conventions
 - [`docs/product/security.md`](docs/product/security.md) — security architecture and accepted risks
 - [`docs/deploy.md`](docs/deploy.md) — deployment details and debugging
-
-## Future Work
-
-- **Runtime registry** — move product config from a build-time JSON file to a runtime store (Cloudflare KV or D1) so the registry can be updated without redeploying, and personal config doesn't need to live in the repo. `registry.template.json` would become the sole checked-in reference.
+- [`docs/registry-migration-guide.md`](docs/registry-migration-guide.md) — admin API reference for managing products
 
 ## License
 
