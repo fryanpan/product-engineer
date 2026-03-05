@@ -109,6 +109,21 @@ app.post("/api/internal/status", async (c) => {
   }));
 });
 
+// Internal: token usage reports from agent containers
+app.post("/api/internal/token-usage", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/token-usage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
 // Internal: heartbeat from agent containers
 app.post("/api/orchestrator/heartbeat", async (c) => {
   const key = c.req.header("X-Internal-Key");

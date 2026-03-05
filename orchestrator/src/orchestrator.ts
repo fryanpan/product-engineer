@@ -141,6 +141,22 @@ export class Orchestrator extends Container<Bindings> {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+
+    // Token usage table
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS token_usage (
+        ticket_id TEXT PRIMARY KEY,
+        total_input_tokens INTEGER NOT NULL DEFAULT 0,
+        total_output_tokens INTEGER NOT NULL DEFAULT 0,
+        total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        total_cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+        total_cost_usd REAL NOT NULL DEFAULT 0.0,
+        turns INTEGER NOT NULL DEFAULT 0,
+        session_message_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
     // Migration: add agent_active column for existing deployments
     try {
       this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER NOT NULL DEFAULT 1`);
@@ -413,6 +429,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.listTickets();
       case "/ticket/status":
         return this.handleStatusUpdate(request);
+      case "/token-usage":
+        return this.handleTokenUsage(request);
       case "/slack-event":
         return this.handleSlackEvent(request);
       case "/heartbeat":
@@ -586,6 +604,61 @@ export class Orchestrator extends Container<Bindings> {
     this.ctx.storage.sql.exec(
       `UPDATE tickets SET ${updates.join(", ")} WHERE id = ?`,
       ...values,
+    );
+
+    return Response.json({ ok: true });
+  }
+
+  private async handleTokenUsage(request: Request): Promise<Response> {
+    const {
+      ticketId,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCacheReadTokens,
+      totalCacheCreationTokens,
+      totalCostUsd,
+      turns,
+      sessionMessageCount,
+    } = await request.json<{
+      ticketId: string;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      totalCacheReadTokens: number;
+      totalCacheCreationTokens: number;
+      totalCostUsd: number;
+      turns: number;
+      sessionMessageCount: number;
+    }>();
+
+    console.log(
+      `[Orchestrator] Token usage: ticket=${ticketId} input=${totalInputTokens} output=${totalOutputTokens} cost=$${totalCostUsd.toFixed(2)}`
+    );
+
+    // Upsert token usage data
+    this.ctx.storage.sql.exec(
+      `INSERT INTO token_usage (
+        ticket_id, total_input_tokens, total_output_tokens,
+        total_cache_read_tokens, total_cache_creation_tokens,
+        total_cost_usd, turns, session_message_count
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(ticket_id) DO UPDATE SET
+        total_input_tokens = excluded.total_input_tokens,
+        total_output_tokens = excluded.total_output_tokens,
+        total_cache_read_tokens = excluded.total_cache_read_tokens,
+        total_cache_creation_tokens = excluded.total_cache_creation_tokens,
+        total_cost_usd = excluded.total_cost_usd,
+        turns = excluded.turns,
+        session_message_count = excluded.session_message_count,
+        updated_at = datetime('now')`,
+      ticketId,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCacheReadTokens,
+      totalCacheCreationTokens,
+      totalCostUsd,
+      turns,
+      sessionMessageCount,
     );
 
     return Response.json({ ok: true });

@@ -64,6 +64,93 @@ function phoneHome(phase: string, detail?: string) {
   }).catch((err) => console.error("[Agent] phoneHome failed:", err));
 }
 
+// Report token usage to the orchestrator
+async function reportTokenUsage() {
+  try {
+    console.log(`[Agent] Reporting token usage: ${totalInputTokens} in / ${totalOutputTokens} out / $${totalCostUsd.toFixed(2)}`);
+
+    const usageSummary = {
+      ticketId: config.ticketId,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCacheReadTokens,
+      totalCacheCreationTokens,
+      totalCostUsd,
+      turns: turnUsageLog.length,
+      sessionMessageCount,
+    };
+
+    const res = await fetch(`${config.workerUrl}/api/internal/token-usage`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Key": config.apiKey,
+      },
+      body: JSON.stringify(usageSummary),
+    });
+
+    if (!res.ok) {
+      console.error(`[Agent] Failed to report token usage: ${res.status}`);
+    } else {
+      console.log("[Agent] Token usage reported successfully");
+    }
+
+    // Also post summary to Slack
+    const formattedCost = totalCostUsd.toFixed(2);
+    const formattedInputTokens = (totalInputTokens / 1000).toFixed(1);
+    const formattedOutputTokens = (totalOutputTokens / 1000).toFixed(1);
+
+    let slackMessage = `📊 **Token Usage Summary**\n\n`;
+    slackMessage += `**Total Cost:** $${formattedCost}\n`;
+    slackMessage += `**Input:** ${formattedInputTokens}K tokens ($${(totalInputTokens * 3.0 / 1_000_000).toFixed(2)})\n`;
+    slackMessage += `**Output:** ${formattedOutputTokens}K tokens ($${(totalOutputTokens * 15.0 / 1_000_000).toFixed(2)})\n`;
+
+    if (totalCacheReadTokens > 0) {
+      slackMessage += `**Cache Read:** ${(totalCacheReadTokens / 1000).toFixed(1)}K tokens ($${(totalCacheReadTokens * 0.3 / 1_000_000).toFixed(2)})\n`;
+    }
+    if (totalCacheCreationTokens > 0) {
+      slackMessage += `**Cache Creation:** ${(totalCacheCreationTokens / 1000).toFixed(1)}K tokens ($${(totalCacheCreationTokens * 3.0 / 1_000_000).toFixed(2)})\n`;
+    }
+
+    slackMessage += `**Conversation Turns:** ${turnUsageLog.length}\n\n`;
+
+    // Include top 3 most expensive turns
+    const topTurns = [...turnUsageLog]
+      .sort((a, b) => b.costUsd - a.costUsd)
+      .slice(0, 3);
+
+    if (topTurns.length > 0) {
+      slackMessage += `**Most Expensive Turns:**\n`;
+      for (const turn of topTurns) {
+        slackMessage += `• Turn ${turn.turn}: $${turn.costUsd.toFixed(4)} (${turn.inputTokens} in / ${turn.outputTokens} out)\n`;
+        if (turn.promptSnippet) {
+          slackMessage += `  Prompt: "${turn.promptSnippet}${turn.promptSnippet.length >= 100 ? '...' : ''}"\n`;
+        }
+        if (turn.outputSnippet) {
+          slackMessage += `  Output: "${turn.outputSnippet}${turn.outputSnippet.length >= 100 ? '...' : ''}"\n`;
+        }
+      }
+    }
+
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.slackBotToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: config.slackChannel,
+        text: slackMessage,
+        ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
+      }),
+    });
+
+    console.log("[Agent] Token usage posted to Slack");
+  } catch (err) {
+    console.error("[Agent] Failed to report token usage:", err);
+  }
+}
+
 phoneHome("server_started", `uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 
 // Upload transcript to R2 via the worker
@@ -130,6 +217,24 @@ let sessionMessageCount = 0;
 let sessionError = "";
 let lastStderr = "";
 let currentSessionId = "";
+
+// Token usage tracking
+let totalInputTokens = 0;
+let totalOutputTokens = 0;
+let totalCacheReadTokens = 0;
+let totalCacheCreationTokens = 0;
+let totalCostUsd = 0;
+let lastUserPrompt = "";  // Track most recent user message for logging
+let turnUsageLog: Array<{
+  turn: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number;
+  promptSnippet?: string;
+  outputSnippet?: string;
+}> = [];
 
 function createMessageGenerator(): AsyncGenerator<SDKUserMessage> {
   const queue: SDKUserMessage[] = [];
@@ -354,6 +459,54 @@ async function startSession(initialPrompt: string) {
         }
 
         if (message.type === "assistant" && message.message?.content) {
+          // Extract output snippet for logging
+          let outputSnippet = "";
+          for (const block of message.message.content) {
+            if (block.type === "text") {
+              outputSnippet = block.text.slice(0, 100);
+              break;
+            }
+          }
+
+          // Track token usage per turn
+          const usage = (message.message as any).usage;
+          if (usage) {
+            const inputTokens = usage.input_tokens || 0;
+            const outputTokens = usage.output_tokens || 0;
+            const cacheReadTokens = usage.cache_read_input_tokens || 0;
+            const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+
+            totalInputTokens += inputTokens;
+            totalOutputTokens += outputTokens;
+            totalCacheReadTokens += cacheReadTokens;
+            totalCacheCreationTokens += cacheCreationTokens;
+
+            // Calculate cost based on Sonnet 4.5 pricing: $3/MTok input, $15/MTok output
+            // Cache reads are 10% of input cost, cache creation is same as input
+            const turnCost =
+              (inputTokens * 3.0 / 1_000_000) +
+              (outputTokens * 15.0 / 1_000_000) +
+              (cacheReadTokens * 0.3 / 1_000_000) +
+              (cacheCreationTokens * 3.0 / 1_000_000);
+
+            totalCostUsd += turnCost;
+
+            turnUsageLog.push({
+              turn: sessionMessageCount,
+              inputTokens,
+              outputTokens,
+              cacheReadTokens,
+              cacheCreationTokens,
+              costUsd: turnCost,
+              promptSnippet: lastUserPrompt.slice(0, 100),
+              outputSnippet,
+            });
+
+            console.log(`[Agent] Turn ${sessionMessageCount} usage: ${inputTokens} in / ${outputTokens} out / $${turnCost.toFixed(4)}`);
+            console.log(`[Agent]   Prompt: ${lastUserPrompt.slice(0, 100)}`);
+            console.log(`[Agent]   Output: ${outputSnippet}`);
+          }
+
           for (const block of message.message.content) {
             if (block.type === "text") {
               lastAssistantText = block.text.slice(0, 500);
@@ -364,8 +517,21 @@ async function startSession(initialPrompt: string) {
               console.log(`[Agent] Tool: ${block.name}`);
             }
           }
+        } else if (message.type === "user") {
+          // Capture user message for next turn's logging
+          const userMsg = message as SDKUserMessage;
+          if (typeof userMsg.message.content === "string") {
+            lastUserPrompt = userMsg.message.content;
+          }
         } else if (message.type === "result") {
           const result = message as Record<string, unknown>;
+
+          // Extract final usage totals from result message if available
+          if (result.total_cost_usd) {
+            totalCostUsd = result.total_cost_usd as number;
+            console.log(`[Agent] Final cost from SDK: $${totalCostUsd.toFixed(2)}`);
+          }
+
           console.log(`[Agent] Result message: ${JSON.stringify(result).slice(0, 300)}`);
           phoneHome("result", JSON.stringify(result).slice(0, 200));
         }
@@ -377,6 +543,9 @@ async function startSession(initialPrompt: string) {
       console.log("[Agent] Session ended normally");
       sessionStatus = "completed";
       phoneHome("session_completed", `msgs=${sessionMessageCount}`);
+
+      // Report token usage
+      await reportTokenUsage();
     } catch (err) {
       console.error("[Agent] Session error:", err);
       sessionError = String(err);

@@ -2,6 +2,10 @@
   "linear_team_id": "00000000-0000-0000-0000-000000000001",
   "agent_linear_email": "agent@example.com",
   "agent_linear_name": "My Agent",
+  "cloudflare_ai_gateway": {
+    "account_id": "87d47ed3fa448bfeebf41a52384fcd9e",
+    "gateway_id": "product-engineer"
+  },
   "products": {
     "my-app": {
       "repos": ["your-org/my-app"],
