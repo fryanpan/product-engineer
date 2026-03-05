@@ -24,6 +24,8 @@ export function resolveAgentEnvVars(
     R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID || "",
     R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY || "",
     CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
+    // Model selection (sonnet, opus, haiku)
+    MODEL: config.model || "",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {

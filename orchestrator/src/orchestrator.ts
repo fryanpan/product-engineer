@@ -1,6 +1,7 @@
 import { Container } from "@cloudflare/containers";
 import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
 import type { ProductConfig } from "./registry";
+import { selectModelForTicket } from "./model-selection";
 
 function sanitizeTicketId(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -496,6 +497,17 @@ export class Orchestrator extends Container<Bindings> {
     const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
     const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
 
+    // Analyze ticket complexity and select appropriate model
+    const payload = event.payload as any;
+    const modelSelection = selectModelForTicket({
+      priority: payload.priority,
+      title: payload.title,
+      description: payload.description,
+      labels: payload.labels,
+    });
+
+    console.log(`[Orchestrator] Model selection for ${event.ticketId}: ${modelSelection.model} (${modelSelection.complexity} complexity) - ${modelSelection.reason}`);
+
     const config: TicketAgentConfig = {
       ticketId: event.ticketId,
       product: event.product,
@@ -503,6 +515,7 @@ export class Orchestrator extends Container<Bindings> {
       slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
       secrets: productConfig.secrets,
       gatewayConfig,
+      model: modelSelection.model,
     };
 
     const initRes = await agent.fetch(new Request("http://internal/initialize", {

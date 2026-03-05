@@ -27,6 +27,7 @@ export interface TicketAgentConfig {
   slackChannel: string;
   secrets: Record<string, string>; // logical name → binding name
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
+  model?: string; // Claude model to use (e.g., "sonnet", "opus", "haiku")
 }
 
 export interface Bindings {
