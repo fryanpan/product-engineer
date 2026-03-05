@@ -79,13 +79,21 @@ export class Orchestrator extends Container<Bindings> {
   // Start the Slack Socket Mode container on first request (and after crashes/deploys).
   // Verifies the container is actually responsive — the in-memory flag alone isn't
   // reliable across deploys (the flag survives but the container gets replaced).
+  private lastHealthCheck = 0;
+  private static HEALTH_CHECK_TTL = 60_000; // 60 seconds
+
   private async ensureContainerRunning() {
     if (this.containerStarted) {
+      // Skip the expensive HTTP health probe if we checked recently
+      if (Date.now() - this.lastHealthCheck < Orchestrator.HEALTH_CHECK_TTL) return;
       try {
         // Container handle exists at runtime (from Container SDK) but isn't in Workers types
         const port = (this.ctx as any).container.getTcpPort(this.defaultPort);
         const res = await port.fetch("http://localhost/health", { signal: AbortSignal.timeout(2000) }) as Response;
-        if (res.ok) return;
+        if (res.ok) {
+          this.lastHealthCheck = Date.now();
+          return;
+        }
       } catch {
         console.warn("[Orchestrator] Container flag was set but container is not responsive — restarting");
         this.containerStarted = false;
@@ -345,65 +353,33 @@ export class Orchestrator extends Container<Bindings> {
     let settingsUpdated = 0;
 
     // Insert global settings
-    if (registry.linear_team_id) {
+    const settingsToUpsert: [string, string][] = [];
+    if (registry.linear_team_id) settingsToUpsert.push(["linear_team_id", registry.linear_team_id]);
+    if (registry.agent_linear_email) settingsToUpsert.push(["agent_linear_email", registry.agent_linear_email]);
+    if (registry.agent_linear_name) settingsToUpsert.push(["agent_linear_name", registry.agent_linear_name]);
+    if (registry.cloudflare_ai_gateway) settingsToUpsert.push(["cloudflare_ai_gateway", JSON.stringify(registry.cloudflare_ai_gateway)]);
+
+    for (const [key, value] of settingsToUpsert) {
       this.ctx.storage.sql.exec(
         `INSERT INTO settings (key, value) VALUES (?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-        "linear_team_id",
-        registry.linear_team_id,
-      );
-      settingsUpdated++;
-    }
-    if (registry.agent_linear_email) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO settings (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-        "agent_linear_email",
-        registry.agent_linear_email,
-      );
-      settingsUpdated++;
-    }
-    if (registry.agent_linear_name) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO settings (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-        "agent_linear_name",
-        registry.agent_linear_name,
-      );
-      settingsUpdated++;
-    }
-    if (registry.cloudflare_ai_gateway) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO settings (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-        "cloudflare_ai_gateway",
-        JSON.stringify(registry.cloudflare_ai_gateway),
+        key,
+        value,
       );
       settingsUpdated++;
     }
 
-    // Insert products
+    // Upsert products
     for (const [slug, config] of Object.entries(registry.products)) {
-      const existing = this.ctx.storage.sql.exec(
-        "SELECT 1 FROM products WHERE slug = ?",
+      this.ctx.storage.sql.exec(
+        `INSERT INTO products (slug, config) VALUES (?, ?)
+         ON CONFLICT(slug) DO UPDATE SET config = excluded.config, updated_at = datetime('now')`,
         slug,
-      ).toArray();
-
-      if (existing.length > 0) {
-        this.ctx.storage.sql.exec(
-          "UPDATE products SET config = ?, updated_at = datetime('now') WHERE slug = ?",
-          JSON.stringify(config),
-          slug,
-        );
-        productsUpdated++;
-      } else {
-        this.ctx.storage.sql.exec(
-          "INSERT INTO products (slug, config) VALUES (?, ?)",
-          slug,
-          JSON.stringify(config),
-        );
-        productsCreated++;
-      }
+        JSON.stringify(config),
+      );
+      // Count as created or updated based on whether rows changed
+      const changes = this.ctx.storage.sql.exec("SELECT changes() as count").toArray() as Array<{ count: number }>;
+      if (changes[0].count > 0) productsCreated++;
     }
 
     return Response.json({
@@ -885,6 +861,7 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
     const limit = parseInt(url.searchParams.get("limit") || "50", 10);
     const sinceHours = url.searchParams.get("sinceHours") ? parseInt(url.searchParams.get("sinceHours")!, 10) : undefined;
 
+    const params: (string | number)[] = [];
     let query = `
       SELECT id as ticketId, product, status, transcript_r2_key as r2Key, updated_at as uploadedAt
       FROM tickets
@@ -892,12 +869,14 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
     `;
 
     if (sinceHours) {
-      query += ` AND (julianday('now') - julianday(updated_at)) * 24 < ${sinceHours}`;
+      query += ` AND (julianday('now') - julianday(updated_at)) * 24 < ?`;
+      params.push(sinceHours);
     }
 
-    query += ` ORDER BY updated_at DESC LIMIT ${limit}`;
+    query += ` ORDER BY updated_at DESC LIMIT ?`;
+    params.push(limit);
 
-    const rows = this.ctx.storage.sql.exec(query).toArray() as Array<{
+    const rows = this.ctx.storage.sql.exec(query, ...params).toArray() as Array<{
       ticketId: string;
       product: string;
       status: string;
