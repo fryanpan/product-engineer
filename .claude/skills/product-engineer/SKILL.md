@@ -43,14 +43,15 @@ Examples: database schema changes, API contract changes, deleting data, force pu
 5. Read the relevant code. Understand existing patterns before changing anything.
 6. Implement. Keep changes minimal — only what the task requires.
 7. Run tests. Fix anything you broke.
-8. Commit with a descriptive message.
-9. Push and create a PR with clear title and description.
-10. Update status to `pr_open` (this updates Linear to "In Review" and Slack thread header)
-11. Assess risk:
+8. **Run task-retro** (captures learnings, proposes actions, implements approved changes, commits)
+9. Commit implementation with a descriptive message (if not already committed)
+10. Push and create a PR with clear title and description.
+11. Update status to `pr_open` (this updates Linear to "In Review" and Slack thread header)
+12. Assess risk:
     - **Low risk** (auto-merge): CSS, text, layout, docs, tests, config
     - **High risk** (request review): data model, auth, APIs, security, dependencies
-12. Notify Slack with the PR link and risk assessment.
-13. **Stay alive for review:**
+13. Notify Slack with the PR link and risk assessment.
+14. **Stay alive for review:**
     - For high-risk PRs, remain active for up to 1 hour after PR creation
     - You'll receive GitHub review comments automatically
     - You'll receive Slack messages if the user responds
@@ -70,7 +71,6 @@ Examples: database schema changes, API contract changes, deleting data, force pu
    - Merge the PR
    - Update status to `merged`
    - Notify Slack
-   - Do a brief retro
 5. If you should wait for manual merge:
    - Notify Slack that the PR is ready
    - Stay alive for further feedback or merge event
@@ -79,8 +79,6 @@ Examples: database schema changes, API contract changes, deleting data, force pu
 
 1. Update status to `merged`
 2. Notify Slack: "PR merged successfully"
-3. Do a brief retro: what went well, what was surprising, any gotchas
-4. Post retro to Slack
 
 ### On receiving a CI failure
 
