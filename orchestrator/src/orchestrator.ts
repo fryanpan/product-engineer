@@ -819,10 +819,29 @@ export class Orchestrator extends Container<Bindings> {
         await this.routeToAgent(event);
         return Response.json({ ok: true, ticketId: ticket.id });
       }
+
+      // Thread reply but no ticket found - user is replying to something that's not tracked
+      if (slackEvent.type === "message") {
+        await this.postSlackError(
+          slackEvent.channel || "",
+          slackEvent.thread_ts,
+          `ℹ️ This thread is not associated with an active Product Engineer task.\n\n` +
+          `If you want to start a new task, mention me with @product-engineer in your message.`
+        );
+        return Response.json({ ok: true, ignored: true, reason: "thread not tracked" });
+      }
     }
 
     // Only create tickets from app_mention events
     if (slackEvent.type !== "app_mention") {
+      // This shouldn't happen (Socket Mode only forwards app_mention and thread messages),
+      // but if it does, let the user know
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackEvent.ts || "",
+        `ℹ️ I only respond to direct mentions (@product-engineer).\n\n` +
+        `Please mention me to start a new task.`
+      );
       return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
     }
 
