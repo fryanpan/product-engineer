@@ -42,7 +42,7 @@ console.log(`[Agent] Env check: PRODUCT=${process.env.PRODUCT || "MISSING"}`);
 console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 
 const config = loadConfig();
-console.log(`[Agent] Config loaded: ticket=${config.ticketId} product=${config.product} repos=${config.repos.join(",")}`);
+console.log(`[Agent] Config loaded: ticket=${config.ticketId} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"}`);
 
 // Phone-home: report lifecycle events to the worker so they appear in wrangler tail.
 // Only set branch_name when we actually have a git branch (not diagnostic detail).
@@ -431,6 +431,12 @@ async function startSession(initialPrompt: string) {
     },
   };
 
+  // Set model if configured (sonnet, opus, haiku)
+  if (config.model) {
+    queryOptions.model = config.model;
+    console.log(`[Agent] Using model: ${config.model}`);
+  }
+
   // Resume the most recent session if we found existing session files
   if (isResuming) {
     queryOptions.continue = true;
@@ -481,8 +487,10 @@ async function startSession(initialPrompt: string) {
             totalCacheReadTokens += cacheReadTokens;
             totalCacheCreationTokens += cacheCreationTokens;
 
-            // Calculate cost based on Sonnet 4.5 pricing: $3/MTok input, $15/MTok output
+            // Calculate cost based on Sonnet 4.6 pricing: $3/MTok input, $15/MTok output
+            // (Opus 4.6: $5/$25, Haiku 4.5: $1/$5)
             // Cache reads are 10% of input cost, cache creation is same as input
+            // Note: This uses Sonnet pricing for all models - actual costs may vary
             const turnCost =
               (inputTokens * 3.0 / 1_000_000) +
               (outputTokens * 15.0 / 1_000_000) +

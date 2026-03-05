@@ -62,6 +62,7 @@ export interface AgentConfig {
   apiKey: string;
   ticketIdentifier?: string;  // e.g., "BC-84"
   ticketTitle?: string;        // Brief title for display
+  model?: string;              // Claude model to use (sonnet, opus, haiku)
 }
 
 export function loadConfig(): AgentConfig {
@@ -85,5 +86,6 @@ export function loadConfig(): AgentConfig {
     apiKey: process.env.API_KEY || "",
     ticketIdentifier: process.env.TICKET_IDENTIFIER || undefined,
     ticketTitle: process.env.TICKET_TITLE || undefined,
+    model: process.env.MODEL || undefined,
   };
 }
