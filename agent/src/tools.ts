@@ -354,5 +354,62 @@ export function createTools(config: AgentConfig) {
     },
   );
 
-  return { tools: [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript] };
+  const fetchSlackFile = tool(
+    "fetch_slack_file",
+    "Fetch a file attachment from Slack. Use this to view images or download files attached to Slack messages. Returns the file content as base64 for images, or as text for other file types.",
+    {
+      url: z.string().describe("The url_private or url_private_download from the Slack file object"),
+      mimetype: z.string().optional().describe("The MIME type of the file (e.g., 'image/png')"),
+    },
+    async ({ url, mimetype }) => {
+      try {
+        const res = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${config.slackBotToken}`,
+          },
+        });
+
+        if (!res.ok) {
+          return { content: [{ type: "text" as const, text: `Failed to fetch Slack file: ${res.status} ${res.statusText}` }] };
+        }
+
+        const isImage = mimetype?.startsWith("image/");
+
+        if (isImage) {
+          // For images, return as base64 in an image content block so Claude can view it
+          const arrayBuffer = await res.arrayBuffer();
+          const base64 = Buffer.from(arrayBuffer).toString("base64");
+          const imageType = mimetype?.split("/")[1] || "png";
+
+          return {
+            content: [
+              {
+                type: "image" as const,
+                source: {
+                  type: "base64" as const,
+                  media_type: mimetype as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+                  data: base64,
+                },
+              },
+            ],
+          };
+        } else {
+          // For non-images, return as text
+          const text = await res.text();
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `File content (${mimetype || "unknown type"}):\n\n${text}`,
+              },
+            ],
+          };
+        }
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error fetching Slack file: ${err}` }] };
+      }
+    },
+  );
+
+  return { tools: [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript, fetchSlackFile] };
 }

@@ -22,7 +22,19 @@ if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
 }
 
-function userMessage(content: string): SDKUserMessage {
+type MessageContent =
+  | string
+  | Array<{
+      type: "text" | "image";
+      text?: string;
+      source?: {
+        type: "base64";
+        media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+        data: string;
+      };
+    }>;
+
+function userMessage(content: MessageContent): SDKUserMessage {
   return {
     type: "user",
     message: { role: "user", content },
@@ -423,7 +435,7 @@ async function findExistingSession(): Promise<string | null> {
   }
 }
 
-async function startSession(initialPrompt: string) {
+async function startSession(initialPrompt: MessageContent) {
   if (sessionActive) return;
   sessionStatus = "starting_session";
 
@@ -683,10 +695,10 @@ app.post("/event", async (c) => {
         config.ticketTitle = ticketData.title;
       }
 
-      const prompt = buildPrompt(taskPayload);
+      const prompt = await buildPrompt(taskPayload, config.slackBotToken);
       await startSession(prompt);
     } else if (messageYielder) {
-      const continuationPrompt = buildEventPrompt(event);
+      const continuationPrompt = await buildEventPrompt(event, config.slackBotToken);
       messageYielder(userMessage(continuationPrompt));
     } else {
       return c.json({ error: "Session initializing" }, 503);

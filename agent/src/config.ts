@@ -31,11 +31,23 @@ export interface TicketData {
   labels: string[];
 }
 
+export interface SlackFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  url_private: string;
+  url_private_download: string;
+  permalink: string;
+  filetype: string;
+  size: number;
+}
+
 export interface CommandData {
   text: string;
   user: string;
   channel: string;
   thread_ts?: string;
+  files?: SlackFile[];
 }
 
 export interface TicketEvent {

@@ -1,3 +1,14 @@
+interface SlackFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  url_private: string;
+  url_private_download: string;
+  permalink: string;
+  filetype: string;
+  size: number;
+}
+
 interface SlackEnvelope {
   envelope_id: string;
   type: string;
@@ -11,6 +22,7 @@ interface SlackEnvelope {
       ts: string;
       bot_id?: string;
       subtype?: string;
+      files?: SlackFile[];
     };
   };
 }

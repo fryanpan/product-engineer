@@ -15,14 +15,84 @@ import type {
   TicketData,
   CommandData,
   TicketEvent,
+  SlackFile,
 } from "./config";
 
-export function buildPrompt(task: TaskPayload): string {
+type MessageContent =
+  | string
+  | Array<{
+      type: "text" | "image";
+      text?: string;
+      source?: {
+        type: "base64";
+        media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+        data: string;
+      };
+    }>;
+
+/**
+ * Fetch Slack files and convert images to base64 content blocks.
+ * Non-images are skipped (agent can use fetch_slack_file tool if needed).
+ */
+async function fetchSlackFiles(
+  files: SlackFile[],
+  slackBotToken: string,
+): Promise<MessageContent[number][]> {
+  const contentBlocks: MessageContent[number][] = [];
+
+  for (const file of files) {
+    const isImage = file.mimetype.startsWith("image/");
+    if (!isImage) continue; // Skip non-images for now
+
+    try {
+      const res = await fetch(file.url_private, {
+        headers: { Authorization: `Bearer ${slackBotToken}` },
+      });
+
+      if (!res.ok) {
+        console.error(`[Prompt] Failed to fetch Slack file ${file.name}: ${res.status}`);
+        continue;
+      }
+
+      const arrayBuffer = await res.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      // Map common image types
+      const mimeTypeMap: Record<string, "image/png" | "image/jpeg" | "image/gif" | "image/webp"> = {
+        "image/png": "image/png",
+        "image/jpeg": "image/jpeg",
+        "image/jpg": "image/jpeg",
+        "image/gif": "image/gif",
+        "image/webp": "image/webp",
+      };
+
+      const media_type = mimeTypeMap[file.mimetype] || "image/png";
+
+      contentBlocks.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type,
+          data: base64,
+        },
+      });
+    } catch (err) {
+      console.error(`[Prompt] Error fetching Slack file ${file.name}:`, err);
+    }
+  }
+
+  return contentBlocks;
+}
+
+export async function buildPrompt(
+  task: TaskPayload,
+  slackBotToken: string,
+): Promise<MessageContent> {
   const header = `You are a Product Engineer agent working on **${task.product}**.
 
 ## Your Task
 
-${formatTask(task)}
+${await formatTask(task, slackBotToken)}
 
 ## Repos
 
@@ -61,10 +131,19 @@ Use the repo's existing CLAUDE.md, skills, and conventions. Don't fight the code
 4. Do a brief retro: what went well, what was surprising, any gotchas for next time
 5. Post the retro to Slack as a thread reply`;
 
+  // If task has files (from Slack), fetch and append images
+  const files = (task.data as CommandData).files;
+  if (files && files.length > 0) {
+    const imageBlocks = await fetchSlackFiles(files, slackBotToken);
+    if (imageBlocks.length > 0) {
+      return [{ type: "text", text: header }, ...imageBlocks];
+    }
+  }
+
   return header;
 }
 
-function formatTask(task: TaskPayload): string {
+async function formatTask(task: TaskPayload, slackBotToken: string): Promise<string> {
   switch (task.type) {
     case "feedback":
       return formatFeedback(task.data as FeedbackData);
@@ -101,15 +180,26 @@ function formatTicket(data: TicketData): string {
 }
 
 function formatCommand(data: CommandData): string {
-  return [
+  const parts = [
     `**Type:** Slack command`,
     `**From:** <@${data.user}>`,
     `**Message:**\n<user_input>\n${data.text}\n</user_input>`,
-    `**Channel:** ${data.channel}`,
-  ].join("\n");
+  ];
+
+  if (data.files && data.files.length > 0) {
+    const fileList = data.files.map(f => `- ${f.name} (${f.mimetype}, ${(f.size / 1024).toFixed(1)} KB)`).join("\n");
+    parts.push(`**Attachments:**\n${fileList}`);
+    parts.push(`**Note:** File URLs are provided in the event payload. Use the Slack bot token to fetch files from url_private URLs.`);
+  }
+
+  parts.push(`**Channel:** ${data.channel}`);
+  return parts.join("\n");
 }
 
-export function buildEventPrompt(event: TicketEvent): string {
+export async function buildEventPrompt(
+  event: TicketEvent,
+  slackBotToken: string,
+): Promise<MessageContent> {
   const payload = event.payload as Record<string, unknown>;
 
   switch (event.type) {
@@ -123,8 +213,26 @@ export function buildEventPrompt(event: TicketEvent): string {
       return `The PR has been merged. Update the task status to "merged", notify Slack, and do a brief retro.`;
     case "ci_status":
       return `CI status update:\n\n**Status:** ${payload.status}\n**Description:** ${payload.description || ""}\n\nIf CI failed, investigate and fix. If it passed, continue with the workflow.`;
-    case "slack_reply":
-      return `The user replied via Slack:\n\n<user_input>\n${payload.text}\n</user_input>\n\nContinue processing with this information.`;
+    case "slack_reply": {
+      const files = payload.files as CommandData["files"];
+      let message = `The user replied via Slack:\n\n<user_input>\n${payload.text}\n</user_input>`;
+
+      if (files && files.length > 0) {
+        const fileList = files.map((f: any) => `- ${f.name} (${f.mimetype}, ${(f.size / 1024).toFixed(1)} KB)`).join("\n");
+        message += `\n\n**Attachments:**\n${fileList}`;
+
+        // Fetch images and return structured content
+        const imageBlocks = await fetchSlackFiles(files, slackBotToken);
+        if (imageBlocks.length > 0) {
+          return [
+            { type: "text", text: message + `\n\nContinue processing with this information.` },
+            ...imageBlocks,
+          ];
+        }
+      }
+
+      return message + `\n\nContinue processing with this information.`;
+    }
     default:
       return `New event: ${event.type}\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
   }
