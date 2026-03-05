@@ -44,6 +44,39 @@ export function extractTaskId(branch: string): string | null {
   return branch.match(/^(?:feedback|ticket)\/(.+)$/)?.[1] ?? null;
 }
 
+// Helper to reduce repetition across webhook handlers
+async function routeWebhookEvent(
+  env: Bindings,
+  branch: string | undefined,
+  repo: string,
+  eventData: { type: string; payload: Record<string, unknown> },
+): Promise<Response> {
+  if (!branch) {
+    return Response.json({ ok: true, ignored: true, reason: "no branch" });
+  }
+
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, repo);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: eventData.type,
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: { ...eventData.payload, branch, repo },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId });
+}
+
 export async function resolveProductByRepo(
   orchestratorStub: DurableObjectStub,
   repoFullName: string,
@@ -574,40 +607,16 @@ async function handleCheckRun(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
-  // Must have a branch (from check_suite)
-  const branch = payload.check_run.check_suite?.head_branch;
-  if (!branch) {
-    return Response.json({ ok: true, ignored: true, reason: "no branch" });
-  }
-
-  const taskId = extractTaskId(branch);
-  if (!taskId) {
-    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
-  }
-
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
-  if (!productName) {
-    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
-  }
-
-  await forwardToOrchestrator(env, {
+  return routeWebhookEvent(env, payload.check_run.check_suite?.head_branch, payload.repository.full_name, {
     type: "ci_failure",
-    source: "github",
-    ticketId: taskId,
-    product: productName,
     payload: {
       check_name: payload.check_run.name,
       conclusion: payload.check_run.conclusion,
       output_title: payload.check_run.output.title,
       output_summary: payload.check_run.output.summary,
       check_url: payload.check_run.html_url,
-      branch,
-      repo: payload.repository.full_name,
     },
   });
-
-  return Response.json({ ok: true, product: productName, taskId, check: payload.check_run.name });
 }
 
 async function handleWorkflowRun(rawBody: string, env: Bindings) {
@@ -628,33 +637,14 @@ async function handleWorkflowRun(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
-  const branch = payload.workflow_run.head_branch;
-  const taskId = extractTaskId(branch);
-  if (!taskId) {
-    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
-  }
-
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
-  if (!productName) {
-    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
-  }
-
-  await forwardToOrchestrator(env, {
+  return routeWebhookEvent(env, payload.workflow_run.head_branch, payload.repository.full_name, {
     type: "workflow_failure",
-    source: "github",
-    ticketId: taskId,
-    product: productName,
     payload: {
       workflow_name: payload.workflow_run.name,
       conclusion: payload.workflow_run.conclusion,
       workflow_url: payload.workflow_run.html_url,
-      branch,
-      repo: payload.repository.full_name,
     },
   });
-
-  return Response.json({ ok: true, product: productName, taskId, workflow: payload.workflow_run.name });
 }
 
 async function handleCheckSuite(rawBody: string, env: Bindings) {
@@ -675,39 +665,16 @@ async function handleCheckSuite(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
-  const branch = payload.check_suite.head_branch;
-  if (!branch) {
-    return Response.json({ ok: true, ignored: true, reason: "no branch" });
-  }
-
-  const taskId = extractTaskId(branch);
-  if (!taskId) {
-    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
-  }
-
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
-  if (!productName) {
-    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
-  }
-
   const eventType = payload.check_suite.conclusion === "success" ? "checks_passed" : "checks_failed";
 
-  await forwardToOrchestrator(env, {
+  return routeWebhookEvent(env, payload.check_suite.head_branch, payload.repository.full_name, {
     type: eventType,
-    source: "github",
-    ticketId: taskId,
-    product: productName,
     payload: {
       conclusion: payload.check_suite.conclusion,
       status: payload.check_suite.status,
       suite_url: payload.check_suite.html_url,
-      branch,
-      repo: payload.repository.full_name,
     },
   });
-
-  return Response.json({ ok: true, product: productName, taskId, conclusion: payload.check_suite.conclusion });
 }
 
 async function handleStatus(rawBody: string, env: Bindings) {
@@ -725,39 +692,16 @@ async function handleStatus(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
-  // Must have branches
-  if (!payload.branches || payload.branches.length === 0) {
-    return Response.json({ ok: true, ignored: true, reason: "no branches" });
-  }
-
-  const branch = payload.branches[0].name;
-  const taskId = extractTaskId(branch);
-  if (!taskId) {
-    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
-  }
-
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
-  if (!productName) {
-    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
-  }
-
-  await forwardToOrchestrator(env, {
+  const branch = payload.branches?.[0]?.name;
+  return routeWebhookEvent(env, branch, payload.repository.full_name, {
     type: "status_failure",
-    source: "github",
-    ticketId: taskId,
-    product: productName,
     payload: {
       state: payload.state,
       context: payload.context,
       description: payload.description,
       target_url: payload.target_url,
-      branch,
-      repo: payload.repository.full_name,
     },
   });
-
-  return Response.json({ ok: true, product: productName, taskId, context: payload.context });
 }
 
 async function handleDeploymentStatus(rawBody: string, env: Bindings) {
@@ -781,34 +725,15 @@ async function handleDeploymentStatus(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
-  const branch = payload.deployment.ref;
-  const taskId = extractTaskId(branch);
-  if (!taskId) {
-    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
-  }
-
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
-  if (!productName) {
-    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
-  }
-
-  await forwardToOrchestrator(env, {
+  return routeWebhookEvent(env, payload.deployment.ref, payload.repository.full_name, {
     type: "deployment_failure",
-    source: "github",
-    ticketId: taskId,
-    product: productName,
     payload: {
       state: payload.deployment_status.state,
       environment: payload.deployment_status.environment,
       description: payload.deployment_status.description,
       target_url: payload.deployment_status.target_url,
-      branch,
-      repo: payload.repository.full_name,
     },
   });
-
-  return Response.json({ ok: true, product: productName, taskId, environment: payload.deployment_status.environment });
 }
 
 export { linearWebhook, githubWebhook };
