@@ -43,15 +43,27 @@ Examples: database schema changes, API contract changes, deleting data, force pu
 5. Read the relevant code. Understand existing patterns before changing anything.
 6. Implement. Keep changes minimal — only what the task requires.
 7. Run tests. Fix anything you broke.
-8. Commit with a descriptive message.
-9. Push and create a PR with clear title and description.
-10. Update status to `pr_open` (this updates Linear to "In Review" and Slack thread header)
-11. Assess risk:
+8. **Code review**: Use the `code-review` plugin skill to review your changes before committing. Fix any issues found.
+9. Commit with a descriptive message.
+10. Push and create a PR with clear title and description.
+11. Update status to `pr_open` (this updates Linear to "In Review" and Slack thread header)
+12. Assess risk:
     - **Low risk** (auto-merge): CSS, text, layout, docs, tests, config
     - **High risk** (request review): data model, auth, APIs, security, dependencies
-12. Notify Slack with the PR link and risk assessment.
-13. **Stay alive for review:**
-    - For high-risk PRs, remain active for up to 1 hour after PR creation
+13. Notify Slack with the PR link and risk assessment.
+14. **Decide whether to auto-merge or request review:**
+    - **Auto-merge** if ALL of these are true:
+      - Risk is low (CSS, text, layout, docs, tests, config)
+      - Changes are self-contained and well-tested
+      - No architectural or behavioral changes
+    - **Request review** otherwise (high risk, unclear impact, or you're uncertain)
+15. **If auto-merging:**
+    - Run `/task-retro` to reflect, take actions, and post to Slack
+    - Commit and push any retro actions (learnings updates, doc fixes, etc.)
+    - Merge the PR
+    - Update status to `merged`
+16. **If requesting review, stay alive:**
+    - Remain active for up to 1 hour after PR creation
     - You'll receive GitHub review comments automatically
     - You'll receive Slack messages if the user responds
     - After addressing feedback or after 1 hour of inactivity, you can complete
@@ -63,14 +75,16 @@ Examples: database schema changes, API contract changes, deleting data, force pu
 3. If changes requested:
    - Make the requested changes
    - Run tests
+   - **Code review**: Use the `code-review` plugin skill to review your fixes before committing
    - Commit and push
    - Update status to `needs_revision` → back to `in_review` after push
    - Notify Slack with summary of changes
 4. If approved and you have merge permission:
+   - Run `/task-retro` to reflect, take actions, and post to Slack
+   - Commit and push any retro actions (learnings updates, doc fixes, etc.)
    - Merge the PR
    - Update status to `merged`
    - Notify Slack
-   - Do a brief retro
 5. If you should wait for manual merge:
    - Notify Slack that the PR is ready
    - Stay alive for further feedback or merge event
@@ -79,8 +93,12 @@ Examples: database schema changes, API contract changes, deleting data, force pu
 
 1. Update status to `merged`
 2. Notify Slack: "PR merged successfully"
-3. Do a brief retro: what went well, what was surprising, any gotchas
-4. Post retro to Slack
+3. **Run `/task-retro` (if not already done)**: Follow the task-retro skill to:
+   - Reflect on what worked and what didn't
+   - **Take concrete actions** (update learnings, fix issues, create tickets, etc.)
+   - Post retro to Slack with actions taken
+   - Note: If you auto-merged a low-risk PR, you already did this before merging — don't duplicate it
+4. Only after completing the retro and taking actions, consider the task complete
 
 ### On receiving a CI failure
 
