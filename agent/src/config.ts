@@ -50,18 +50,19 @@ export interface CommandData {
   files?: SlackFile[];
 }
 
+/** A single content block (text or image) in a structured message. */
+export interface ContentBlock {
+  type: "text" | "image";
+  text?: string;
+  source?: {
+    type: "base64";
+    media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+    data: string;
+  };
+}
+
 /** Content that can be passed to the Agent SDK — plain text or structured blocks with images. */
-export type MessageContent =
-  | string
-  | Array<{
-      type: "text" | "image";
-      text?: string;
-      source?: {
-        type: "base64";
-        media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-        data: string;
-      };
-    }>;
+export type MessageContent = string | ContentBlock[];
 
 const IMAGE_MEDIA_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif" | "image/webp"> = {
   "image/png": "image/png",

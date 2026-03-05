@@ -17,6 +17,7 @@ import type {
   TicketEvent,
   SlackFile,
   MessageContent,
+  ContentBlock,
 } from "./config";
 import { normalizeImageMediaType } from "./config";
 
@@ -28,12 +29,12 @@ import { normalizeImageMediaType } from "./config";
 async function fetchSlackFiles(
   files: SlackFile[],
   slackBotToken: string,
-): Promise<MessageContent[number][]> {
+): Promise<ContentBlock[]> {
   const imageFiles = files.filter(f => f.mimetype.startsWith("image/"));
   if (imageFiles.length === 0) return [];
 
   const results = await Promise.allSettled(
-    imageFiles.map(async (file): Promise<MessageContent[number]> => {
+    imageFiles.map(async (file): Promise<ContentBlock> => {
       const res = await fetch(file.url_private, {
         headers: { Authorization: `Bearer ${slackBotToken}` },
       });
@@ -56,7 +57,7 @@ async function fetchSlackFiles(
     }),
   );
 
-  const contentBlocks: MessageContent[number][] = [];
+  const contentBlocks: ContentBlock[] = [];
   for (const result of results) {
     if (result.status === "fulfilled") {
       contentBlocks.push(result.value);
@@ -120,7 +121,7 @@ Use the repo's existing CLAUDE.md, skills, and conventions. Don't fight the code
   if (files && files.length > 0) {
     const imageBlocks = await fetchSlackFiles(files, slackBotToken);
     if (imageBlocks.length > 0) {
-      return [{ type: "text", text: header }, ...imageBlocks];
+      return [{ type: "text" as const, text: header }, ...imageBlocks];
     }
   }
 
@@ -209,7 +210,7 @@ export async function buildEventPrompt(
         const imageBlocks = await fetchSlackFiles(files, slackBotToken);
         if (imageBlocks.length > 0) {
           return [
-            { type: "text", text: message + `\n\nContinue processing with this information.` },
+            { type: "text" as const, text: message + `\n\nContinue processing with this information.` },
             ...imageBlocks,
           ];
         }

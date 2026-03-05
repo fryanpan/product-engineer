@@ -59,7 +59,7 @@ Cloudflare Containers provide the strongest security layer — **containers are 
 |----------|--------|
 | **Network isolation** | Container ports are not publicly routable. Only the parent DO can reach the container via `getTcpPort()` |
 | **Per-ticket isolation** | Each ticket gets its own TicketAgent DO + container instance. No shared state between tickets |
-| **Automatic cleanup** | Containers sleep after 4 days of inactivity (`sleepAfter: "4d"`) |
+| **Automatic cleanup** | Containers sleep after 2 hours of inactivity (`sleepAfter: "2h"`) |
 | **Internet access** | Containers CAN make outbound requests (needed for Slack API, GitHub API, MCP servers) |
 
 **What this means:** Even without any application-level auth, an attacker cannot directly reach agent containers from the internet. Auth on `/event` endpoints is defense-in-depth.
@@ -133,7 +133,7 @@ These are known risks we've evaluated and accepted, with mitigations noted:
 
 **Risk:** The agent writes a GitHub PAT to `/root/.netrc` for `git clone`. If the container is compromised, the token is readable from the filesystem.
 
-**Mitigation:** File permissions set to `600`. Container is network-isolated (can't be reached from internet). Token is per-product with minimal scopes. Container sleeps after 4 days.
+**Mitigation:** File permissions set to `600`. Container is network-isolated (can't be reached from internet). Token is per-product with minimal scopes. Container sleeps after 2 hours.
 
 **Alternative considered:** SSH keys or credential helpers. These add complexity without meaningful security improvement given the container isolation model.
 
