@@ -50,6 +50,32 @@ export interface CommandData {
   files?: SlackFile[];
 }
 
+/** Content that can be passed to the Agent SDK — plain text or structured blocks with images. */
+export type MessageContent =
+  | string
+  | Array<{
+      type: "text" | "image";
+      text?: string;
+      source?: {
+        type: "base64";
+        media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+        data: string;
+      };
+    }>;
+
+const IMAGE_MEDIA_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif" | "image/webp"> = {
+  "image/png": "image/png",
+  "image/jpeg": "image/jpeg",
+  "image/jpg": "image/jpeg",
+  "image/gif": "image/gif",
+  "image/webp": "image/webp",
+};
+
+/** Normalize a MIME type to one the Anthropic API accepts, defaulting to image/png. */
+export function normalizeImageMediaType(mimetype: string): "image/png" | "image/jpeg" | "image/gif" | "image/webp" {
+  return IMAGE_MEDIA_TYPES[mimetype] || "image/png";
+}
+
 export interface TicketEvent {
   type: string;
   source: string;

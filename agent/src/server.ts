@@ -13,7 +13,7 @@ import {
   createSdkMcpServer,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { loadConfig, type TaskPayload, type TicketEvent } from "./config";
+import { loadConfig, type TaskPayload, type TicketEvent, type MessageContent } from "./config";
 import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt, buildResumePrompt } from "./prompt";
 import { buildMcpServers } from "./mcp";
@@ -21,18 +21,6 @@ import { buildMcpServers } from "./mcp";
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
 }
-
-type MessageContent =
-  | string
-  | Array<{
-      type: "text" | "image";
-      text?: string;
-      source?: {
-        type: "base64";
-        media_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
-        data: string;
-      };
-    }>;
 
 function userMessage(content: MessageContent): SDKUserMessage {
   return {
