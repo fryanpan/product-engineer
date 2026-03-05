@@ -185,12 +185,15 @@ For each product repo (e.g., `your-org/your-app`):
 3. Content type: `application/json`
 4. Secret: same value as `GITHUB_WEBHOOK_SECRET`
 5. Events:
-   - Pull requests
-   - Pull request reviews
-   - Pull request review comments
-   - Issue comments
-   - Check runs (for CI failure detection)
+   - Pull requests (for merge, update, reopen, label changes)
+   - Pull request reviews (for review feedback)
+   - Pull request review comments (for inline comments)
+   - Issue comments (for PR discussion)
+   - Check runs (for individual CI check failures)
+   - Check suites (for overall check status)
    - Workflow runs (for GitHub Actions failures)
+   - Statuses (for external CI like Vercel, Netlify)
+   - Deployment status (for deployment failures)
 
 ## Step 7: Configure Notion Integration
 

@@ -256,8 +256,17 @@ githubWebhook.post("/", async (c) => {
   if (event === "check_run") {
     return handleCheckRun(rawBody, c.env);
   }
+  if (event === "check_suite") {
+    return handleCheckSuite(rawBody, c.env);
+  }
   if (event === "workflow_run") {
     return handleWorkflowRun(rawBody, c.env);
+  }
+  if (event === "status") {
+    return handleStatus(rawBody, c.env);
+  }
+  if (event === "deployment_status") {
+    return handleDeploymentStatus(rawBody, c.env);
   }
 
   return c.json({ ok: true, ignored: true });
@@ -266,17 +275,15 @@ githubWebhook.post("/", async (c) => {
 async function handlePullRequest(rawBody: string, env: Bindings) {
   const payload = JSON.parse(rawBody) as {
     action: string;
+    label?: { name: string };
     pull_request: {
       merged: boolean;
       head: { ref: string };
       html_url: string;
+      number: number;
     };
     repository: { full_name: string };
   };
-
-  if (payload.action !== "closed" || !payload.pull_request.merged) {
-    return Response.json({ ok: true, ignored: true });
-  }
 
   const branch = payload.pull_request.head.ref;
   const taskId = extractTaskId(branch);
@@ -290,19 +297,71 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  await forwardToOrchestrator(env, {
-    type: "pr_merged",
-    source: "github",
-    ticketId: taskId,
-    product: productName,
-    payload: {
-      pr_url: payload.pull_request.html_url,
-      branch,
-      repo: payload.repository.full_name,
-    },
-  });
+  // Handle different PR actions
+  if (payload.action === "closed" && payload.pull_request.merged) {
+    await forwardToOrchestrator(env, {
+      type: "pr_merged",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+  }
 
-  return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+  if (payload.action === "synchronize") {
+    // New commits pushed to PR
+    await forwardToOrchestrator(env, {
+      type: "pr_updated",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        pr_number: payload.pull_request.number,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, status: "pr_updated" });
+  }
+
+  if (payload.action === "reopened") {
+    await forwardToOrchestrator(env, {
+      type: "pr_reopened",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, status: "pr_reopened" });
+  }
+
+  if (payload.action === "labeled" || payload.action === "unlabeled") {
+    await forwardToOrchestrator(env, {
+      type: payload.action === "labeled" ? "pr_labeled" : "pr_unlabeled",
+      source: "github",
+      ticketId: taskId,
+      product: productName,
+      payload: {
+        pr_url: payload.pull_request.html_url,
+        label: payload.label?.name,
+        branch,
+        repo: payload.repository.full_name,
+      },
+    });
+    return Response.json({ ok: true, product: productName, taskId, label: payload.label?.name });
+  }
+
+  return Response.json({ ok: true, ignored: true, reason: `action not handled: ${payload.action}` });
 }
 
 async function handlePullRequestReview(rawBody: string, env: Bindings) {
@@ -596,6 +655,161 @@ async function handleWorkflowRun(rawBody: string, env: Bindings) {
   });
 
   return Response.json({ ok: true, product: productName, taskId, workflow: payload.workflow_run.name });
+}
+
+async function handleCheckSuite(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    check_suite: {
+      conclusion: string | null;
+      status: string;
+      html_url: string;
+      pull_requests: Array<{ number: number; head: { ref: string } }>;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle completed check suites (success or failure)
+  if (payload.action !== "completed") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  // Must be associated with a PR
+  if (!payload.check_suite.pull_requests || payload.check_suite.pull_requests.length === 0) {
+    return Response.json({ ok: true, ignored: true, reason: "not associated with PR" });
+  }
+
+  const pr = payload.check_suite.pull_requests[0];
+  const branch = pr.head.ref;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  const eventType = payload.check_suite.conclusion === "success" ? "checks_passed" : "checks_failed";
+
+  await forwardToOrchestrator(env, {
+    type: eventType,
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      conclusion: payload.check_suite.conclusion,
+      status: payload.check_suite.status,
+      suite_url: payload.check_suite.html_url,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId, conclusion: payload.check_suite.conclusion });
+}
+
+async function handleStatus(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    state: string;
+    description: string;
+    context: string;
+    target_url: string | null;
+    branches: Array<{ name: string }>;
+    repository: { full_name: string };
+  };
+
+  // Only handle failure/error states
+  if (payload.state !== "failure" && payload.state !== "error") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  // Must have branches
+  if (!payload.branches || payload.branches.length === 0) {
+    return Response.json({ ok: true, ignored: true, reason: "no branches" });
+  }
+
+  const branch = payload.branches[0].name;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "status_failure",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      state: payload.state,
+      context: payload.context,
+      description: payload.description,
+      target_url: payload.target_url,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId, context: payload.context });
+}
+
+async function handleDeploymentStatus(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    deployment_status: {
+      state: string;
+      description: string;
+      environment: string;
+      target_url: string | null;
+    };
+    deployment: {
+      ref: string;
+      task: string;
+      environment: string;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle failure/error states
+  if (payload.deployment_status.state !== "failure" && payload.deployment_status.state !== "error") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const branch = payload.deployment.ref;
+  const taskId = extractTaskId(branch);
+  if (!taskId) {
+    return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
+  }
+
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  await forwardToOrchestrator(env, {
+    type: "deployment_failure",
+    source: "github",
+    ticketId: taskId,
+    product: productName,
+    payload: {
+      state: payload.deployment_status.state,
+      environment: payload.deployment_status.environment,
+      description: payload.deployment_status.description,
+      target_url: payload.deployment_status.target_url,
+      branch,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, taskId, environment: payload.deployment_status.environment });
 }
 
 export { linearWebhook, githubWebhook };
