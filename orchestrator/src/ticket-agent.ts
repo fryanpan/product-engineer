@@ -120,12 +120,39 @@ export class TicketAgent extends Container<Bindings> {
     throw error;
   }
 
+  private isTerminal(): boolean {
+    this.initDb();
+    const row = this.ctx.storage.sql.exec(
+      "SELECT value FROM config WHERE key = 'terminal'"
+    ).toArray()[0] as { value: string } | undefined;
+    return row?.value === "true";
+  }
+
+  markTerminal() {
+    this.initDb();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO config (key, value) VALUES ('terminal', 'true')
+       ON CONFLICT(key) DO UPDATE SET value = 'true'`
+    );
+  }
+
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
+    // Don't restart containers for completed tickets
+    if (this.isTerminal()) {
+      return super.alarm(alarmProps);
+    }
+
     // If this ticket has active work, keep the container alive
     const config = this.getConfig();
     if (config) {
       try {
-        await this.containerFetch("http://localhost/health", { method: "GET" }, this.defaultPort);
+        const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
+        const status = await res.json<{ sessionStatus: string }>();
+        // If session completed or errored, mark terminal so we don't keep restarting
+        if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
+          console.log(`[TicketAgent] Session ${status.sessionStatus} for ${config.ticketId}, marking terminal`);
+          this.markTerminal();
+        }
       } catch {
         console.log(`[TicketAgent] Container not healthy for ${config.ticketId}, will auto-resume on restart`);
       }
@@ -166,6 +193,10 @@ export class TicketAgent extends Container<Bindings> {
             { status: 503 },
           );
         }
+      }
+      case "/mark-terminal": {
+        this.markTerminal();
+        return Response.json({ ok: true });
       }
       case "/health": {
         return Response.json({ ok: true, service: "ticket-agent-do" });

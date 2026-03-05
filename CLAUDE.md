@@ -29,7 +29,7 @@ Worker (stateless) ──→ Orchestrator DO (singleton, always-on)
          ┌───────────────┼───────────────┐
          ▼               ▼               ▼
    TicketAgent #1   TicketAgent #2   TicketAgent #3
-   (4-day sleep)    (4-day sleep)    (4-day sleep)
+   (2h sleep)       (2h sleep)       (2h sleep)
    Agent SDK        Agent SDK        Agent SDK
 ```
 
@@ -61,7 +61,7 @@ Singleton Durable Object that owns all coordination:
 - Tracks `agent_active` per ticket — set to `0` on terminal states (`merged`, `closed`, `deferred`, `failed`) so deployment-triggered webhook events do not re-spawn completed agents (see `docs/deployment-safety.md`)
 
 ### TicketAgent (`orchestrator/src/ticket-agent.ts`)
-Container class — one instance per ticket, lives up to 4 days:
+Container class — one instance per ticket, lives up to 2 hours:
 - Runs a persistent HTTP server that receives events from the Orchestrator DO
 - Wraps the Agent SDK with `settingSources: ["project"]` to load product repo CLAUDE.md and skills
 - Follows the `product-engineer` skill for decision-making (reversible actions = autonomous, irreversible = batch and ask)

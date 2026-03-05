@@ -577,6 +577,16 @@ export class Orchestrator extends Container<Bindings> {
       if (terminalStates.includes(status)) {
         updates.push("agent_active = 0");
         console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
+
+        // Notify the TicketAgent DO so it marks itself terminal and stops
+        // restarting containers on alarm
+        try {
+          const id = this.env.TICKET_AGENT.idFromName(ticketId);
+          const agent = this.env.TICKET_AGENT.get(id);
+          await agent.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
+        } catch (err) {
+          console.error(`[Orchestrator] Failed to mark TicketAgent terminal for ${ticketId}:`, err);
+        }
       }
     }
     if (pr_url) {
