@@ -2,20 +2,29 @@
 
 Autonomous agent that turns tickets into shipped code.
 
-## Goal
+## Goals
 
 A product engineer agent that turns tickets, feedback, and natural language requests into shipped code — with human involvement only at the moments when it matters.
 
-- **Minutes** from request to delivered value for simple changes
-- **< 1 hour** for complex multi-file features
-- **Hands-on time** limited to moments requiring human judgment
+The main goals of this are:
 
-## Key Outcomes
-
-1. **Accessible to non-technical users** — Linear ticket, Slack message, or feedback widget triggers the agent. No CLI, no git, no infrastructure knowledge required.
-2. **Streamlined value delivery** — Full Claude Code power (web search, subagents, skills). Human feedback via Slack threads at exactly the moments it's needed.
-3. **Scalable beyond one machine** — Cloudflare Containers run up to 10 agents in parallel by default (configurable for higher concurrency). Each repo has its own agent config (`CLAUDE.md` + skills).
-4. **Layered security** — Ephemeral containers destroyed after each task. CI as ratchet. Streaming input for ambiguous requirements.
+* **Faster delivery of value, with less hands-on time**
+  * Minutes to deliver simple changes
+    * e.g. bug detected on Sentry, small request filed in a feedback widget
+  * 1hr or less for more complex, high-value features
+  * Discusses feedback with you via Slack, so you can manage progress from anywhere
+    (soon this will use only live web-based artifacts that update as you discuss)
+* **Uses full powers of Claude Code under the hood (via Claude Agent SDK)**
+  * Claude Code is one of the best harnesses at getting things done
+  * Later, it could be useful to plug in Codex CLI and other tools
+* **Repo is simple enough that you can customize**
+  * Each project git repo can customize its own skills, plugins, MCP services
+  * Use your own project template for these (defaults to `fryanpan/ai-project-support`)
+  * Agent workflow for working on each task is also customizable
+* **Scalable**
+  * Uses (small) sandboxed containers for each ticket agent to avoid local resource constraints
+* **Thoughtful security approach (but there is always more we can do)**
+  * Several layers of security in place (see [security.md](docs/product/security.md))
 
 Built on [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-sdk) + [Cloudflare Workers & Containers](https://developers.cloudflare.com/containers/).
 
