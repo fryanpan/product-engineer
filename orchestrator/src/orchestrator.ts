@@ -678,7 +678,7 @@ export class Orchestrator extends Container<Bindings> {
       `SELECT id, product, status, last_heartbeat, slack_thread_ts, slack_channel, created_at
        FROM tickets
        WHERE agent_active = 1
-         AND id NOT LIKE 'investigation-%'
+         AND id NOT LIKE '%investigation-%'
          AND last_heartbeat IS NOT NULL
          AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > ?`,
       stuckThreshold,
@@ -831,28 +831,15 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
         });
       }
 
-      // Deterministic ID — ensures only one investigation per stuck ticket
+      // Record investigation in DB but do NOT spawn an agent container.
+      // Investigation agents were causing a cascade: they get stuck too,
+      // triggering more investigations, filling all container slots.
       const investigationId = sanitizeTicketId(`investigation-${stuckTicketId}`);
-      const event: TicketEvent = {
-        type: "ticket_created",
-        source: "monitoring",
-        ticketId: investigationId,
-        product,
-        payload: {
-          title,
-          description,
-          priority: 1, // High priority
-          ticketId: investigationId,
-          stuckTicketId,
-        },
-        slackChannel,
-        slackThreadTs,
-      };
 
       // Upsert — idempotent if cron fires twice simultaneously
       this.ctx.storage.sql.exec(
-        `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel, status, agent_active)
+         VALUES (?, ?, ?, ?, 'investigation', 0)
          ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')`,
         investigationId,
         product,
@@ -860,10 +847,7 @@ Check \`wrangler tail\` output for ticket ID: ${stuckTicketId}
         slackChannel || null,
       );
 
-      // Route to a new agent
-      await this.routeToAgent(event);
-
-      console.log(`[Orchestrator] Investigation ticket created: ${investigationId}`);
+      console.log(`[Orchestrator] Investigation recorded: ${investigationId} (no agent spawned)`);
     } catch (err) {
       console.error(`[Orchestrator] Failed to create investigation ticket:`, err);
     }

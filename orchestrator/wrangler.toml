@@ -18,7 +18,7 @@ max_instances = 1
 class_name = "TicketAgent"
 image = "../agent/Dockerfile"
 instance_type = "basic"
-max_instances = 10
+max_instances = 20
 
 [durable_objects]
 bindings = [
