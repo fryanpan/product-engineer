@@ -23,7 +23,7 @@ The main goals of this are:
   * Agent workflow for working on each task is also customizable
 * **Scalable**
   * Uses (small) sandboxed containers for each ticket agent to avoid local resource constraints
-* **Thoughtful security approach (but there is always more we can do)**
+* **Some Security (there is a lot more we can do)**
   * Several layers of security in place (see [security.md](docs/product/security.md))
 
 Built on [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-sdk) + [Cloudflare Workers & Containers](https://developers.cloudflare.com/containers/).
