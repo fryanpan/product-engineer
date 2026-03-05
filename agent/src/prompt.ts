@@ -237,3 +237,41 @@ export async function buildEventPrompt(
       return `New event: ${event.type}\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
   }
 }
+
+export function buildResumePrompt(
+  branch: string,
+  gitLog: string,
+  gitStatus: string,
+  prInfo: string,
+): string {
+  return `Your container was restarted (deploy, crash, or TTL expiry). Your previous work is saved on branch \`${branch}\`.
+
+## Git State
+
+**Recent commits:**
+\`\`\`
+${gitLog || "(no commits on branch)"}
+\`\`\`
+
+**Working directory status:**
+\`\`\`
+${gitStatus || "(clean)"}
+\`\`\`
+
+**PR status:**
+\`\`\`
+${prInfo}
+\`\`\`
+
+## What To Do
+
+1. Review the git log and status above to understand where you left off
+2. If a PR exists and is approved, merge it
+3. If a PR exists with requested changes, address them
+4. If no PR exists, continue implementing and create one when ready
+5. Follow the product-engineer skill for the rest of the workflow
+
+**CRITICAL — Headless Execution Rules:**
+- **NEVER use plan mode.** Do NOT call EnterPlanMode or ExitPlanMode.
+- **No interactive UI tools.** Use the \`ask_question\` MCP tool for human input.`;
+}

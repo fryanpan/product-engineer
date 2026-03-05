@@ -15,7 +15,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { loadConfig, type TaskPayload, type TicketEvent } from "./config";
 import { createTools } from "./tools";
-import { buildPrompt, buildEventPrompt } from "./prompt";
+import { buildPrompt, buildEventPrompt, buildResumePrompt } from "./prompt";
 import { buildMcpServers } from "./mcp";
 
 if (process.env.SENTRY_DSN) {
@@ -388,82 +388,33 @@ async function cloneRepos() {
   repoCloned = true;
 }
 
-// Check if a session exists for this ticket and return the session ID
-async function findExistingSession(): Promise<string | null> {
-  try {
-    const home = process.env.HOME || "/home/agent";
-    const sessionDir = `${home}/.claude/projects`;
+async function checkAndCheckoutWorkBranch(): Promise<string | null> {
+  const branchPrefixes = [`ticket/${config.ticketId}`, `feedback/${config.ticketId}`];
 
-    // Check if the sessions directory exists (R2 mount should have created it)
-    const dirExists = await Bun.file(sessionDir).exists().catch(() => false);
-    if (!dirExists) {
-      console.log("[Agent] No session directory found — starting fresh");
-      return null;
+  for (const branch of branchPrefixes) {
+    const check = Bun.spawn(["git", "ls-remote", "--heads", "origin", branch]);
+    const output = await new Response(check.stdout).text();
+    const exitCode = await check.exited;
+
+    if (exitCode === 0 && output.trim().length > 0) {
+      console.log(`[Agent] Found existing branch on remote: ${branch}`);
+      const checkout = Bun.spawn(["git", "checkout", branch]);
+      const checkoutExit = await checkout.exited;
+      if (checkoutExit !== 0) {
+        // Branch doesn't exist locally, create tracking branch
+        const track = Bun.spawn(["git", "checkout", "-b", branch, `origin/${branch}`]);
+        await track.exited;
+      }
+      return branch;
     }
-
-    // List files in the session directory
-    const proc = Bun.spawn(["ls", "-1", sessionDir]);
-    const output = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
-
-    if (exitCode !== 0) {
-      console.log("[Agent] Failed to list session directory");
-      return null;
-    }
-
-    // Look for session files matching this ticket ID
-    // Session files are typically named like: <ticket-id>-<timestamp>-<session-id>
-    const files = output.trim().split("\n").filter(Boolean);
-    const sessionFiles = files.filter(f => f.startsWith(config.ticketId) && f.endsWith(".jsonl"));
-
-    if (sessionFiles.length === 0) {
-      console.log("[Agent] No existing session files found");
-      return null;
-    }
-
-    // Use the most recent session file (last in sorted order)
-    const latestSession = sessionFiles.sort().pop()!;
-    console.log(`[Agent] Found existing session file: ${latestSession}`);
-
-    // Extract session ID from filename if possible
-    // Filename format varies, but we can try to parse it
-    // For now, return a marker that we found a session
-    return latestSession;
-  } catch (err) {
-    console.error("[Agent] Error checking for existing session:", err);
-    return null;
   }
+
+  return null;
 }
 
 async function startSession(initialPrompt: MessageContent) {
   if (sessionActive) return;
   sessionStatus = "starting_session";
-
-  // Check for existing session to resume
-  const existingSession = await findExistingSession();
-  const isResuming = existingSession !== null;
-
-  if (isResuming) {
-    console.log(`[Agent] Resuming existing session from: ${existingSession}`);
-    phoneHome("deploy_recovery", `resuming session: ${existingSession}`);
-
-    // Notify Slack about recovery
-    const recoveryMessage = `🔄 **Container restarted — resuming work**\n\nRecovering from deploy. Session files found: \`${existingSession}\`\n\nContinuing where I left off...`;
-    await fetch("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.slackBotToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        channel: config.slackChannel,
-        text: recoveryMessage,
-        ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
-      }),
-    }).catch((err) => console.error("[Agent] Failed to post recovery message to Slack:", err));
-  } else {
-    console.log("[Agent] Starting fresh session");
-  }
 
   console.log("[Agent] Creating tools and MCP servers...");
   const { tools } = createTools(config);
@@ -475,16 +426,10 @@ async function startSession(initialPrompt: MessageContent) {
   // messageYielder is now assigned — safe to mark session active
   sessionActive = true;
 
-  if (isResuming) {
-    // When resuming, tell the agent to continue where it left off
-    messageYielder!(userMessage("Your container was restarted during a deploy. Please continue where you left off. Check your previous work (git status, git log) and resume the task."));
-    console.log("[Agent] Resume continuation prompt queued");
-  } else {
-    messageYielder!(userMessage(initialPrompt));
-    console.log(`[Agent] Initial prompt queued (${initialPrompt.length} chars)`);
-  }
+  messageYielder!(userMessage(initialPrompt));
+  console.log(`[Agent] Initial prompt queued (${typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length} chars)`);
 
-  phoneHome("session_starting", `prompt_chars=${initialPrompt.length} resuming=${isResuming}`);
+  phoneHome("session_starting", `prompt_chars=${typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length}`);
   console.log("[Agent] Starting Agent SDK query()...");
 
   // Build query options
@@ -518,11 +463,6 @@ async function startSession(initialPrompt: MessageContent) {
   if (config.model) {
     queryOptions.model = config.model;
     console.log(`[Agent] Using model: ${config.model}`);
-  }
-
-  // Resume the most recent session if we found existing session files
-  if (isResuming) {
-    queryOptions.continue = true;
   }
 
   const session = query({
@@ -733,3 +673,58 @@ export default {
   port: 3000,
   fetch: app.fetch,
 };
+
+// Auto-resume: if container restarts with a ticket config, check for existing
+// work branch and resume the session without waiting for an event.
+// This fires after the server is listening, so /health can respond while we resume.
+setTimeout(async () => {
+  if (sessionActive) return; // Event already triggered a session
+
+  try {
+    await cloneRepos();
+    const branch = await checkAndCheckoutWorkBranch();
+
+    if (branch) {
+      console.log(`[Agent] Auto-resuming from branch: ${branch}`);
+      phoneHome("auto_resume", `branch=${branch}`);
+
+      // Get git state for context
+      const logProc = Bun.spawn(["git", "log", "--oneline", "-10"]);
+      const gitLog = await new Response(logProc.stdout).text();
+
+      const statusProc = Bun.spawn(["git", "status", "--short"]);
+      const gitStatus = await new Response(statusProc.stdout).text();
+
+      // Check for existing PR
+      const prProc = Bun.spawn(["gh", "pr", "view", "--json", "url,state,title", branch]);
+      const prOutput = await new Response(prProc.stdout).text();
+      const prExit = await prProc.exited;
+      const prInfo = prExit === 0 ? prOutput.trim() : "No PR found";
+
+      const resumePrompt = buildResumePrompt(branch, gitLog.trim(), gitStatus.trim(), prInfo);
+
+      // Notify Slack about recovery
+      if (config.slackChannel && config.slackBotToken) {
+        await fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.slackBotToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            channel: config.slackChannel,
+            text: `Container restarted — resuming work from branch \`${branch}\``,
+            ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
+          }),
+        }).catch((err: Error) => console.error("[Agent] Failed to post recovery message:", err));
+      }
+
+      await startSession(resumePrompt);
+    } else {
+      console.log("[Agent] No existing work branch found — waiting for event");
+    }
+  } catch (err) {
+    console.error("[Agent] Auto-resume failed:", err);
+    phoneHome("auto_resume_failed", String(err).slice(0, 200));
+  }
+}, 5000); // Wait 5s for container to stabilize
