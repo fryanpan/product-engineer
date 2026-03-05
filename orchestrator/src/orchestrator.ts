@@ -487,6 +487,12 @@ export class Orchestrator extends Container<Bindings> {
 
     const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
 
+    // Load AI Gateway config from settings
+    const gatewayRows = this.ctx.storage.sql.exec(
+      "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+    ).toArray() as Array<{ value: string }>;
+    const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
+
     const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
     const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
 
@@ -496,6 +502,7 @@ export class Orchestrator extends Container<Bindings> {
       repos: productConfig.repos,
       slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
       secrets: productConfig.secrets,
+      gatewayConfig,
     };
 
     const initRes = await agent.fetch(new Request("http://internal/initialize", {
