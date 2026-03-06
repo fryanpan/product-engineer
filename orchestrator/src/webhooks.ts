@@ -201,7 +201,7 @@ linearWebhook.post("/", async (c) => {
     });
   }
 
-  // Trigger conditions: only trigger when assigned to agent (but not if already in terminal state)
+  // Trigger conditions: only trigger on create/update when assigned to agent (but not if already in terminal state)
   const agent = await getAgentIdentity(orchestrator);
   const isAssignedToAgent =
     payload.data.assignee?.email === agent.linear_email ||
@@ -211,8 +211,9 @@ linearWebhook.post("/", async (c) => {
   const terminalStates = ["Done", "Canceled", "Cancelled"];
   const isTerminal = payload.data.state?.name && terminalStates.includes(payload.data.state.name);
 
-  // Only trigger if assigned to agent (on both create and update)
-  const shouldTrigger = isAssignedToAgent && !isTerminal;
+  // Only trigger on create/update actions when assigned to agent
+  const isRelevantAction = payload.action === "create" || payload.action === "update";
+  const shouldTrigger = isRelevantAction && isAssignedToAgent && !isTerminal;
 
   if (!shouldTrigger) {
     return c.json({ ok: true, ignored: true, reason: "action not relevant" });
@@ -232,11 +233,6 @@ linearWebhook.post("/", async (c) => {
       labels: payload.data.labelIds || [],
     },
   });
-
-  // Self-assign in Linear if not already assigned to agent
-  if (!isAssignedToAgent) {
-    assignTicketToAgent(c.env.LINEAR_API_KEY, payload.data.id, agent.linear_email);
-  }
 
   return c.json({
     ok: true,

@@ -226,6 +226,66 @@ describe("linear webhook handler", () => {
     expect(payload.identifier).toBe("HT-43");
   });
 
+  it("forwards event when identifier is missing", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "create",
+      type: "Issue",
+      data: {
+        id: "issue-125",
+        // No identifier field - testing optional field
+        title: "Issue without identifier",
+        description: "Test handling of missing identifier",
+        priority: 1,
+        teamId: TEST_REGISTRY.linear_team_id,
+        labelIds: [],
+        project: { id: "p1", name: "Test App" },
+        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ok).toBe(true);
+    expect(json.product).toBe("test-app");
+
+    expect(sentEvents).toHaveLength(1);
+    const event = sentEvents[0] as Record<string, unknown>;
+    expect(event.type).toBe("ticket_created");
+    const payload = event.payload as Record<string, unknown>;
+    expect(payload.id).toBe("issue-125");
+    expect(payload.title).toBe("Issue without identifier");
+    // identifier should be undefined when not present in webhook
+    expect(payload.identifier).toBeUndefined();
+  });
+
+  it("ignores non-create/update actions even with agent assignment", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+
+    // "remove" action should be ignored even if assigned to agent
+    const res = await postWebhook(app, {
+      action: "remove",
+      type: "Issue",
+      data: {
+        id: "issue-126",
+        title: "Removed issue",
+        description: "",
+        priority: 1,
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
+        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ignored).toBe(true);
+    expect(json.reason).toBe("action not relevant");
+    expect(sentEvents).toHaveLength(0);
+  });
+
   it("ignores status changes that aren't agent assignment", async () => {
     const app = makeApp();
     const env = makeEnv();
