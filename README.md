@@ -17,10 +17,11 @@ The main goals of this are:
 * **Uses full powers of Claude Code under the hood (via Claude Agent SDK)**
   * Claude Code is one of the best harnesses at getting things done
   * Later, it could be useful to plug in Codex CLI and other tools
-* **Repo is simple enough that you can customize**
+* **Workflow is simple enough that you can customize**
   * Each project git repo can customize its own skills, plugins, MCP services
-  * Use your own project template for these (defaults to `fryanpan/ai-project-support`)
-  * Agent workflow for working on each task is also customizable
+  * Use a project template from this project as a skeleton, with skills to  `/aggregate` learnings from all your projects and `/propagate` learnings
+  * Agent workflow for working on each task is also customizable (change the prompt in the [product-engineer skill](.claude/skills
+/product-engineer/)
 * **Scalable**
   * Uses (small) sandboxed containers for each ticket agent to avoid local resource constraints
 * **Some Security (there is a lot more we can do)**
