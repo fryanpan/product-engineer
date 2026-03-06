@@ -475,57 +475,62 @@ export class Orchestrator extends Container<Bindings> {
       return;
     }
 
-    // Load product config from database
-    const productRows = this.ctx.storage.sql.exec(
-      "SELECT config FROM products WHERE slug = ?",
-      event.product,
-    ).toArray() as Array<{ config: string }>;
-
-    if (productRows.length === 0) {
-      console.error(`[Orchestrator] Unknown product: ${event.product}`);
-      return;
-    }
-
-    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
-
-    // Load AI Gateway config from settings
-    const gatewayRows = this.ctx.storage.sql.exec(
-      "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
-    ).toArray() as Array<{ value: string }>;
-    const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
-
     const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
     const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
 
-    // Analyze ticket complexity and select appropriate model
-    const payload = event.payload as any;
-    const modelSelection = selectModelForTicket({
-      priority: payload.priority,
-      title: payload.title,
-      description: payload.description,
-      labels: payload.labels,
-    });
+    // Skip /initialize for thread replies — the agent is already configured.
+    // containerFetch in /event auto-starts the container using envVars from SQLite.
+    // This avoids redundant config writes and port checks on every reply.
+    if (event.type !== "slack_reply") {
+      // Load product config from database
+      const productRows = this.ctx.storage.sql.exec(
+        "SELECT config FROM products WHERE slug = ?",
+        event.product,
+      ).toArray() as Array<{ config: string }>;
 
-    console.log(`[Orchestrator] Model selection for ${event.ticketId}: ${modelSelection.model} (${modelSelection.complexity} complexity) - ${modelSelection.reason}`);
+      if (productRows.length === 0) {
+        console.error(`[Orchestrator] Unknown product: ${event.product}`);
+        return;
+      }
 
-    const config: TicketAgentConfig = {
-      ticketId: event.ticketId,
-      product: event.product,
-      repos: productConfig.repos,
-      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
-      secrets: productConfig.secrets,
-      gatewayConfig,
-      model: modelSelection.model,
-    };
+      const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
 
-    const initRes = await agent.fetch(new Request("http://internal/initialize", {
-      method: "POST",
-      body: JSON.stringify(config),
-    }));
+      // Load AI Gateway config from settings
+      const gatewayRows = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+      ).toArray() as Array<{ value: string }>;
+      const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
 
-    if (!initRes.ok) {
-      console.error(`[Orchestrator] Failed to initialize agent for ${event.ticketId}: ${initRes.status}`);
-      return;
+      // Analyze ticket complexity and select appropriate model
+      const payload = event.payload as any;
+      const modelSelection = selectModelForTicket({
+        priority: payload.priority,
+        title: payload.title,
+        description: payload.description,
+        labels: payload.labels,
+      });
+
+      console.log(`[Orchestrator] Model selection for ${event.ticketId}: ${modelSelection.model} (${modelSelection.complexity} complexity) - ${modelSelection.reason}`);
+
+      const config: TicketAgentConfig = {
+        ticketId: event.ticketId,
+        product: event.product,
+        repos: productConfig.repos,
+        slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+        secrets: productConfig.secrets,
+        gatewayConfig,
+        model: modelSelection.model,
+      };
+
+      const initRes = await agent.fetch(new Request("http://internal/initialize", {
+        method: "POST",
+        body: JSON.stringify(config),
+      }));
+
+      if (!initRes.ok) {
+        console.error(`[Orchestrator] Failed to initialize agent for ${event.ticketId}: ${initRes.status}`);
+        return;
+      }
     }
 
     // Retry event delivery with backoff for cold starts
@@ -795,6 +800,7 @@ export class Orchestrator extends Container<Bindings> {
 
     // If it's a thread reply, look up existing ticket by thread_ts
     if (slackEvent.thread_ts) {
+      console.log(`[Orchestrator] Thread reply received: thread_ts=${slackEvent.thread_ts} type=${slackEvent.type} user=${slackEvent.user || "unknown"}`);
       const rows = this.ctx.storage.sql.exec(
         "SELECT id, product FROM tickets WHERE slack_thread_ts = ?",
         slackEvent.thread_ts,
@@ -802,6 +808,7 @@ export class Orchestrator extends Container<Bindings> {
 
       if (rows.length > 0) {
         const ticket = rows[0];
+        console.log(`[Orchestrator] Thread reply matched ticket=${ticket.id} product=${ticket.product}`);
         // Re-activate agent on thread reply — user is explicitly engaging
         this.ctx.storage.sql.exec(
           "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
@@ -816,8 +823,11 @@ export class Orchestrator extends Container<Bindings> {
           slackThreadTs: slackEvent.thread_ts,
           slackChannel: slackEvent.channel,
         };
+        console.log(`[Orchestrator] Routing thread reply to agent for ticket=${ticket.id}`);
         await this.routeToAgent(event);
         return Response.json({ ok: true, ticketId: ticket.id });
+      } else {
+        console.log(`[Orchestrator] No ticket found for thread_ts=${slackEvent.thread_ts}`);
       }
 
       // Thread reply but no ticket found - user is replying to something that's not tracked
