@@ -2,6 +2,24 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-06 - Registry Management Tools
+
+Created CLI tooling and documentation for managing the Product Engineer registry via the admin API.
+
+**What worked:** Fast, focused session. Clear need (remove ai-project-support, verify other products), straightforward solution (TypeScript CLI + docs).
+
+**Key deliverable:** `scripts/manage-registry.ts` provides commands for:
+- Listing all products
+- Verifying Slack/Linear configuration
+- Deleting products
+- Getting product details
+
+**Documentation:** `docs/registry-management.md` covers quick reference, common tasks, direct API access, and troubleshooting.
+
+**Time:** ~15 minutes end-to-end (tool + docs + PR)
+
+**Action:** PR #52 - User can merge and run commands to clean up registry
+
 ## 2026-03-06 - Slack Threading Fix
 
 Fixed Slack threading behavior for top-level @product-engineer mentions. Agent now creates its own thread instead of replying to user's original message.
