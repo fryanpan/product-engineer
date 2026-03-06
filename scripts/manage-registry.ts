@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Registry Management Script
  *
@@ -17,7 +17,7 @@
  *
  * Environment variables:
  *   WORKER_URL - The deployed Worker URL (e.g., https://product-engineer.your-subdomain.workers.dev)
- *   API_KEY - Optional API key if your worker requires authentication
+ *   API_KEY - Required API key for admin endpoint authentication
  */
 
 const WORKER_URL = process.env.WORKER_URL;
@@ -29,17 +29,21 @@ if (!WORKER_URL) {
   process.exit(1);
 }
 
+if (!API_KEY) {
+  console.error("❌ API_KEY environment variable is required");
+  console.error("   Admin endpoints require X-API-Key authentication");
+  process.exit(1);
+}
+
 type ProductConfig = {
   repos: string[];
-  slack_channel?: string;
+  slack_channel: string;
   slack_channel_id?: string;
-  linear_project_id?: string;
-  linear_team_key?: string;
   secrets: Record<string, string>;
-  triggers?: {
-    linear?: boolean;
-    github?: boolean;
-    slack?: boolean;
+  triggers: {
+    feedback?: { enabled: boolean; callback_url?: string };
+    linear?: { enabled: boolean; project_name: string };
+    slack?: { enabled: boolean };
   };
 };
 
@@ -47,21 +51,27 @@ async function apiRequest(path: string, options: RequestInit = {}): Promise<Resp
   const url = `${WORKER_URL}${path}`;
   const headers: HeadersInit = {
     "Content-Type": "application/json",
+    "X-API-Key": API_KEY,
     ...options.headers,
   };
 
-  if (API_KEY) {
-    headers["X-API-Key"] = API_KEY;
-  }
-
-  return fetch(url, {
+  const res = await fetch(url, {
     ...options,
     headers,
   });
+
+  // Special case 401 to provide clearer error message
+  if (res.status === 401) {
+    console.error("❌ Authentication failed: Invalid or missing API_KEY");
+    console.error("   Ensure API_KEY is set and matches the Worker's configured key");
+    process.exit(1);
+  }
+
+  return res;
 }
 
 async function listProducts(): Promise<void> {
-  console.log("��� Listing all products...\n");
+  console.log("📋 Listing all products...\n");
 
   const res = await apiRequest("/api/products");
   if (!res.ok) {
@@ -83,8 +93,8 @@ async function listProducts(): Promise<void> {
     console.log(`📦 ${slug}`);
     console.log(`   Repos: ${config.repos.join(", ")}`);
     console.log(`   Slack: ${config.slack_channel_id || config.slack_channel || "not configured"}`);
-    console.log(`   Linear: ${config.linear_project_id || config.linear_team_key || "not configured"}`);
-    console.log(`   Triggers: Linear=${config.triggers?.linear ?? true}, GitHub=${config.triggers?.github ?? true}, Slack=${config.triggers?.slack ?? true}`);
+    console.log(`   Linear: ${config.triggers.linear?.project_name || "not configured"}`);
+    console.log(`   Triggers: Linear=${config.triggers.linear?.enabled ?? false}, Feedback=${config.triggers.feedback?.enabled ?? false}, Slack=${config.triggers.slack?.enabled ?? false}`);
     console.log();
   }
 }
@@ -165,27 +175,22 @@ async function verifyConfiguration(): Promise<void> {
       console.log(`✅ Slack: ${config.slack_channel_id || config.slack_channel}`);
 
       // Check if Slack trigger is enabled
-      const slackTriggerEnabled = config.triggers?.slack ?? true; // default true if not specified
+      const slackTriggerEnabled = config.triggers.slack?.enabled ?? false;
       if (!slackTriggerEnabled) {
         console.log("⚠️  Slack trigger is disabled");
       }
     }
 
     // Check Linear configuration
-    const hasLinearConfig = config.linear_project_id || config.linear_team_key;
+    const hasLinearConfig = config.triggers.linear?.project_name;
     if (!hasLinearConfig) {
       issues.push(`${slug}: Linear configuration missing`);
-      console.log("❌ Linear: Not configured (missing project_id or team_key)");
+      console.log("❌ Linear: Not configured (missing triggers.linear.project_name)");
     } else {
-      if (config.linear_project_id) {
-        console.log(`✅ Linear Project ID: ${config.linear_project_id}`);
-      }
-      if (config.linear_team_key) {
-        console.log(`✅ Linear Team Key: ${config.linear_team_key}`);
-      }
+      console.log(`✅ Linear Project Name: ${config.triggers.linear.project_name}`);
 
       // Check if Linear trigger is enabled
-      const linearTriggerEnabled = config.triggers?.linear ?? true; // default true if not specified
+      const linearTriggerEnabled = config.triggers.linear?.enabled ?? false;
       if (!linearTriggerEnabled) {
         console.log("⚠️  Linear trigger is disabled");
       }
