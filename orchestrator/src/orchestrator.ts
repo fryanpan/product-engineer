@@ -893,7 +893,7 @@ export class Orchestrator extends Container<Bindings> {
       ticketId,
       product,
       payload: slackEvent,
-      slackThreadTs: slackEvent.ts, // Use the message ts as thread ts for future replies
+      slackThreadTs: undefined, // Don't set thread_ts — let agent create its own thread
       slackChannel: slackEvent.channel,
     };
 
