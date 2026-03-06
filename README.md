@@ -15,8 +15,8 @@ The main goals of this are:
   * Discusses feedback with you via Slack, so you can manage progress from anywhere
     (soon this will use only live web-based artifacts that update as you discuss)
 * **Uses full powers of Claude Code under the hood (via Claude Agent SDK)**
-  * Claude Code is one of the best harnesses at getting things done
-  * Later, it could be useful to plug in Codex CLI and other tools
+  * Claude Code is one of the best harnesses for getting things done
+  * Later, it could be useful to plug in Codex and other tools
 * **Workflow is simple enough that you can customize**
   * Each project git repo can customize its own skills, plugins, MCP services
   * Use a project template from this project as a skeleton, with skills to  `/aggregate` learnings from all your projects and `/propagate` learnings
