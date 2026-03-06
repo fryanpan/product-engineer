@@ -77,7 +77,7 @@ wrangler secret put MY_APP_GITHUB_TOKEN      # Fine-grained PAT for your-org/my-
 wrangler secret put OTHER_TOOL_GITHUB_TOKEN  # Fine-grained PAT for your-org/other-tool
 ```
 
-In `registry.json`, set `"GITHUB_TOKEN": "YOUR_ORG_GITHUB_TOKEN"` for all products in that org.
+In the product config (via `PUT /api/products/:slug`), set `"GITHUB_TOKEN": "YOUR_ORG_GITHUB_TOKEN"` in the secrets object.
 
 ## Step 3: Populate Slack Channel IDs
 
@@ -89,7 +89,7 @@ curl -s -H "Authorization: Bearer xoxb-YOUR-BOT-TOKEN" \
   | jq '.channels[] | select(.name | test("your-channel")) | {name, id}'
 ```
 
-Then update `orchestrator/src/registry.json` — add `slack_channel_id` for each product:
+Then update each product via the admin API (`PUT /api/products/:slug`) — add `slack_channel_id`:
 
 ```typescript
 "your-app": {

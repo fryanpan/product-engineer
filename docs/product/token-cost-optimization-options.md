@@ -18,7 +18,7 @@ Good news: The codebase already has Cloudflare AI Gateway infrastructure impleme
 - ✅ Documentation exists: `docs/cloudflare-ai-gateway.md` has setup instructions
 
 ### What's Missing
-- ❌ **Registry not configured**: `orchestrator/src/registry.json` has no `cloudflare_ai_gateway` section
+- ❌ **Registry not configured**: No `cloudflare_ai_gateway` config in the product registry
 - ❌ **No monitoring active**: All traffic goes directly to Anthropic API
 - ❌ **Zero visibility**: Cannot see per-ticket costs, token patterns, or optimization opportunities
 
@@ -65,7 +65,7 @@ Without analytics, we can't answer:
    - Note Account ID and Gateway ID
 
 2. **Update registry** (2 min)
-   - Add to `orchestrator/src/registry.json`:
+   - Seed or update via admin API:
      ```json
      {
        "cloudflare_ai_gateway": {

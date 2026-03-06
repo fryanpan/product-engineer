@@ -96,7 +96,7 @@ The pitch: this is a small, understandable repo that does something ambitious.
 **Prerequisites:** [Cloudflare account](https://dash.cloudflare.com/sign-up), [Anthropic API key](https://console.anthropic.com/), Slack workspace, Linear workspace.
 
 1. Fork/clone the repo
-2. Edit `orchestrator/src/registry.json` with your product config (see `registry.template.json` for a clean starting point)
+2. Register your products via the admin API (`POST /api/products`) or seed from `registry.template.json` (see `docs/registry-migration-guide.md`)
 3. Run the interactive setup script — it walks through every external service with direct links and prompts:
    ```bash
    bash scripts/setup.sh
@@ -151,6 +151,8 @@ The agent comes with several built-in skills for managing projects and products:
 - **`/retro`** — Run a retrospective with transcript analysis and capture learnings
 - **`/persist-plan`** — Save internal plans to `docs/product/plans/`
 - **`/cross-project-review`** — Periodic review across all products to find patterns and share learnings
+- **`/propagate`** — Compare project Claude setups against templates, validate for antipatterns, push updates via PRs
+- **`/aggregate`** — Pull learnings from all registered products and agent transcripts into cross-project knowledge
 - **`/task-retro`** — Per-task retrospective the agent runs after completing each task
 
 See `.claude/skills/` for the full list and details.

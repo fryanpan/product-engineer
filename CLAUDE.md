@@ -41,6 +41,7 @@ Worker (stateless) ──→ Orchestrator DO (singleton, always-on)
 | `agent/` | Generic Product Engineer agent — Agent SDK, tools, prompt construction |
 | `containers/` | Dockerfiles and container-specific code (orchestrator Socket Mode, agent server) |
 | `.claude/skills/` | English skills that define agent behavior |
+| `templates/` | Baseline `.claude/rules/`, settings, and `CLAUDE.md.tmpl` for target product repos — pushed via `/propagate` |
 | `docs/` | Process docs and learnings |
 
 ## How It Works
@@ -68,8 +69,8 @@ Container class — one instance per ticket, lives up to 2 hours:
 - Communicates via Slack (`notify_slack`, `ask_question` tools)
 - Handles full ticket lifecycle: creation, implementation, PR, review, revision, merge
 
-### Product Registry (`orchestrator/src/registry.ts`)
-Static config mapping products to their repos, secrets, Slack channels, and trigger configuration. See `/setup-product` skill for how to register new products.
+### Product Registry (Admin API)
+Products are stored in the Orchestrator DO's SQLite database, managed via the admin API (`GET/POST/PUT/DELETE /api/products`). Each product maps to repos, secrets, Slack channels, and trigger configuration. See `/setup-product` or `/add-project` skills for how to register new products. Legacy `orchestrator/src/registry.json` is a seed template only.
 
 ## Conventions
 
@@ -82,6 +83,8 @@ Static config mapping products to their repos, secrets, Slack channels, and trig
 Agent decision-making is encoded in English skills (`.claude/skills/`), not TypeScript. To change how the agent works:
 1. Edit the relevant skill (e.g., `product-engineer/SKILL.md` for decision logic)
 2. The agent loads skills from this repo AND from the target product's repo
+3. To change what the agent sees from target repos (alwaysApply rules, settings), edit `templates/` and use `/propagate` to push updates
+4. Cross-project skills: `/propagate` (push template updates), `/aggregate` (pull learnings from all products)
 
 ### Secrets
 - Platform secrets (Slack, Linear, Anthropic) are shared across products
@@ -92,7 +95,7 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 
 ### LLM Monitoring
 - All Anthropic API traffic routes through Cloudflare AI Gateway for monitoring
-- Configure gateway in `registry.json` under `cloudflare_ai_gateway` (account ID + gateway ID)
+- Configure gateway via the admin API (`PUT /api/settings/cloudflare_ai_gateway`) or by seeding via `POST /api/products/seed`
 - Dashboard shows: requests, tokens, costs, errors, cache hit rates
 - See `docs/cloudflare-ai-gateway.md` for setup and analytics details
 

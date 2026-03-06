@@ -2,6 +2,49 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-06 - LLM Cost Optimization & Project Management Migration
+
+Analyzed AI Gateway costs and agent session transcripts, identified context bloat from interactive alwaysApply rules, implemented Option B (keep settingSources, fix target repos), migrated project management skills from ai-project-support, created headless-compatible templates.
+
+### Time Breakdown
+
+| Started | Phase | 👤 Hands-On Time | 🤖 Agent Time | Problems |
+|---------|-------|-----------------|---------------|----------|
+| Mar 6 12:03am | Research: AI Gateway + R2 transcript analysis | ██ 15m | ██████ 19m | ⚠ R2 token perms, API pagination |
+| Mar 6 12:23am | Design: Context bloat analysis + architecture discussion | ████████ 27m | ██████ 14m | |
+| Mar 6 12:53am | Migration + Implementation | ██ 8m | ████████████ ~35m | ⚠ Context compaction mid-task |
+
+### Metrics
+
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~1.5 hours |
+| Hands-on | ~53 min (59%) |
+| Automated agent time | ~68 min (76%) |
+| Retro analysis time | ~5 min |
+
+_Note: Hands-on and agent time overlapped within the session, so percentages are each relative to wall-clock time and may sum to >100%._
+
+### Key Observations
+
+1. Session was design-heavy (~60% discussion), implementation-light — right ratio for architectural decisions
+2. Context compaction hit mid-implementation but summary preserved enough to continue cleanly
+3. Research phase had minor friction (R2 auth, API pagination) but was a one-off cost analysis
+4. Good decision flow — user steered away from over-engineering (no superpowers fork, no custom agent-skills directory)
+
+### Feedback
+
+**What worked:** Comprehensive research followed by good collaborative design discussion. High-quality back-and-forth on architectural options.
+
+### Actions Taken
+
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| settingSources learning incomplete | learnings.md | Expanded bullet to cover alwaysApply rule loading and token waste |
+| No LLM token optimization learnings | learnings.md | New "LLM Token Optimization" section with cost model, line budgets |
+| templates/ not documented | CLAUDE.md | Added to Key Directories table |
+| New skills not documented | CLAUDE.md | Added /propagate and /aggregate to "Modifying Agent Behavior" |
+
 ## 2026-03-05 - Fix Agent Lifecycle Issues
 
 Fix five agent lifecycle bugs: disable broken investigation flow, add git-branch auto-resume, reduce container TTL, fix skill compliance (merge policy, retro, code review).
