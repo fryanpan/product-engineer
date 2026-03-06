@@ -96,7 +96,7 @@ The pitch: this is a small, understandable repo that does something ambitious.
 **Prerequisites:** [Cloudflare account](https://dash.cloudflare.com/sign-up), [Anthropic API key](https://console.anthropic.com/), Slack workspace, Linear workspace.
 
 1. Fork/clone the repo
-2. Edit `orchestrator/src/registry.json` with your product config (see `registry.template.json` for a clean starting point)
+2. Register your products via the admin API (`POST /api/products`) or seed from `registry.template.json` (see `docs/registry-migration-guide.md`)
 3. Run the interactive setup script — it walks through every external service with direct links and prompts:
    ```bash
    bash scripts/setup.sh

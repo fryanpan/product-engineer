@@ -14,17 +14,19 @@ Compare projects against `templates/` and push approved updates via GitHub PRs.
 - `$ARGUMENTS` can specify:
   - A specific artifact: `rules`, `claude-md`, `settings`
   - `all` — compare everything (default if only a project name is given)
-  - A target project name from `orchestrator/src/registry.json`. If omitted, propagate to all.
+  - A target project name (product slug). If omitted, propagate to all registered products.
 
 ## Steps
 
 1. **Parse arguments** to determine what to compare and which project(s).
 
-2. **Load the product registry** from `orchestrator/src/registry.json`:
-   - Read the `products` object — each key is a product slug, each value has a `repos` array of GitHub repo identifiers (e.g., `"your-org/my-app"`)
+2. **Load the product registry** via the admin API:
+   - `GET /api/products` to list all products (requires `X-API-Key` header)
+   - Each product has a `repos` array of GitHub repo identifiers (e.g., `"your-org/my-app"`)
    - If a target project is specified in arguments, match it against product slugs or repo names
    - If no target is specified, iterate over ALL products and ALL their repos
    - Each unique repo is a propagation target
+   - The `WORKER_URL` and `API_KEY` can be found in the orchestrator's Cloudflare secrets or env
 
 3. **For each target repo**, clone it to a temp directory (or use `gh repo clone <repo> /tmp/<repo-name>`) for comparison.
 

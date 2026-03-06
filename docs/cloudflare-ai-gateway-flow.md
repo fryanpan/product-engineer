@@ -98,7 +98,7 @@ TicketAgent Container
 ## Environment Variable Injection Flow
 
 ```
-registry.json
+Product Registry (SQLite)
   {
     "cloudflare_ai_gateway": {
       "account_id": "abc123",

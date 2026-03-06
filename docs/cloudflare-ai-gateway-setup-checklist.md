@@ -24,30 +24,24 @@ Use this checklist to complete the AI Gateway integration after the code is depl
 
 ### 2. Update Registry Configuration
 
-Edit `orchestrator/src/registry.json` and add the `cloudflare_ai_gateway` section:
+Seed the AI Gateway config via the admin API:
 
-```json
-{
-  "linear_team_id": "00000000-0000-0000-0000-000000000001",
-  "agent_linear_email": "agent@example.com",
-  "agent_linear_name": "My Agent",
-  "cloudflare_ai_gateway": {
-    "account_id": "YOUR_ACCOUNT_ID_HERE",
-    "gateway_id": "YOUR_GATEWAY_ID_HERE"
-  },
-  "products": { ... }
-}
+```bash
+curl -X POST https://your-worker.workers.dev/api/products/seed \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cloudflare_ai_gateway": {
+      "account_id": "YOUR_ACCOUNT_ID_HERE",
+      "gateway_id": "YOUR_GATEWAY_ID_HERE"
+    },
+    "products": { ... }
+  }'
 ```
 
 Replace `YOUR_ACCOUNT_ID_HERE` and `YOUR_GATEWAY_ID_HERE` with the values from Step 1.
 
-### 3. Commit the Registry Update
-
-```bash
-cd /workspace/product-engineer
-git add orchestrator/src/registry.json
-git commit -m "Configure Cloudflare AI Gateway with account and gateway IDs"
-```
+### 3. Deploy (if not already deployed)
 
 ### 4. Deploy the Orchestrator
 
@@ -98,7 +92,7 @@ Check that the dashboard shows:
 
 ### No traffic appearing in dashboard
 
-1. Check registry.json was committed and deployed
+1. Check registry config was updated and deployed
 2. Verify agent container logs show `ANTHROPIC_BASE_URL` being set:
    ```bash
    wrangler tail --format pretty

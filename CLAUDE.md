@@ -69,8 +69,8 @@ Container class — one instance per ticket, lives up to 2 hours:
 - Communicates via Slack (`notify_slack`, `ask_question` tools)
 - Handles full ticket lifecycle: creation, implementation, PR, review, revision, merge
 
-### Product Registry (`orchestrator/src/registry.ts`)
-Static config mapping products to their repos, secrets, Slack channels, and trigger configuration. See `/setup-product` skill for how to register new products.
+### Product Registry (Admin API)
+Products are stored in the Orchestrator DO's SQLite database, managed via the admin API (`GET/POST/PUT/DELETE /api/products`). Each product maps to repos, secrets, Slack channels, and trigger configuration. See `/setup-product` or `/add-project` skills for how to register new products. Legacy `orchestrator/src/registry.json` is a seed template only.
 
 ## Conventions
 
@@ -95,7 +95,7 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 
 ### LLM Monitoring
 - All Anthropic API traffic routes through Cloudflare AI Gateway for monitoring
-- Configure gateway in `registry.json` under `cloudflare_ai_gateway` (account ID + gateway ID)
+- Configure gateway via the admin API (`PUT /api/products/:slug`) or in the `cloudflare_ai_gateway` root config
 - Dashboard shows: requests, tokens, costs, errors, cache hit rates
 - See `docs/cloudflare-ai-gateway.md` for setup and analytics details
 

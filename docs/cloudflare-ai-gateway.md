@@ -32,15 +32,14 @@ Format: `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropi
 
 ### Registry Configuration
 
-The `registry.json` includes AI Gateway settings in the root:
+The AI Gateway settings are stored in the Orchestrator DO's SQLite database (managed via admin API). The root config includes:
 
 ```json
 {
   "cloudflare_ai_gateway": {
     "account_id": "YOUR_ACCOUNT_ID",
     "gateway_id": "YOUR_GATEWAY_ID"
-  },
-  "products": { ... }
+  }
 }
 ```
 
@@ -62,7 +61,7 @@ In the Cloudflare dashboard:
 
 ### 2. Update Registry
 
-Edit `orchestrator/src/registry.json`:
+Seed or update the AI Gateway config via the admin API. If seeding from a JSON file:
 
 ```json
 {

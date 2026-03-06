@@ -6,11 +6,11 @@ user-invocable: true
 
 # Aggregate Cross-Project Learnings
 
-Pull learnings from all products in `orchestrator/src/registry.json` and agent session transcripts (R2) into `docs/process/aggregation-log.md`.
+Pull learnings from all registered products and agent session transcripts (R2) into `docs/process/aggregation-log.md`.
 
 ## Steps
 
-1. **Read `orchestrator/src/registry.json`** to get the list of products with their repos.
+1. **Load the product registry** via the admin API (`GET /api/products`) to get the list of products with their repos.
 
 2. **For each product**, clone or update the repo, then read:
    - `docs/process/learnings.md`

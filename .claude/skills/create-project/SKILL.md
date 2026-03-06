@@ -73,7 +73,7 @@ git push -u origin main
 
 ### Step 6: Add to Product Engineer Registry
 
-Use the `/add-project` skill to register the new repo in `orchestrator/src/registry.json`.
+Use the `/add-project` skill to register the new repo via the admin API.
 
 ### Step 7: Set Up Linear + Slack
 
