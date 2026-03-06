@@ -153,80 +153,91 @@ async function reportTokenUsage() {
 
 phoneHome("server_started", `uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 
-// Find the most recent transcript file for the current session
-async function findCurrentTranscript(): Promise<string | null> {
+// Stable UUID for this agent instance — prefixes all transcript R2 keys
+const agentUuid = crypto.randomUUID();
+console.log(`[Agent] Agent UUID: ${agentUuid}`);
+
+// Find the transcript session directory
+function getTranscriptDir(): string {
+  const home = process.env.HOME || "/home/agent";
+  const cwd = process.cwd().replace(/\//g, "-");
+  return `${home}/.claude/projects/${cwd}`;
+}
+
+// Find all transcript .jsonl files for this agent (compaction creates new files)
+async function findAllTranscripts(): Promise<string[]> {
   try {
-    const home = process.env.HOME || "/home/agent";
-    const cwd = process.cwd().replace(/\//g, "-");
-    const sessionDir = `${home}/.claude/projects/${cwd}`;
+    const sessionDir = getTranscriptDir();
 
-    // Check if directory exists
-    const dirExists = await Bun.file(sessionDir).exists().catch(() => false);
-    if (!dirExists) {
-      return null;
-    }
-
-    // List all .jsonl files in the directory
-    const proc = Bun.spawn(["ls", "-1t", sessionDir]);
+    const proc = Bun.spawn(["ls", "-1", sessionDir]);
     const output = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
 
-    if (exitCode !== 0) {
-      return null;
-    }
+    if (exitCode !== 0) return [];
 
-    // Find the most recent transcript file
-    // Files can be named: <session-id>.jsonl or agent-<hash>.jsonl
-    const files = output.trim().split("\n").filter(Boolean);
-    const transcriptFiles = files.filter(f => f.endsWith(".jsonl"));
-
-    if (transcriptFiles.length === 0) {
-      return null;
-    }
-
-    // Return the most recent (first in time-sorted list)
-    return `${sessionDir}/${transcriptFiles[0]}`;
-  } catch (err) {
-    console.error("[Agent] Error finding transcript:", err);
-    return null;
+    return output
+      .trim()
+      .split("\n")
+      .filter(f => f.endsWith(".jsonl"))
+      .map(f => `${sessionDir}/${f}`);
+  } catch {
+    return [];
   }
 }
 
-// Upload transcript to R2 via the worker
-async function uploadTranscript(transcriptPath?: string) {
+// Track uploaded size per file so we only re-upload when content changes
+const uploadedSizes = new Map<string, number>();
+
+// Upload all transcript files to R2 via the worker.
+// Each file gets a stable key: {agentUuid}-{filename} so it's uploaded once per change.
+async function uploadTranscripts(force = false) {
   try {
-    // If no path provided, find the current session's transcript
-    const path = transcriptPath || await findCurrentTranscript();
-    if (!path) {
-      console.log("[Agent] No transcript file found to upload");
+    const files = await findAllTranscripts();
+    if (files.length === 0) {
+      console.log("[Agent] No transcript files found to upload");
       return;
     }
 
-    console.log(`[Agent] Uploading transcript from ${path}...`);
-    const transcriptContent = await Bun.file(path).text();
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const r2Key = `${config.ticketId}-${timestamp}.jsonl`;
+    for (const path of files) {
+      try {
+        const file = Bun.file(path);
+        const currentSize = file.size;
+        const prevSize = uploadedSizes.get(path) ?? 0;
 
-    const uploadRes = await fetch(`${config.workerUrl}/api/internal/upload-transcript`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Key": config.apiKey,
-      },
-      body: JSON.stringify({
-        ticketId: config.ticketId,
-        r2Key,
-        transcript: transcriptContent,
-      }),
-    });
+        // Skip if unchanged (unless forced, e.g., session end / shutdown)
+        if (!force && currentSize === prevSize) continue;
 
-    if (!uploadRes.ok) {
-      const errorText = await uploadRes.text();
-      console.error(`[Agent] Transcript upload failed: ${uploadRes.status} — ${errorText}`);
-      return;
+        const basename = path.split("/").pop()!;
+        const r2Key = `${agentUuid}-${basename}`;
+
+        console.log(`[Agent] Uploading transcript ${basename} (${currentSize} bytes, was ${prevSize})...`);
+        const transcriptContent = await file.text();
+        uploadedSizes.set(path, currentSize);
+
+        const uploadRes = await fetch(`${config.workerUrl}/api/internal/upload-transcript`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": config.apiKey,
+          },
+          body: JSON.stringify({
+            ticketId: config.ticketId,
+            r2Key,
+            transcript: transcriptContent,
+          }),
+        });
+
+        if (!uploadRes.ok) {
+          const errorText = await uploadRes.text();
+          console.error(`[Agent] Transcript upload failed for ${basename}: ${uploadRes.status} — ${errorText}`);
+          continue;
+        }
+
+        console.log(`[Agent] Transcript uploaded: ${r2Key}`);
+      } catch (fileErr) {
+        console.error(`[Agent] Error uploading ${path}:`, fileErr);
+      }
     }
-
-    console.log(`[Agent] Transcript uploaded successfully: ${r2Key}`);
   } catch (err) {
     console.error("[Agent] Transcript upload error:", err);
   }
@@ -253,24 +264,23 @@ const heartbeatInterval = setInterval(() => {
   phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount}`);
 }, 120_000);
 
-// Periodic transcript backup every 5 minutes to capture work-in-progress
+// Periodic transcript backup every 1 minute (only uploads if file changed)
 const transcriptBackupInterval = setInterval(() => {
   if (sessionStatus === "completed" || sessionStatus === "error") {
     clearInterval(transcriptBackupInterval);
     return;
   }
   if (sessionStatus === "running" && sessionActive) {
-    console.log("[Agent] Periodic transcript backup...");
-    uploadTranscript().catch((err) => console.error("[Agent] Periodic backup failed:", err));
+    uploadTranscripts().catch((err) => console.error("[Agent] Periodic backup failed:", err));
   }
-}, 300_000); // 5 minutes
+}, 60_000); // 1 minute
 
 // Signal handlers to upload transcript on container shutdown
 async function handleShutdown(signal: string) {
   console.log(`[Agent] Received ${signal}, uploading transcript before shutdown...`);
   clearInterval(heartbeatInterval);
   clearInterval(transcriptBackupInterval);
-  await uploadTranscript();
+  await uploadTranscripts(true);
   phoneHome("container_shutdown", signal);
   process.exit(0);
 }
@@ -442,8 +452,8 @@ async function startSession(initialPrompt: MessageContent) {
       SessionEnd: [
         {
           hooks: [async (input: any, _toolUseID: any, _options: any) => {
-            // Upload transcript to R2 when session ends
-            await uploadTranscript(input.transcript_path);
+            // Upload all transcripts to R2 when session ends (force to capture final state)
+            await uploadTranscripts(true);
             return { continue: true };
           }],
         },
@@ -577,9 +587,9 @@ async function startSession(initialPrompt: MessageContent) {
       sessionActive = false;
       phoneHome("session_error", `${String(err).slice(0, 150)} | stderr=${lastStderr.slice(0, 100)}`);
 
-      // Upload transcript on error to capture work done before crash
+      // Upload transcripts on error to capture work done before crash
       try {
-        await uploadTranscript();
+        await uploadTranscripts(true);
       } catch (uploadErr) {
         console.error("[Agent] Failed to upload transcript after error:", uploadErr);
       }
