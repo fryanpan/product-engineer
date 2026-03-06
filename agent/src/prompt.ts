@@ -100,8 +100,8 @@ ${task.repos.length > 1 ? "The repos are already cloned into /workspace/. Work a
 1. Create branch (\`ticket/<id>\` or \`feedback/<id>\`), notify Slack, update status — all in first turn
 2. Read relevant code, implement, run tests, self-review
 3. Commit, push, create PR, update status, notify Slack — all in one turn
-4. Auto-merge low-risk (CSS, text, docs) or request review for high-risk (auth, data, APIs)
-5. Brief retro: what worked, what didn't, one concrete action. Post to Slack combined with final status update
+4. Brief retro: save to docs/process/retrospective.md, commit and push retro to PR branch
+5. Auto-merge low-risk (CSS, text, docs) or request review for high-risk (auth, data, APIs)
 
 **Communication:** Use \`update_task_status\` at every state transition. Use \`notify_slack\` for updates but always combine with other work.
 

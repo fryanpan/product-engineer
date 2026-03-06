@@ -23,6 +23,8 @@ Analyzed AI Gateway costs and agent session transcripts, identified context bloa
 | Automated agent time | ~68 min (76%) |
 | Retro analysis time | ~5 min |
 
+_Note: Hands-on and agent time overlapped within the session, so percentages are each relative to wall-clock time and may sum to >100%._
+
 ### Key Observations
 
 1. Session was design-heavy (~60% discussion), implementation-light — right ratio for architectural decisions

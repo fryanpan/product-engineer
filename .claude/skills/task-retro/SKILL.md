@@ -16,19 +16,28 @@ Answer briefly:
 2. **What didn't?** — Gotchas, blockers, surprises
 3. **One concrete action** — Update learnings.md, fix a doc, or create a ticket. Do it now.
 
-### 2. Post to Slack (combine with other work)
+### 2. Save retro to file
 
-Post the retro as a Slack thread reply. Combine this `notify_slack` call with your status update or merge action — never use a turn just for the retro post.
+Append to `docs/process/retrospective.md`:
+```markdown
+## YYYY-MM-DD - [ticket/task identifier]
+**What worked:** [detail]
+**What didn't:** [detail]
+**Action:** [what you changed, with link]
+```
+
+Commit and push this to the PR branch — retro findings must be in the PR before merging.
+
+### 3. Post brief summary to Slack (combine with other work)
+
+Post a 1-2 line summary as a Slack thread reply. Combine this `notify_slack` call with your status update or merge action — never use a turn just for the retro post.
 
 Format:
 ```
-Retro: [1-2 sentence summary]
-- Worked: [key success]
-- Learned: [specific gotcha or insight]
-- Action: [what you changed, with link]
+Retro: [1-2 sentence summary]. Action: [what you changed].
 ```
 
-### 3. Cross-Project Learnings
+### 4. Cross-Project Learnings
 
 If you discovered something useful across ALL products, note it in your final output for the orchestrator to aggregate.
 
@@ -37,3 +46,4 @@ If you discovered something useful across ALL products, note it in your final ou
 - **One action minimum.** Every retro must produce at least one concrete change.
 - **Specific over generic.** "Test runner needs `--no-cache` after dep changes" not "testing is important."
 - **Brief.** The retro should take 1-2 turns, not 5.
+- **File first, Slack second.** Detailed retro goes to retrospective.md; Slack gets a brief summary only.

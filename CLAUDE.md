@@ -95,7 +95,7 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 
 ### LLM Monitoring
 - All Anthropic API traffic routes through Cloudflare AI Gateway for monitoring
-- Configure gateway via the admin API (`PUT /api/products/:slug`) or in the `cloudflare_ai_gateway` root config
+- Configure gateway via the admin API (`PUT /api/settings/cloudflare_ai_gateway`) or by seeding via `POST /api/products/seed`
 - Dashboard shows: requests, tokens, costs, errors, cache hit rates
 - See `docs/cloudflare-ai-gateway.md` for setup and analytics details
 

@@ -58,10 +58,10 @@ Examples: database schema changes, API contract changes, deleting data, architec
     - **Low risk** (auto-merge): CSS, text, layout, docs, tests, config
     - **High risk** (request review): data model, auth, APIs, security, dependencies
 9. **If auto-merging:**
-    1. Do a brief retro (what worked, what didn't, learnings) and post to Slack
-    2. Commit any retro actions to the PR branch and push
+    1. Do a brief retro — save detailed findings to `docs/process/retrospective.md`
+    2. Commit retro actions and retro log to the PR branch and push
     3. Merge: `gh pr merge --squash`
-    4. Update status to `merged`
+    4. Update status to `merged`, post brief retro summary to Slack
 10. **If requesting review, stay alive** for up to 1 hour for feedback.
 
 ### On receiving a PR review or comment
@@ -69,7 +69,7 @@ Examples: database schema changes, API contract changes, deleting data, architec
 1. Read the review carefully
 2. Make requested changes, run tests, self-review the fix
 3. Commit and push, notify Slack with summary
-4. If approved: retro → commit retro actions → merge → update status to `merged`
+4. If approved: retro (save to retrospective.md) → commit retro actions → merge → update status to `merged`, post brief summary to Slack
 
 ### On receiving a PR merge event
 

@@ -59,7 +59,9 @@ Compare projects against `templates/` and push approved updates via GitHub PRs.
    | rules/workflow-conventions.md | Antipattern | Contains interactive-only content |
    | CLAUDE.md | Current | Matches template |
 
-8. **Ask the user** which updates to apply.
+8. **Get approval for updates**:
+   - In interactive mode: present the report and ask which updates to apply
+   - In headless mode: use the `ask_question` Slack tool to post the comparison report and wait for approval via Slack reply
 
 9. **For each target project**, create a single PR:
    - Create a branch: `product-engineer/propagate-{date}`
