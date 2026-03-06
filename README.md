@@ -151,6 +151,8 @@ The agent comes with several built-in skills for managing projects and products:
 - **`/retro`** — Run a retrospective with transcript analysis and capture learnings
 - **`/persist-plan`** — Save internal plans to `docs/product/plans/`
 - **`/cross-project-review`** — Periodic review across all products to find patterns and share learnings
+- **`/propagate`** — Compare project Claude setups against templates, validate for antipatterns, push updates via PRs
+- **`/aggregate`** — Pull learnings from all registered products and agent transcripts into cross-project knowledge
 - **`/task-retro`** — Per-task retrospective the agent runs after completing each task
 
 See `.claude/skills/` for the full list and details.

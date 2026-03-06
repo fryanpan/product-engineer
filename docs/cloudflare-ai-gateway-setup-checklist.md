@@ -41,9 +41,7 @@ curl -X POST https://your-worker.workers.dev/api/products/seed \
 
 Replace `YOUR_ACCOUNT_ID_HERE` and `YOUR_GATEWAY_ID_HERE` with the values from Step 1.
 
-### 3. Deploy (if not already deployed)
-
-### 4. Deploy the Orchestrator
+### 3. Deploy the Orchestrator
 
 ```bash
 cd orchestrator
@@ -55,7 +53,7 @@ This will:
 - Inject `ANTHROPIC_BASE_URL` into all new agent containers
 - Route all LLM traffic through the gateway
 
-### 5. Verify the Integration
+### 4. Verify the Integration
 
 **Option A: Create a test ticket**
 1. Create a new Linear ticket in the Product Engineer project
@@ -68,7 +66,7 @@ This will:
 2. Watch for agent activity
 3. Check the gateway dashboard for traffic
 
-### 6. Capture Analytics Screenshot
+### 5. Capture Analytics Screenshot
 
 Once traffic is flowing:
 1. Go to Cloudflare Dashboard > AI > AI Gateway > [your gateway] > **Analytics**
@@ -79,7 +77,7 @@ Once traffic is flowing:
    - Any other visible metrics
 3. Post to the Linear ticket or Slack thread
 
-### 7. Validate Analytics Features
+### 6. Validate Analytics Features
 
 Check that the dashboard shows:
 - [x] Request count over time
