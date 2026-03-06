@@ -2,6 +2,23 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-06 - Update Repo Templates
+
+**Context:** Updated templates/ directory to match current product-engineer best practices for push to target repos via /propagate.
+
+**What worked:**
+- Clear request from user to "update the repo templates"
+- Templates are now aligned with actual product-engineer .claude/ configuration
+- Fast turnaround: read templates, compare to current config, update 3 files, commit, push, PR in ~10 minutes
+- All changes are non-breaking additions (new permissions, new guidance sections)
+
+**Key updates:**
+- claude-settings.json: Added Context7 MCP tools, enabled plugins (code-review, superpowers, commit-commands, claude-md-management, context7), added deny rules for destructive git operations
+- workflow-conventions.md: Added execution strategy guidance (Subagent-Driven Development as default), autonomy, output destination, verification, code review sections
+- feedback-loop.md: Expanded with friction detection, periodic retros, automatic retro triggers, learning elevation
+
+**Action:** PR #54 created — ready for user review and propagation to target repos
+
 ## 2026-03-06 - Registry Management Code Review Response
 
 **Context:** Addressed all 10 Copilot review comments on PR #52 (registry management CLI and docs).
