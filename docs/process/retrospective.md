@@ -2,6 +2,21 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-06 - Registry Management Code Review Response
+
+**What worked:**
+- Copilot's detailed inline comments caught multiple schema mismatches between the script/docs and actual registry implementation
+- Having the actual ProductConfig type in registry.ts made it straightforward to identify and fix all the issues systematically
+- All 10 review comments were actionable and correct
+
+**What didn't:**
+- The original implementation didn't reference the actual ProductConfig type from registry.ts, leading to a made-up schema that didn't match reality
+- The triggers structure mismatch (objects vs booleans) would have caused confusing output and broken verification checks in production
+
+**Action:**
+- When creating tooling that interacts with existing data structures, always import or reference the actual TypeScript types rather than recreating them from memory
+- Add to learnings: schema validation scripts should import types from the source of truth, not duplicate type definitions
+
 ## 2026-03-06 - Registry Management Tools
 
 Created CLI tooling and documentation for managing the Product Engineer registry via the admin API.
