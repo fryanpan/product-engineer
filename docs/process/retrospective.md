@@ -4,18 +4,27 @@ Session retrospectives and process improvements.
 
 ## 2026-03-06 - Registry Management Code Review Response
 
+**Context:** Addressed all 10 Copilot review comments on PR #52 (registry management CLI and docs).
+
 **What worked:**
 - Copilot's detailed inline comments caught multiple schema mismatches between the script/docs and actual registry implementation
 - Having the actual ProductConfig type in registry.ts made it straightforward to identify and fix all the issues systematically
 - All 10 review comments were actionable and correct
+- Fast turnaround: received review, fixed all issues, committed, pushed, merged in ~30 minutes
 
 **What didn't:**
 - The original implementation didn't reference the actual ProductConfig type from registry.ts, leading to a made-up schema that didn't match reality
 - The triggers structure mismatch (objects vs booleans) would have caused confusing output and broken verification checks in production
 
+**Key fixes:**
+- Corrected ProductConfig type: triggers are objects `{enabled, ...}`, not booleans
+- Made API_KEY required with helpful 401 error handling
+- Fixed all curl examples to include X-API-Key header and proper config wrapping
+- Updated all documentation to reflect actual schema
+
 **Action:**
-- When creating tooling that interacts with existing data structures, always import or reference the actual TypeScript types rather than recreating them from memory
-- Add to learnings: schema validation scripts should import types from the source of truth, not duplicate type definitions
+- Added to learnings: When creating tooling that interacts with existing data structures, always import or reference the actual TypeScript types rather than recreating them from memory
+- PR #52 merged successfully
 
 ## 2026-03-06 - Registry Management Tools
 
