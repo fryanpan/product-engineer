@@ -11,7 +11,7 @@ Review agent performance across all products to find patterns and improve the sy
 
 ### Step 1: Gather Session Logs
 
-Collect recent session logs from the orchestrator. Look for:
+Use `list_transcripts` and `fetch_transcript` MCP tools to access agent session transcripts from R2. Transcripts are JSONL files uploaded automatically by the agent server (on session end, every 5 min, and on shutdown). Look for:
 - Which products had the most agent tasks
 - Success/failure rates per product
 - Average task duration

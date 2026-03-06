@@ -16,10 +16,11 @@ Pull learnings from all registered products and agent session transcripts (R2) i
    - `docs/process/learnings.md`
    - `docs/process/retrospective.md`
 
-3. **Read agent session transcripts** from R2 (if available):
-   - Look for patterns in tool usage, turn counts, failure modes
-   - Identify which task types take the most turns
-   - Note any recurring errors or blockers
+3. **Read agent session transcripts** from R2 using the MCP tools:
+   - Use `list_transcripts` to get available transcripts (filter by `sinceHours` for recent ones)
+   - Use `fetch_transcript` with the `r2Key` to download specific JSONL transcripts
+   - Transcripts are uploaded automatically by the agent server (on session end, every 5 min, and on shutdown)
+   - Analyze for: tool usage patterns, turn counts, failure modes, which task types take the most turns
 
 4. **Compare against `docs/process/aggregation-log.md`** to identify new entries.
 
