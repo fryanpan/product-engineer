@@ -1,0 +1,40 @@
+---
+name: aggregate
+description: Pull learnings from all registered products and agent session transcripts into cross-project knowledge. Run periodically or after a batch of agent tasks.
+user-invocable: true
+---
+
+# Aggregate Cross-Project Learnings
+
+Pull learnings from all products in `orchestrator/src/registry.json` and agent session transcripts (R2) into `docs/process/aggregation-log.md`.
+
+## Steps
+
+1. **Read `orchestrator/src/registry.json`** to get the list of products with their repos.
+
+2. **For each product**, clone or update the repo, then read:
+   - `docs/process/learnings.md`
+   - `docs/process/retrospective.md`
+
+3. **Read agent session transcripts** from R2 (if available):
+   - Look for patterns in tool usage, turn counts, failure modes
+   - Identify which task types take the most turns
+   - Note any recurring errors or blockers
+
+4. **Compare against `docs/process/aggregation-log.md`** to identify new entries.
+
+5. **Add a new section** `## YYYY-MM-DD` with new entries tagged by source project and category.
+
+6. **Identify cross-cutting patterns** — learnings that appear across products or would benefit all:
+   - The pattern description
+   - Which products it was observed in
+   - Whether it should be propagated (and how — template update, skill update, etc.)
+
+   Before marking as needing propagation, check:
+   - Is it already in `templates/`?
+   - Was it already pushed via `/propagate`?
+   - Is it covered by the product-engineer skill?
+
+7. **Commit** the updated aggregation log.
+
+8. **Summarize**: entries per project, patterns identified, recommended `/propagate` actions.

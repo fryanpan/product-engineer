@@ -15,7 +15,7 @@ Technical discoveries that should persist across sessions.
 - `ExitPlanMode` / `EnterPlanMode` require interactive user approval. In headless execution (no TTY), the agent hangs forever waiting. **Always ban plan mode** in headless agent prompts.
 - `AskUserQuestion` also hangs headless — redirect to an MCP tool that posts to Slack instead.
 - `bypassPermissions` mode fails when running as root. The SDK checks `process.getuid()` and refuses. Run containers as a non-root user.
-- `settingSources: ["project"]` loads CLAUDE.md and skills from the repo the agent is working in — no need to pass skills explicitly.
+- `settingSources: ["project"]` loads CLAUDE.md, all `alwaysApply: true` rules from `.claude/rules/`, and skills from `.claude/skills/` in the target repo. Interactive-only alwaysApply rules (asking for feedback, offering retros, watching for frustration) silently waste agent context tokens on every turn. Fix the target repos' rules to be headless-compatible rather than disabling settingSources.
 
 ## Docker / Container Deployment
 - Docker build context paths matter when the Dockerfile is in a subdirectory. Use `context: .` in wrangler.jsonc and adjust COPY paths accordingly.
@@ -33,6 +33,13 @@ Technical discoveries that should persist across sessions.
 ## Multi-Agent Lifecycle
 - Container SDK `alarm()` fires periodically to keep containers alive. Guard against restarting completed/terminal tickets — this pattern has caused bugs twice (investigation cascade in 8e93fcb, alarm restart for completed tickets). Always check terminal state at the top of `alarm()`.
 - Multi-agent features have many interacting edge cases: deploy resume, terminal state, alarm restarts, merge target, retro ordering. Plan with explicit edge case enumeration before implementing — ask "what happens when X restarts for a ticket that's already done?" at every lifecycle boundary.
+
+## LLM Token Optimization
+- `settingSources: ["project"]` injects ALL `alwaysApply: true` rules into every agent turn. Target repos with interactive-only alwaysApply rules (asking for feedback, offering retros, watching for user frustration) silently waste agent context tokens. Fix the target repos, not the agent config.
+- Templates for headless-compatible target repo rules live in `templates/` — use `/propagate` to push updates to registered products.
+- Total alwaysApply content across all rules in a target repo should be < 80 lines.
+- Cost is roughly linear with turn count (~$0.02-0.03/turn at ~70K cached tokens). Reducing turns matters more than reducing prompt size.
+- Cache hit rate is ~97% — cache reads ($0.30/M) dominate over cache writes ($3.75/M). Large contexts are cheap per-turn but expensive in aggregate across many turns.
 
 ## Slack Thread Routing
 - The Orchestrator looks up existing tickets by `slack_thread_ts` (exact string match). Re-triggers must use the original top-level message `ts`, not a reply `ts` — otherwise a new ticket is created instead of routing to the existing one.

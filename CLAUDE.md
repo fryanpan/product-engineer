@@ -41,6 +41,7 @@ Worker (stateless) ──→ Orchestrator DO (singleton, always-on)
 | `agent/` | Generic Product Engineer agent — Agent SDK, tools, prompt construction |
 | `containers/` | Dockerfiles and container-specific code (orchestrator Socket Mode, agent server) |
 | `.claude/skills/` | English skills that define agent behavior |
+| `templates/` | Baseline `.claude/rules/`, settings, and `CLAUDE.md.tmpl` for target product repos — pushed via `/propagate` |
 | `docs/` | Process docs and learnings |
 
 ## How It Works
@@ -82,6 +83,8 @@ Static config mapping products to their repos, secrets, Slack channels, and trig
 Agent decision-making is encoded in English skills (`.claude/skills/`), not TypeScript. To change how the agent works:
 1. Edit the relevant skill (e.g., `product-engineer/SKILL.md` for decision logic)
 2. The agent loads skills from this repo AND from the target product's repo
+3. To change what the agent sees from target repos (alwaysApply rules, settings), edit `templates/` and use `/propagate` to push updates
+4. Cross-project skills: `/propagate` (push template updates), `/aggregate` (pull learnings from all products)
 
 ### Secrets
 - Platform secrets (Slack, Linear, Anthropic) are shared across products

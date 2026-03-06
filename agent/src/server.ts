@@ -421,6 +421,10 @@ async function startSession(initialPrompt: MessageContent) {
   console.log("[Agent] Starting Agent SDK query()...");
 
   // Build query options
+  // settingSources: ["project"] loads CLAUDE.md, .claude/rules/ (alwaysApply), and
+  // .claude/skills/ from the target repo. To keep context lean, target repos should
+  // only use alwaysApply rules that are headless-compatible (no interactive prompts,
+  // no TodoWrite, no plan mode). See templates/ for headless-optimized templates.
   const queryOptions: any = {
     systemPrompt: { type: "preset", preset: "claude_code" },
     settingSources: ["project"],

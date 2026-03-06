@@ -1,0 +1,41 @@
+# Project: {{project_name}}
+
+## Overview
+{{project_description}}
+
+## Architecture
+
+### Development
+{{development_setup}}
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| ... | ... |
+
+### Documentation
+| File | Purpose |
+|------|---------|
+| `docs/product/decisions.md` | Architecture & product decisions log |
+| `docs/product/plans/` | Sprint/feature plans |
+| `docs/process/learnings.md` | Technical gotchas |
+| `docs/process/retrospective.md` | Session retro logs |
+
+## Conventions
+
+### Before Making Changes
+- Read the relevant file(s) first
+- Check `docs/product/decisions.md` for prior decisions on the topic
+- Check `docs/process/learnings.md` when writing code that touches external services
+
+### After Making Changes
+- If the change involved a non-obvious decision, log it in `docs/product/decisions.md`
+- If we learned something useful, add it to `docs/process/learnings.md`
+
+### Code Style
+- Prefer explicit over clever
+- No unnecessary abstractions for one-time operations
+- Clean up dead code created by your changes
+
+@docs/process/learnings.md
