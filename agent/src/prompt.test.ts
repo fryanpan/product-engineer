@@ -174,6 +174,52 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("Simple fix");
     expect(prompt).not.toContain("Labels:");
   });
+
+  it("handles ticket with missing fields (defensive null checks)", async () => {
+    // Simulates what happens if a non-ticket payload is cast to TicketData
+    const task: TaskPayload = {
+      type: "ticket",
+      product: "test-app",
+      repos: ["fryanpan/test-app"],
+      data: {
+        id: "test-123",
+        // title, description, priority, labels all missing
+      } as any,
+    };
+
+    const content = await buildPrompt(task, MOCK_SLACK_TOKEN);
+    const prompt = extractText(content);
+
+    // Should not crash — uses fallback values
+    expect(prompt).toContain("(no title)");
+    expect(prompt).toContain("(no description)");
+    expect(prompt).toContain("unset");
+    expect(prompt).not.toContain("Labels:");
+    expect(prompt).toContain("test-123");
+  });
+
+  it("builds correct prompt for slack_reply as command when session inactive", async () => {
+    // When sessionActive=false and a slack_reply arrives, server.ts maps it to "command"
+    // This test verifies the prompt is valid for Slack event payloads
+    const task: TaskPayload = {
+      type: "command",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      data: {
+        text: "<@U0AHE1T0SMV> What's the team id and project id?",
+        user: "U0AH7G5GKNW",
+        channel: "C0AHQK8LB34",
+      },
+    };
+
+    const content = await buildPrompt(task, MOCK_SLACK_TOKEN);
+    const prompt = extractText(content);
+
+    expect(prompt).toContain("Slack command");
+    expect(prompt).toContain("What's the team id and project id?");
+    expect(prompt).toContain("<@U0AH7G5GKNW>");
+    expect(prompt).toContain("C0AHQK8LB34");
+  });
 });
 
 function makeEvent(overrides: Partial<TicketEvent> & { type: string; payload: unknown }): TicketEvent {

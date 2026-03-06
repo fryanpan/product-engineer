@@ -604,7 +604,7 @@ app.post("/event", async (c) => {
       const taskType: TaskPayload["type"] =
         event.type === "ticket_created"
           ? "ticket"
-          : event.type === "slack_mention"
+          : event.type === "slack_mention" || event.type === "slack_reply"
             ? "command"
             : event.type === "feedback"
               ? "feedback"

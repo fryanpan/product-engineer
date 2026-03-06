@@ -155,10 +155,10 @@ function formatTicket(data: TicketData): string {
   const parts = [
     `**Type:** Linear ticket`,
     data.identifier && `**Ticket:** ${data.identifier} (https://linear.app/issue/${data.identifier})`,
-    `**Title:**\n<user_input>\n${data.title}\n</user_input>`,
-    `**Description:**\n<user_input>\n${data.description}\n</user_input>`,
-    `**Priority:** ${data.priority}`,
-    data.labels.length > 0 && `**Labels:** ${data.labels.join(", ")}`,
+    `**Title:**\n<user_input>\n${data.title ?? "(no title)"}\n</user_input>`,
+    `**Description:**\n<user_input>\n${data.description ?? "(no description)"}\n</user_input>`,
+    `**Priority:** ${data.priority ?? "unset"}`,
+    (data.labels?.length ?? 0) > 0 && `**Labels:** ${data.labels.join(", ")}`,
     `**Ticket ID:** ${data.id}`,
   ];
   return parts.filter(Boolean).join("\n");
