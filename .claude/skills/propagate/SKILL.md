@@ -20,9 +20,13 @@ Compare projects against `templates/` and push approved updates via GitHub PRs.
 
 1. **Parse arguments** to determine what to compare and which project(s).
 
-2. **Identify the project(s)** from `orchestrator/src/registry.json`.
+2. **Load the product registry** from `orchestrator/src/registry.json`:
+   - Read the `products` object — each key is a product slug, each value has a `repos` array of GitHub repo identifiers (e.g., `"your-org/my-app"`)
+   - If a target project is specified in arguments, match it against product slugs or repo names
+   - If no target is specified, iterate over ALL products and ALL their repos
+   - Each unique repo is a propagation target
 
-3. **Clone or update** each target project repo to a temp directory for comparison.
+3. **For each target repo**, clone it to a temp directory (or use `gh repo clone <repo> /tmp/<repo-name>`) for comparison.
 
 4. **Read the latest templates** from `templates/`:
    - Rules: `templates/rules/*.md`
