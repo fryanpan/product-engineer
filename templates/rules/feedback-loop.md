@@ -10,26 +10,64 @@ alwaysApply: true
    - Is this the simplest solution?
    - Did I update all places that needed updating?
 
-2. **Capture learnings**: Proactively identify things worth remembering:
+2. **Ask for feedback**:
+   - "Does this work as expected?"
+   - "Anything that felt clunky or could be improved?"
+
+3. **Capture learnings**: Proactively identify things worth remembering:
    - Technical gotchas or surprises
    - Patterns that worked well
    - Mistakes to avoid repeating
    - API quirks or environment issues
 
-   Log specific additions to `docs/process/learnings.md`:
-   ```markdown
-   ## [Category]
-   - [Specific gotcha or discovery]
-   ```
+   When identified, propose the specific addition:
+   > "This seems worth adding to learnings.md:
+   > `## [Category]`
+   > `- [Specific learning]`
+   > Want me to add it?"
+
+## During Work - Watch for Friction
+If the user seems frustrated, confused, or an approach isn't working:
+- Pause and acknowledge: "This doesn't seem to be working well. What's off?"
+- Ask what they'd prefer instead
+- Offer to log the feedback for future sessions
+
+## Periodic Retrospective
+After ~2-3 hours of work or completing a major feature, prompt:
+> "Quick retro:
+> - What worked well?
+> - What was frustrating or slower than expected?
+> - Anything I should do differently?"
+
+Then offer to log feedback in `docs/process/retrospective.md`
+
+## Automatic Retro Triggers
+
+After any of these events, if a retro hasn't happened yet this session, offer to run `/retro`:
+- Creating a PR (via `/commit-push-pr` or `gh pr create`)
+- Receiving and addressing code review feedback
+
+Lightweight prompt: "Good moment for a quick retro. Want me to run `/retro`?"
+Do NOT auto-run — just offer. User can decline.
+If a retro already happened this session, skip the offer.
 
 ## Elevating to Learnings
 
-After fixing issues or completing features, look for things that should persist:
+During retros or after fixing issues, actively look for things that should change future Claude behavior:
 - Did we hit a gotcha that will recur?
 - Did we discover something about the codebase/tools?
 - Did an approach work particularly well or poorly?
 
-Log to `docs/process/retrospective.md`:
+**Propose specific additions** to `docs/process/learnings.md` - don't just ask "anything to add?"
+
+## When Logging Learnings
+Format for `docs/process/learnings.md`:
+```markdown
+## [Category]
+- [Specific gotcha or discovery]
+```
+
+Format for `docs/process/retrospective.md`:
 ```markdown
 ## YYYY-MM-DD - [Context]
 **What worked:** ...
