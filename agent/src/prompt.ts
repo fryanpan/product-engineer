@@ -164,6 +164,10 @@ function formatTicket(data: TicketData): string {
   return parts.filter(Boolean).join("\n");
 }
 
+function formatFileList(files: SlackFile[]): string {
+  return files.map(f => `- ${f.name} (${f.mimetype}, ${(f.size / 1024).toFixed(1)} KB)`).join("\n");
+}
+
 function formatCommand(data: CommandData): string {
   const parts = [
     `**Type:** Slack command`,
@@ -172,8 +176,7 @@ function formatCommand(data: CommandData): string {
   ];
 
   if (data.files && data.files.length > 0) {
-    const fileList = data.files.map(f => `- ${f.name} (${f.mimetype}, ${(f.size / 1024).toFixed(1)} KB)`).join("\n");
-    parts.push(`**Attachments:**\n${fileList}`);
+    parts.push(`**Attachments:**\n${formatFileList(data.files)}`);
     parts.push(`**Note:** File URLs are provided in the event payload. Use the Slack bot token to fetch files from url_private URLs.`);
   }
 
@@ -203,8 +206,7 @@ export async function buildEventPrompt(
       let message = `The user replied via Slack:\n\n<user_input>\n${payload.text}\n</user_input>`;
 
       if (files && files.length > 0) {
-        const fileList = files.map(f => `- ${f.name} (${f.mimetype}, ${(f.size / 1024).toFixed(1)} KB)`).join("\n");
-        message += `\n\n**Attachments:**\n${fileList}`;
+        message += `\n\n**Attachments:**\n${formatFileList(files)}`;
 
         // Fetch images and return structured content
         const imageBlocks = await fetchSlackFiles(files, slackBotToken);
