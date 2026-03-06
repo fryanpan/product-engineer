@@ -2,6 +2,35 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-06 - BC-112: Assignee-Based Ticket Triggering
+
+**Context:** Changed Linear webhook behavior to only auto-start tickets when assigned to BC Agent, giving users explicit control over which tickets the agent works on.
+
+**What worked:**
+- Clear requirement from user: "don't work on it immediately unless it's assigned to BC Agent"
+- Simple, focused change to trigger logic in `webhooks.ts` (lines 204-216)
+- Comprehensive test coverage already existed, made it easy to update and verify behavior
+- All 55 tests pass after changes
+- Implementation time: ~20 minutes from start to PR creation
+
+**Implementation approach:**
+- Changed from `payload.action === "create" || (isAssignedToAgent && !isTerminal)` to just `isAssignedToAgent && !isTerminal`
+- Updated two tests to reflect new behavior (unassigned creation ignored, assigned creation triggers)
+- Self-assignment logic in webhook handler (lines 238-240) already handles auto-assigning the agent if not assigned, which now matters more
+
+**What didn't:**
+- N/A - straightforward change with good existing test coverage
+
+**Key insight:**
+- The existing test suite had excellent coverage of assignee scenarios (tests for agent assignment by email, by name, ignoring other users, terminal states)
+- This made it trivial to understand the current behavior and verify the new behavior
+- Good test coverage pays dividends when changing trigger logic
+
+**Action:**
+- PR #53 created and ready for review
+- This gives users a clear workflow: create ticket → assign to BC Agent → agent starts work
+- Unassigned tickets wait for manual assignment, preventing unwanted auto-execution
+
 ## 2026-03-06 - Registry Management Code Review Response
 
 **Context:** Addressed all 10 Copilot review comments on PR #52 (registry management CLI and docs).
