@@ -2,6 +2,22 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-06 - Slack Threading Fix
+
+Fixed Slack threading behavior for top-level @product-engineer mentions. Agent now creates its own thread instead of replying to user's original message.
+
+**What worked:** Simple, focused change. Clear problem, clear solution. Tests passed first try.
+
+**Key insight:** The orchestrator was setting `slackThreadTs` to the user's message timestamp for new mentions, causing all agent replies to thread under the user's message. By leaving it undefined, the agent's first `postMessage` creates a new thread and persists that ts for future replies.
+
+**Changes:**
+- orchestrator.ts: Don't set slackThreadTs for new slack_mention events
+- prompt.ts: Instruct agent to include footer guiding users to reply in new thread
+
+**Result:** Cleaner UX — user's original message stays clean, all discussion happens in agent's thread.
+
+**Action:** Added PR #51
+
 ## 2026-03-06 - LLM Cost Optimization & Project Management Migration
 
 Analyzed AI Gateway costs and agent session transcripts, identified context bloat from interactive alwaysApply rules, implemented Option B (keep settingSources, fix target repos), migrated project management skills from ai-project-support, created headless-compatible templates.
