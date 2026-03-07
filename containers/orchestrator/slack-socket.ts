@@ -23,6 +23,7 @@ interface SlackEnvelope {
       bot_id?: string;
       subtype?: string;
       files?: SlackFile[];
+      slash_command?: string;
     };
   };
 }
@@ -72,10 +73,23 @@ export class SlackSocket {
         const slackEvent = envelope.payload?.event;
         if (slackEvent && !slackEvent.bot_id) {
           if (slackEvent.type === "app_mention") {
-            this.onEvent(slackEvent);
+            // Check if this is a /status command mention
+            const text = slackEvent.text?.trim() || "";
+            if (/(^|\s)\/status(\s|$)/.test(text)) {
+              this.onEvent({ ...slackEvent, slash_command: "status" });
+            } else {
+              this.onEvent(slackEvent);
+            }
           } else if (slackEvent.type === "message" && slackEvent.thread_ts && !slackEvent.subtype) {
             // Only forward thread replies (not top-level messages, edits, joins, etc.)
             this.onEvent(slackEvent);
+          } else if (slackEvent.type === "message" && !slackEvent.thread_ts && !slackEvent.subtype) {
+            // Check for slash commands in top-level messages
+            const text = slackEvent.text?.trim() || "";
+            if (/(^|\s)\/status(\s|$)/.test(text)) {
+              // Mark as slash command for special handling
+              this.onEvent({ ...slackEvent, slash_command: "status" });
+            }
           }
         }
       } catch {
