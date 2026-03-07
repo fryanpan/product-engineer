@@ -317,3 +317,30 @@ Debugged why `@product-engineer` Slack mentions weren't working, fixed container
 | Slack thread re-trigger duplicates | learnings.md | New "Slack Thread Routing" section |
 | CLAUDE.md missing deployment safety info | CLAUDE.md | Added `agent_active`, `[vars]` config, and deployment-safety.md pointers |
 | Missing test coverage for agent_active | Linear ticket | Created BC-80 |
+## 2026-03-07 - BC-117: Add /status command for viewing agent status
+
+**What worked:**
+- Clear architecture from reading existing code (orchestrator/agent/container structure)
+- Existing heartbeat infrastructure made health monitoring straightforward
+- SQLite queries simple and efficient for status aggregation
+- Good separation: slash command detection → routing → formatting → Slack response
+- Documentation-first approach (wrote docs/status-command.md) helped clarify design
+- Health emoji gradients (💚→💛→🧡→❤️) provide intuitive at-a-glance status
+
+**What didn't:**
+- Test infrastructure has dependency issues (Container SDK not available in test env)
+- Had to work around test failures, wrote simpler unit tests instead
+- Initial slash command detection was too narrow (only matched `/status` exactly)
+- Fixed to also match `@product-engineer /status` patterns
+
+**Action:**
+- Consider fixing test infrastructure to support Container SDK imports
+- Slash command pattern matching could be more robust (regex instead of string contains)
+
+**Technical notes:**
+- All status data comes from orchestrator SQLite `tickets` table
+- Agents send heartbeat every 2 minutes while active (set in agent/src/server.ts)
+- Health thresholds: <5m fresh, 5-15m recent, 15-30m stale, >30m very stale
+- Status endpoint returns JSON for programmatic access, Slack handler formats for humans
+- Implemented in 4 files: slack-socket.ts (detection), orchestrator.ts (logic), test, docs
+
