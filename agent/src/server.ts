@@ -18,6 +18,15 @@ import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt, buildResumePrompt } from "./prompt";
 import { buildMcpServers } from "./mcp";
 
+// Timing-safe equality check for auth (prevents timing attacks)
+function timingSafeEqual(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  if (bufA.byteLength !== bufB.byteLength) return false;
+  return (crypto.subtle as unknown as { timingSafeEqual(a: BufferSource, b: BufferSource): boolean }).timingSafeEqual(bufA, bufB);
+}
+
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
 }
@@ -728,7 +737,7 @@ app.get("/status", (c) =>
 
 app.post("/shutdown", async (c) => {
   const key = c.req.header("X-Internal-Key");
-  if (!key || key !== config.apiKey) {
+  if (!key || !timingSafeEqual(key, config.apiKey)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 

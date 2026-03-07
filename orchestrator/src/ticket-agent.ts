@@ -198,38 +198,46 @@ export class TicketAgent extends Container<Bindings> {
         this.markTerminal();
 
         // Tell the container to shut down immediately instead of waiting for session timeout.
+        // Only try if the container is already running - don't auto-start it just to shut it down.
         // Use a bounded-time request so a hung container cannot block the orchestrator status path.
-        const shutdownController = new AbortController();
-        const shutdownTimeoutMs = 5000;
-        const shutdownTimeoutId = setTimeout(() => {
-          shutdownController.abort("shutdown request timed out");
-        }, shutdownTimeoutMs);
-
         try {
-          const res = await this.containerFetch(
-            "http://localhost/shutdown",
-            {
+          // Get the port without auto-starting the container
+          const port = (this.ctx as any).container?.getTcpPort?.(this.defaultPort);
+          if (!port) {
+            console.log("[TicketAgent] Container not running, skipping shutdown request");
+            return Response.json({ ok: true });
+          }
+
+          const shutdownController = new AbortController();
+          const shutdownTimeoutMs = 5000;
+          const shutdownTimeoutId = setTimeout(() => {
+            shutdownController.abort("shutdown request timed out");
+          }, shutdownTimeoutMs);
+
+          try {
+            const res = await port.fetch("http://localhost/shutdown", {
               method: "POST",
               headers: {
                 "X-Internal-Key": (this.env.API_KEY as string) || "",
               },
-              // Best-effort: abort if the shutdown endpoint hangs.
               signal: shutdownController.signal,
-            },
-            this.defaultPort,
-          );
+            }) as Response;
 
-          clearTimeout(shutdownTimeoutId);
+            clearTimeout(shutdownTimeoutId);
 
-          if (res.ok) {
-            console.log("[TicketAgent] Container shutdown requested successfully");
-          } else {
-            console.warn(`[TicketAgent] Container shutdown request failed: ${res.status}`);
+            if (res.ok) {
+              console.log("[TicketAgent] Container shutdown requested successfully");
+            } else {
+              console.warn(`[TicketAgent] Container shutdown request failed: ${res.status}`);
+            }
+          } catch (err) {
+            clearTimeout(shutdownTimeoutId);
+            // Container might have stopped or request timed out - that's fine, goal achieved
+            console.log("[TicketAgent] Container shutdown request failed (container may already be stopped):", err);
           }
         } catch (err) {
-          clearTimeout(shutdownTimeoutId);
-          // Container might already be stopped or unreachable - that's fine, goal achieved
-          console.log("[TicketAgent] Container shutdown request failed (container may already be stopped):", err);
+          // Container SDK error - container likely not running
+          console.log("[TicketAgent] Unable to access container port, skipping shutdown request:", err);
         }
 
         return Response.json({ ok: true });
