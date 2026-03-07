@@ -1,3 +1,42 @@
+## 2026-03-07 - BC-118: Missing worker routes for cleanup endpoint (PR #64)
+
+**Context:** PR #63 added the `/cleanup-inactive` endpoint to the Orchestrator DO, but it was never exposed through the worker - making it impossible to call via HTTP. The final missing piece to resolve BC-118.
+
+**Root cause:** The cleanup endpoint existed in `orchestrator.ts:728` but had no corresponding route in `index.ts`. Without a worker route, the endpoint was unreachable from external HTTP requests.
+
+**What worked:**
+- Systematic review of the worker routing in `index.ts`
+- Found that `/status` was also missing from the worker (only existed in DO)
+- Added both routes with proper authentication and proxy pattern
+- Clean, minimal fix - just expose what already exists
+
+**What didn't:**
+- PR #63 implemented the cleanup logic but forgot to expose it via the worker
+- No verification that the endpoint was actually callable after implementation
+- Would have caught this immediately with an end-to-end test or manual curl test
+
+**Solution:**
+- Added `POST /api/orchestrator/cleanup-inactive` route to worker
+- Added `GET /api/orchestrator/status` route to worker (also missing)
+- Both require X-API-Key authentication
+- Both proxy to corresponding Orchestrator DO endpoints
+
+**Critical learning:**
+**When adding new Orchestrator DO endpoints, always add the corresponding worker route.**
+
+The pattern:
+1. Implement logic in Orchestrator DO
+2. Add route handler in Orchestrator's `fetch()` switch
+3. Add worker route in `index.ts` that proxies to the DO
+4. Test end-to-end with curl
+
+**Action:**
+- After merge and deploy, run cleanup to shut down 13 stuck agents
+- Monitor container count to verify success
+- Close BC-118 once confirmed
+
+---
+
 ## 2026-03-07 - BC-118: Cleanup endpoint for orphaned terminal containers (PR #63)
 
 **Context:** After PR #61 (immediate shutdown) was merged and deployed, user reported 13 agents were STILL stuck running. The fix wasn't working for existing stuck agents.
