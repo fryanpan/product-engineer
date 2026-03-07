@@ -937,7 +937,7 @@ export class Orchestrator extends Container<Bindings> {
         return;
       }
 
-      const json = await res.json();
+      const json = (await res.json()) as { ok: boolean; error?: string };
       if (!json.ok) {
         console.error(`[Orchestrator] Slack API error: ${json.error}`);
         return;

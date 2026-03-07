@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 
-describe("Status Command", () => {
-  test("status command adds slash_command field", () => {
+describe("PE Status Command", () => {
+  test("pe-status command adds slash_command field", () => {
     // Verify the slack-socket.ts changes parse /pe-status correctly
     const mockEvent = {
       type: "message",
@@ -20,12 +20,11 @@ describe("Status Command", () => {
     expect(expectedEvent.slash_command).toBe("pe-status");
   });
 
-  test("status command with mention", () => {
-    const text = "@product-engineer /pe-status";
-    const hasStatus = text.includes("/pe-status");
-    const hasMention = text.includes("@product-engineer");
+  test("pe-status command with mention", () => {
+    // Test with realistic Slack mention format: <@USERID> text
+    const text = "<@U123> /pe-status";
+    const regex = /(^|\s)\/pe-status(\s|$)/;
 
-    expect(hasStatus).toBe(true);
-    expect(hasMention).toBe(true);
+    expect(regex.test(text)).toBe(true);
   });
 });
