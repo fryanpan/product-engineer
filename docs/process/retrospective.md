@@ -75,3 +75,32 @@
 - `orchestrator/src/orchestrator.ts` (handler)
 - `docs/status-command.md` (documentation)
 - `orchestrator/src/status-command.test.ts` (tests)
+
+## 2026-03-07 - BC-118 Third Attempt: Immediate Container Shutdown (PR #61)
+
+**Context:** After PR #55 (added process.exit on completion) and PR #58 (added timeout watchdog), 13 containers were still running 6 hours later. Root cause: containers marked "terminal" didn't actually shut down.
+
+**What worked:**
+- Screenshot evidence made the issue concrete - could see containers in terminal states still running
+- Reading lifecycle code revealed the gap: `/mark-terminal` set a flag but didn't stop the process
+- Simple fix: add `/shutdown` endpoint and call it from `/mark-terminal`
+
+**What didn't:**
+- Previous fixes addressed session completion and timeout scenarios, but not the terminal state path
+- When orchestrator marks a ticket terminal (merged/closed/deferred/failed), it called `/mark-terminal` which only set a SQLite flag to prevent alarm restarts
+- The actual container process kept running until SDK session completed or hit 2-hour timeout
+- This is why containers stayed alive 6+ hours after terminal state
+
+**Action:**
+- Added `/shutdown` endpoint to agent server (uploads transcripts, reports tokens, exits)
+- Updated `/mark-terminal` to call container's `/shutdown` before returning
+- Now containers exit within seconds of terminal state instead of waiting hours
+
+**Pattern learned:**
+- Lifecycle features need exhaustive edge case enumeration (this is the third fix for the same symptom)
+- "Mark as done" vs "actually stop" are different operations - both are needed
+- The learnings.md note about multi-agent edge cases was exactly right - should have applied it here
+
+**Files changed:**
+- `agent/src/server.ts`: Added `/shutdown` endpoint
+- `orchestrator/src/ticket-agent.ts`: Updated `/mark-terminal` to call shutdown
