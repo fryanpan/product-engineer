@@ -196,6 +196,21 @@ export class TicketAgent extends Container<Bindings> {
       }
       case "/mark-terminal": {
         this.markTerminal();
+
+        // Tell the container to shut down immediately instead of waiting for session timeout
+        try {
+          await this.containerFetch("http://localhost/shutdown", {
+            method: "POST",
+            headers: {
+              "X-Internal-Key": (this.env.API_KEY as string) || "",
+            },
+          }, this.defaultPort);
+          console.log("[TicketAgent] Container shutdown requested");
+        } catch (err) {
+          // Container might already be stopped - that's fine
+          console.log("[TicketAgent] Container shutdown request failed (container may already be stopped):", err);
+        }
+
         return Response.json({ ok: true });
       }
       case "/health": {

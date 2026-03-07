@@ -726,6 +726,33 @@ app.get("/status", (c) =>
   }),
 );
 
+app.post("/shutdown", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || key !== config.apiKey) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Agent] Shutdown requested - exiting container");
+  phoneHome("shutdown_requested", `status=${sessionStatus} msgs=${sessionMessageCount}`);
+
+  // Upload transcripts before shutdown
+  await uploadTranscripts(true);
+
+  // Report final token usage if session was active
+  if (sessionActive || sessionMessageCount > 0) {
+    await reportTokenUsage();
+  }
+
+  // Clear intervals
+  clearInterval(heartbeatInterval);
+  clearInterval(transcriptBackupInterval);
+  clearInterval(timeoutWatchdog);
+
+  // Return response before exiting
+  setTimeout(() => process.exit(0), 100);
+  return c.json({ ok: true });
+});
+
 export default {
   port: 3000,
   fetch: app.fetch,
