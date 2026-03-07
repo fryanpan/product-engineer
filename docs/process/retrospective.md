@@ -4,16 +4,27 @@
 
 **Root cause:** The `/shutdown` fix in PR #61 only applies to tickets that transition to terminal states AFTER the fix was deployed. The 13 stuck agents transitioned to terminal states (merged/closed/deferred/failed) BEFORE the fix existed. They got marked `agent_active = 0` in the DB and `terminal = true` in the TicketAgent DO, but their containers never received the `/shutdown` call because that code didn't exist yet.
 
+**Timeline of BC-118:**
+1. **March 6, 22:44** - 20 agents running (first screenshot)
+2. **PR #55** - Added `process.exit(0)` on session completion
+3. **PR #58** - Added session timeout watchdog (2h hard, 30m idle)
+4. **PR #61** - Added `/shutdown` endpoint + `/mark-terminal` invokes it
+5. **March 7, 07:46** - 13 agents STILL running after all fixes (second screenshot)
+6. **Root cause identified** - Fixes were forward-looking only, didn't clean up pre-existing stuck agents
+7. **PR #63** - Added `/cleanup-inactive` endpoint for retroactive cleanup
+
 **What worked:**
 - Screenshot evidence showed containers still running after fix deployment
 - Understanding the timeline: agents became terminal → fix was deployed → agents still stuck
 - Realized the fix was forward-looking only, not retroactive
 - Simple solution: add cleanup endpoint to forcefully shut down all inactive agents
+- Iterative investigation through 4 PRs eventually found all the gaps
 
 **What didn't:**
 - PR #61 didn't consider the existing stuck agents, only future ones
 - No mechanism to clean up orphaned containers from before the fix
 - Deployment of a lifecycle fix doesn't automatically apply to already-stuck instances
+- Each fix addressed one scenario but missed others (session completion, timeout, terminal state, retroactive cleanup)
 
 **Solution:**
 - Add `/cleanup-inactive` endpoint to Orchestrator
@@ -28,11 +39,18 @@ When fixing a lifecycle bug:
 1. Implement the fix for future instances (PR #61)
 2. Add cleanup mechanism for existing broken instances (PR #63)
 3. Deploy both before declaring the issue resolved
+4. Test cleanup works on production before closing the ticket
+
+**Pattern for lifecycle fixes:**
+- Forward-looking: prevent the problem from happening again
+- Retroactive: clean up existing instances of the problem
+- Verification: confirm both work in production
 
 **Action:**
 - Added `/cleanup-inactive` endpoint (one-time manual cleanup)
 - After merge: deploy and run cleanup to shut down the 13 stuck agents
 - Monitor container count to verify cleanup worked
+- Add to learnings.md: lifecycle fixes need retroactive cleanup
 
 **Files changed:**
 - `orchestrator/src/orchestrator.ts`: Added `cleanupInactiveAgents()` method and `/cleanup-inactive` route
