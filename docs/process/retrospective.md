@@ -1,3 +1,33 @@
+## 2026-03-07 - Immediate container shutdown on terminal state (BC-118, PR #61)
+
+**Context:** Copilot review identified 4 issues in the immediate shutdown implementation that could cause containers to hang indefinitely - exactly what the PR was trying to prevent.
+
+**What worked:**
+- Copilot caught real bugs: intervals racing with shutdown, missing timeouts, no error handling
+- All 4 issues fixed in a single commit with comprehensive error handling:
+  1. Clear intervals immediately (before async work) to prevent concurrent operations
+  2. 15s timeout on shutdown work (transcript upload + token reporting) using Promise.race
+  3. 5s timeout on container shutdown request using AbortController
+  4. Response validation with proper error logging for non-2xx responses
+- Tests still passing after fixes (agent: 26/30, orchestrator: 11/11)
+
+**What didn't:**
+- Initial implementation missed edge cases around hanging network calls and race conditions
+- Didn't consider that shutdown work itself could hang and prevent process.exit from running
+- No timeout on the orchestrator → container shutdown request could block status updates
+
+**Action:**
+- Always add timeouts to network operations, especially in cleanup/shutdown paths
+- Clear background work (intervals, timers) before starting async cleanup
+- Validate response status for internal service calls - don't assume success
+- Use `finally` blocks to guarantee critical cleanup runs (like process.exit scheduling)
+
+**Technical notes:**
+- `Promise.race([work, timeout])` pattern ensures bounded-time async operations
+- AbortController on fetch prevents hung requests from blocking callers
+- Moving clearInterval before await prevents intervals from firing during async cleanup
+- Response validation catches auth failures and other non-2xx responses that would silently fail
+
 ## 2026-03-07 - Add session timeout watchdog (BC-118, PR #58)
 
 **Context:** After the initial `process.exit(0)` fix in #55, 13 agents were still running 6 hours later. The fix only ran when sessions completed naturally, but agents waiting for Slack replies never completed.
