@@ -2,14 +2,14 @@
 
 ## Overview
 
-The `/pe-status` command provides real-time visibility into the Product Engineer system, showing which agents are active, their health status, and recent completions.
+The `/agent-status` command provides real-time visibility into the Product Engineer system, showing which agents are active, their health status, and recent completions.
 
 ## Usage
 
 In any Slack channel where Product Engineer is active, mention the bot with:
 
 ```
-@product-engineer /pe-status
+@product-engineer /agent-status
 ```
 
 ## Response Format
@@ -52,8 +52,8 @@ Last 5 completed tickets from the past 24 hours, showing:
 ### Architecture
 
 1. **Slack Socket Mode** (`containers/orchestrator/slack-socket.ts`)
-   - Detects `/pe-status` in message text
-   - Adds `slash_command: "pe-status"` field to event
+   - Detects `/agent-status` in message text
+   - Adds `slash_command: "agent-status"` field to event
    - Forwards to Orchestrator DO
 
 2. **Orchestrator DO** (`orchestrator/src/orchestrator.ts`)
@@ -93,7 +93,7 @@ bun test src/status-command.test.ts
 ```
 
 Test in Slack:
-1. Post `@product-engineer /pe-status` in a Product Engineer channel
+1. Post `@product-engineer /agent-status` in a Product Engineer channel
 2. Verify the response shows current agent status
 3. Check that health indicators update as heartbeats arrive
 
