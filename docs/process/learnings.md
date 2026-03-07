@@ -39,6 +39,7 @@ Technical discoveries that should persist across sessions.
 ## Multi-Agent Lifecycle
 - Container SDK `alarm()` fires periodically to keep containers alive. Guard against restarting completed/terminal tickets — this pattern has caused bugs twice (investigation cascade in 8e93fcb, alarm restart for completed tickets). Always check terminal state at the top of `alarm()`.
 - Multi-agent features have many interacting edge cases: deploy resume, terminal state, alarm restarts, merge target, retro ordering. Plan with explicit edge case enumeration before implementing — ask "what happens when X restarts for a ticket that's already done?" at every lifecycle boundary.
+- **Lifecycle fixes need both forward-looking prevention AND retroactive cleanup.** When fixing a lifecycle bug, implement: (1) the fix for future instances, (2) cleanup mechanism for existing broken instances, (3) deploy both before declaring resolved. Example: BC-118 required 4 PRs because each fix only addressed new instances, not pre-existing stuck agents. PR #63 added `/cleanup-inactive` endpoint to forcefully shut down containers that were already stuck before the fix existed.
 
 ## LLM Token Optimization
 - `settingSources: ["project"]` injects ALL `alwaysApply: true` rules into every agent turn. Target repos with interactive-only alwaysApply rules (asking for feedback, offering retros, watching for user frustration) silently waste agent context tokens. Fix the target repos, not the agent config.
