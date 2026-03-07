@@ -2,6 +2,19 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-07 - Template Updates Rejected
+
+**Context:** PR #54 updated templates/ with expanded workflow conventions and feedback loop guidance.
+
+**What didn't work:**
+- Reintroduced human-centric habits (asking for feedback, periodic retros, friction detection) that conflict with automated flow goals
+- Templates should guide toward fully autonomous operation, not interactive checkpoints
+- The changes brought back patterns the user explicitly wants to move away from
+
+**Action:** PR #54 closed, branch deleted. Templates remain as-is. Future template updates must prioritize automation over human interaction.
+
+---
+
 ## 2026-03-07 - BC-118: Too many agents continue running
 
 **What worked:**
