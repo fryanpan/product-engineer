@@ -1,3 +1,33 @@
+## 2026-03-07 - Fix /agent-status command recognition (Slack command)
+
+**Context:** User tried `@product-engineer /agent-status` but the command didn't trigger. Found the code was still looking for `/pe-status` instead of `/agent-status`.
+
+**What worked:**
+- Grep to find all references to the old command name
+- Unit tests passed after updating regex patterns
+- Clear separation: Slack Socket Mode detection → Orchestrator routing → handler
+
+**What didn't:**
+- Inconsistency between retrospective documentation and actual code
+- PR #59's final decision (`/agent-status`) wasn't reflected in the implementation
+
+**Learnings:**
+- When renaming user-facing commands, search for ALL references (code, tests, docs)
+- Regex patterns in multiple files need coordinated updates:
+  - `containers/orchestrator/slack-socket.ts` - detection layer
+  - `orchestrator/src/orchestrator.ts` - routing layer
+  - Documentation
+- Retrospectives document decisions but don't guarantee implementation - verify the code matches the decision
+
+**Changes:**
+- Updated `/(^|\s)\/pe-status(\s|$)/` → `/(^|\s)\/agent-status(\s|$)/` in both files
+- Updated `slash_command === "pe-status"` → `slash_command === "agent-status"`
+- Updated docs/status-command.md
+
+**Action:** Added to docs/process/retrospective.md
+
+---
+
 ## 2026-03-07 - Add session timeout watchdog (BC-118, PR #58)
 
 **Context:** After the initial `process.exit(0)` fix in #55, 13 agents were still running 6 hours later. The fix only ran when sessions completed naturally, but agents waiting for Slack replies never completed.
