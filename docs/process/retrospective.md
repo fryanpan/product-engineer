@@ -1,3 +1,34 @@
+## 2026-03-07 - BC-118: Agent Container Cleanup (Fourth Attempt)
+
+**Context:** 13 agents remained running 6 hours after being marked terminal, despite previous fix attempts. The fix had actually been implemented in commits d3b5728 and 857f3d4, but was never merged to main.
+
+**What worked:**
+- Git forensics revealed the root cause: `git branch -a --contains d3b5728` showed fix only on `origin/ticket/BC-118`
+- Used `git log --graph --all` to visualize branch divergence
+- Cherry-picked working solution (commit 1b22ebd) to new clean branch from main
+- Tests confirmed implementation works (26 agent + 46 orchestrator tests pass)
+
+**What didn't:**
+- Previous three attempts created fixes in a branch that never got merged to main
+- No verification that fixes were actually deployed (merged and in production)
+- Wasted time debugging code that was already written but not shipped
+- Branch divergence made direct push impossible
+
+**Lessons:**
+- **Always verify fix deployment state before investigating further** - a fix isn't deployed until merged to main
+- Use `git branch -a --contains <commit>` to check which branches contain a commit
+- Check `git log --graph --all --decorate` to visualize branch relationships
+- Previous attempts d3b5728 ("Add /shutdown endpoint") and 857f3d4 ("Add timeouts") had the correct solution
+
+**Changes:**
+- Created new branch `fix/BC-118-container-shutdown` from main
+- Cherry-picked commit 1b22ebd with `/shutdown` endpoint implementation
+- PR #62: https://github.com/fryanpan/product-engineer/pull/62
+
+**Action:** After merge and deploy, containers should exit within 30s of reaching terminal state instead of staying alive 2+ hours.
+
+---
+
 ## 2026-03-07 - Fix /agent-status command recognition (Slack command)
 
 **Context:** User tried `@product-engineer /agent-status` but the command didn't trigger. Found the code was still looking for `/pe-status` instead of `/agent-status`.
