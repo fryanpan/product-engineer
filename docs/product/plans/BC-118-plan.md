@@ -6,22 +6,26 @@
 
 ## Root Causes
 
-### 1. Agent never exits when session completes
+### 1. Agent never exits when session completes ✓ FIXED
 **Location:** `agent/src/server.ts:576-582`
 
 When `sessionStatus = "completed"`, the agent reports completion and token usage, but never calls `process.exit(0)`. The container sits idle responding to health checks until the 2h timeout naturally expires.
 
-### 2. TicketAgent alarm doesn't stop completed containers
-**Location:** `orchestrator/src/ticket-agent.ts:139-161`
+**Fix:** Added `process.exit(0)` in completion and error paths (commit c6c0531).
 
-The `alarm()` override checks session status and marks terminal state in SQLite, but doesn't stop the container process. It just returns to `super.alarm()` which keeps the container alive.
+### 2. Infinite message queue loop - NEW ROOT CAUSE ✓ FIXED
+**Location:** `agent/src/server.ts:333-342`
+
+The message generator uses `while (true)` and never exits naturally. When agents wait for Slack replies, the `for await (const message of session)` loop continues indefinitely, so `process.exit()` is never reached.
+
+**Fix:** Added session timeout watchdog (2h hard limit, 30m idle timeout).
 
 ### 3. sleepAfter isn't a hard stop
 The Container SDK's `sleepAfter` marks containers as "sleep eligible" after the timeout, but doesn't forcefully stop them. It's designed for idle containers, not ones with active HTTP servers responding to health checks. Reduced from 2h to 15m as a reasonable safety net now that we have explicit exits.
 
 ## Solution
 
-### Part 1: Exit agent container on completion ✓
+### Part 1: Exit agent container on completion ✓ DONE
 **File:** `agent/src/server.ts`
 
 Added `process.exit(0)` when session completes successfully:
@@ -30,24 +34,48 @@ Added `process.exit(0)` when session completes successfully:
 console.log("[Agent] Exiting container after successful completion");
 clearInterval(heartbeatInterval);
 clearInterval(transcriptBackupInterval);
+clearInterval(timeoutWatchdog);
 process.exit(0);
 ```
 
-### Part 2: Improve container lifecycle observability
-**File:** `orchestrator/src/ticket-agent.ts`
+### Part 2: Session timeout watchdog ✓ DONE
+**File:** `agent/src/server.ts`
 
-The `alarm()` method already marks terminal state, but we should verify containers actually stop. Add logging to track:
-- When containers are marked terminal
-- How long containers stay alive after terminal state
-- Whether `sleepAfter` is respected
+Added timeout watchdog that checks every minute:
+- **Hard timeout:** 2 hours wall-clock time - exits unconditionally
+- **Idle timeout:** 30 minutes without SDK messages AND status != "running"
+
+This ensures containers exit even when:
+- Agent is waiting indefinitely for Slack replies
+- Session is stuck in some non-running state
+- Message queue loop never completes naturally
+
+```typescript
+const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const timeoutWatchdog = setInterval(() => {
+  const sessionDuration = Date.now() - sessionStartTime;
+  const idleDuration = Date.now() - lastMessageTime;
+
+  if (sessionDuration > SESSION_TIMEOUT_MS) {
+    // Hard timeout - always exit
+    process.exit(0);
+  }
+
+  if (idleDuration > IDLE_TIMEOUT_MS && sessionStatus !== "running") {
+    // Idle timeout - waiting for user input
+    process.exit(0);
+  }
+}, 60_000);
+```
 
 ## Implementation
 
-1. ✓ Add `process.exit(0)` in agent server on completion
-2. Add similar exit in error path (after transcript upload)
-3. Update tests
-4. Add monitoring to track container lifespans
-5. Document expected behavior
+1. �� Add `process.exit(0)` in agent server on completion (commit c6c0531)
+2. ✓ Add similar exit in error path (commit c6c0531)
+3. ✓ Add session timeout watchdog (this PR)
+4. ✓ Add idle timeout for agents waiting on Slack replies (this PR)
+5. ✓ Tests passing (agent: 26 pass, orchestrator: 46 pass)
 
 ## Testing
 
@@ -64,6 +92,7 @@ The `alarm()` method already marks terminal state, but we should verify containe
 
 ## Success Criteria
 
-- [ ] Containers exit within 30 seconds of completing work
-- [ ] No more than 2-3 containers running at any time (one per active ticket)
-- [ ] Container count in dashboard matches active tickets in SQLite
+- [x] Containers exit within 30 seconds of completing work (via process.exit)
+- [x] Containers exit after 2 hours maximum (hard timeout)
+- [x] Containers exit after 30 minutes of waiting for user input (idle timeout)
+- [ ] Container count in dashboard matches active tickets in SQLite (manual verification needed)

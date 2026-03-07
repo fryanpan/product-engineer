@@ -264,6 +264,38 @@ const heartbeatInterval = setInterval(() => {
   phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount}`);
 }, 120_000);
 
+// Session timeout watchdog: exit if session runs too long or becomes idle
+// This prevents containers from staying alive indefinitely waiting for Slack replies
+const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours wall-clock time
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes without messages
+const timeoutWatchdog = setInterval(() => {
+  if (!sessionActive && sessionStatus === "idle") return; // Not started yet
+
+  const now = Date.now();
+  const sessionDuration = sessionStartTime > 0 ? now - sessionStartTime : 0;
+  const idleDuration = lastMessageTime > 0 ? now - lastMessageTime : 0;
+
+  // Hard timeout: 2 hours of wall-clock time
+  if (sessionDuration > SESSION_TIMEOUT_MS) {
+    console.log(`[Agent] Session timeout after ${Math.floor(sessionDuration / 60000)}m — exiting`);
+    phoneHome("session_timeout", `duration=${Math.floor(sessionDuration / 60000)}m msgs=${sessionMessageCount}`);
+    clearInterval(heartbeatInterval);
+    clearInterval(transcriptBackupInterval);
+    clearInterval(timeoutWatchdog);
+    process.exit(0);
+  }
+
+  // Idle timeout: 30 minutes without SDK messages AND not actively running
+  if (idleDuration > IDLE_TIMEOUT_MS && sessionStatus !== "running") {
+    console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${sessionStatus} — exiting`);
+    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus}`);
+    clearInterval(heartbeatInterval);
+    clearInterval(transcriptBackupInterval);
+    clearInterval(timeoutWatchdog);
+    process.exit(0);
+  }
+}, 60_000); // Check every minute
+
 // Periodic transcript backup every 1 minute (only uploads if file changed)
 const transcriptBackupInterval = setInterval(() => {
   if (sessionStatus === "completed" || sessionStatus === "error") {
@@ -280,6 +312,7 @@ async function handleShutdown(signal: string) {
   console.log(`[Agent] Received ${signal}, uploading transcript before shutdown...`);
   clearInterval(heartbeatInterval);
   clearInterval(transcriptBackupInterval);
+  clearInterval(timeoutWatchdog);
   await uploadTranscripts(true);
   phoneHome("container_shutdown", signal);
   process.exit(0);
@@ -298,6 +331,8 @@ let sessionMessageCount = 0;
 let sessionError = "";
 let lastStderr = "";
 let currentSessionId = "";
+let sessionStartTime = 0;
+let lastMessageTime = 0;
 
 // Token usage tracking
 let totalInputTokens = 0;
@@ -414,6 +449,9 @@ async function startSession(initialPrompt: MessageContent) {
   if (sessionActive) return;
   sessionStatus = "starting_session";
 
+  sessionStartTime = Date.now();
+  lastMessageTime = Date.now();
+
   console.log("[Agent] Creating tools and MCP servers...");
   const { tools } = createTools(config);
   const toolServer = createSdkMcpServer({ name: "pe-tools", tools });
@@ -479,6 +517,7 @@ async function startSession(initialPrompt: MessageContent) {
       phoneHome("session_running");
       for await (const message of session) {
         sessionMessageCount++;
+        lastMessageTime = Date.now();
 
         // Capture session ID from first message for logging
         if (sessionMessageCount === 1) {
@@ -586,6 +625,7 @@ async function startSession(initialPrompt: MessageContent) {
       console.log("[Agent] Exiting container after successful completion");
       clearInterval(heartbeatInterval);
       clearInterval(transcriptBackupInterval);
+      clearInterval(timeoutWatchdog);
       process.exit(0);
     } catch (err) {
       console.error("[Agent] Session error:", err);
@@ -605,6 +645,7 @@ async function startSession(initialPrompt: MessageContent) {
       console.log("[Agent] Exiting container after error");
       clearInterval(heartbeatInterval);
       clearInterval(transcriptBackupInterval);
+      clearInterval(timeoutWatchdog);
       // Use exit code 1 for errors so monitoring can distinguish success vs failure
       process.exit(1);
     }
