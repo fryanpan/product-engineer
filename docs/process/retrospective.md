@@ -344,3 +344,32 @@ Debugged why `@product-engineer` Slack mentions weren't working, fixed container
 - Status endpoint returns JSON for programmatic access, Slack handler formats for humans
 - Implemented in 4 files: slack-socket.ts (detection), orchestrator.ts (logic), test, docs
 
+## 2026-03-07 - BC-117 Review: Copilot feedback on /status command
+
+**What worked:**
+- Copilot caught 7 distinct issues: sleepAfter format, Slack mention detection, fallback routing, thread channel rendering, error handling, transcript upload, test coverage
+- All issues were legitimate and improved the implementation
+- Quick turnaround: ~5 minutes to read, understand, and fix all issues
+- Tests confirmed fixes didn't break existing functionality
+
+**What didn't:**
+- Initial implementation missed several edge cases (app_mention routing, error handling)
+- Regex escaping was wrong (double-escaped backslashes)
+- Didn't validate Slack API responses (silent failures)
+- Success path didn't upload final transcripts
+
+**Action:**
+- Container SDK documentation is thin on sleepAfter — added to learnings.md
+- Consider whether other Slack API calls need response validation (check postSlackError pattern)
+- Verify transcript upload happens on ALL exit paths (success, error, timeout)
+
+**Key learnings:**
+| Issue | Root cause | Fix |
+|-------|-----------|-----|
+| sleepAfter "15m" | Container SDK only supports hours | Changed to "1h" |
+| Mention detection | Only checked literal "@product-engineer" string | Use regex for app_mention events |
+| Status routing | Only checked slash_command field | Added fallback detection for app_mention text |
+| Thread channels | Used command channel for all agents | Query and use each agent's slack_channel |
+| Error handling | No validation of Slack API response | Check res.ok and json.ok |
+| Transcript upload | Only on error path | Added to success path before exit |
+
