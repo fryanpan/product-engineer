@@ -416,6 +416,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.checkAgentHealth();
       case "/transcripts":
         return this.listTranscripts(request);
+      case "/status":
+        return this.getSystemStatus();
       case "/products":
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
@@ -759,6 +761,219 @@ export class Orchestrator extends Container<Bindings> {
     return Response.json({ transcripts: rows });
   }
 
+  private getSystemStatus(): Response {
+    // Get active agents
+    const activeAgents = this.ctx.storage.sql.exec(
+      `SELECT id, product, status, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts
+       FROM tickets
+       WHERE agent_active = 1
+       ORDER BY updated_at DESC`,
+    ).toArray() as Array<{
+      id: string;
+      product: string;
+      status: string;
+      last_heartbeat: string | null;
+      created_at: string;
+      updated_at: string;
+      pr_url: string | null;
+      branch_name: string | null;
+      slack_thread_ts: string | null;
+    }>;
+
+    // Get recent completed tickets (last 24 hours)
+    const recentCompleted = this.ctx.storage.sql.exec(
+      `SELECT id, product, status, updated_at, pr_url
+       FROM tickets
+       WHERE agent_active = 0
+         AND (julianday('now') - julianday(updated_at)) * 24 < 24
+       ORDER BY updated_at DESC
+       LIMIT 10`,
+    ).toArray() as Array<{
+      id: string;
+      product: string;
+      status: string;
+      updated_at: string;
+      pr_url: string | null;
+    }>;
+
+    // Get stale agents (no heartbeat in 30 minutes)
+    const staleAgents = this.ctx.storage.sql.exec(
+      `SELECT id, product, status, last_heartbeat
+       FROM tickets
+       WHERE agent_active = 1
+         AND last_heartbeat IS NOT NULL
+         AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > 30`,
+    ).toArray() as Array<{
+      id: string;
+      product: string;
+      status: string;
+      last_heartbeat: string;
+    }>;
+
+    return Response.json({
+      activeAgents,
+      recentCompleted,
+      staleAgents,
+      summary: {
+        totalActive: activeAgents.length,
+        totalCompleted: recentCompleted.length,
+        totalStale: staleAgents.length,
+      },
+    });
+  }
+
+  private async handleStatusCommand(channel: string, threadTs: string): Promise<void> {
+    try {
+      const statusData = (await this.getSystemStatus().json()) as {
+        activeAgents: Array<{
+          id: string;
+          product: string;
+          status: string;
+          last_heartbeat: string | null;
+          created_at: string;
+          updated_at: string;
+          pr_url: string | null;
+          branch_name: string | null;
+          slack_thread_ts: string | null;
+        }>;
+        recentCompleted: Array<{
+          id: string;
+          product: string;
+          status: string;
+          updated_at: string;
+          pr_url: string | null;
+        }>;
+        staleAgents: Array<{
+          id: string;
+          product: string;
+          status: string;
+          last_heartbeat: string;
+        }>;
+        summary: {
+          totalActive: number;
+          totalCompleted: number;
+          totalStale: number;
+        };
+      };
+
+      let message = `*🤖 Product Engineer Status*\n\n`;
+
+      // Summary
+      message += `*Summary:*\n`;
+      message += `• Active agents: ${statusData.summary.totalActive}\n`;
+      message += `• Completed (24h): ${statusData.summary.totalCompleted}\n`;
+      if (statusData.summary.totalStale > 0) {
+        message += `• ⚠️ Stale agents: ${statusData.summary.totalStale}\n`;
+      }
+      message += `\n`;
+
+      // Active agents
+      if (statusData.activeAgents.length > 0) {
+        message += `*Active Agents:*\n`;
+        for (const agent of statusData.activeAgents) {
+          const healthEmoji = agent.last_heartbeat
+            ? this.getHealthEmoji(agent.last_heartbeat)
+            : "❓";
+          const statusEmoji = this.getStatusEmoji(agent.status);
+          const timeSinceUpdate = this.getTimeAgo(agent.updated_at);
+
+          message += `${healthEmoji} ${statusEmoji} \`${agent.id}\` (${agent.product})\n`;
+          message += `   Status: ${agent.status} · Updated: ${timeSinceUpdate}\n`;
+          if (agent.pr_url) {
+            message += `   PR: ${agent.pr_url}\n`;
+          }
+          if (agent.slack_thread_ts) {
+            message += `   Thread: <#${channel}|thread> (${agent.slack_thread_ts})\n`;
+          }
+        }
+        message += `\n`;
+      } else {
+        message += `*No active agents*\n\n`;
+      }
+
+      // Stale agents warning
+      if (statusData.staleAgents.length > 0) {
+        message += `*⚠️ Stale Agents (no heartbeat >30min):*\n`;
+        for (const agent of statusData.staleAgents) {
+          const minutesStale = Math.floor(
+            (Date.now() - new Date(agent.last_heartbeat).getTime()) / 60000
+          );
+          message += `• \`${agent.id}\` (${agent.product}) - ${minutesStale}m ago\n`;
+        }
+        message += `\n`;
+      }
+
+      // Recent completions
+      if (statusData.recentCompleted.length > 0) {
+        message += `*Recent Completions (24h):*\n`;
+        for (const ticket of statusData.recentCompleted.slice(0, 5)) {
+          const statusEmoji = this.getStatusEmoji(ticket.status);
+          const timeAgo = this.getTimeAgo(ticket.updated_at);
+          message += `${statusEmoji} \`${ticket.id}\` (${ticket.product}) - ${timeAgo}\n`;
+          if (ticket.pr_url) {
+            message += `   ${ticket.pr_url}\n`;
+          }
+        }
+      }
+
+      await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel,
+          thread_ts: threadTs,
+          text: message,
+        }),
+      });
+
+      console.log(`[Orchestrator] Posted status to channel=${channel}`);
+    } catch (err) {
+      console.error("[Orchestrator] Failed to handle status command:", err);
+    }
+  }
+
+  private getHealthEmoji(lastHeartbeat: string): string {
+    const minutesSinceHeartbeat = Math.floor(
+      (Date.now() - new Date(lastHeartbeat).getTime()) / 60000
+    );
+    if (minutesSinceHeartbeat < 5) return "💚"; // Fresh
+    if (minutesSinceHeartbeat < 15) return "💛"; // Recent
+    if (minutesSinceHeartbeat < 30) return "🧡"; // Getting stale
+    return "❤️"; // Stale
+  }
+
+  private getStatusEmoji(status: string): string {
+    const statusMap: Record<string, string> = {
+      in_progress: "⏳",
+      pr_open: "👀",
+      in_review: "👀",
+      needs_revision: "🔄",
+      merged: "✅",
+      closed: "✅",
+      failed: "❌",
+      deferred: "⏸️",
+      asking: "❓",
+    };
+    return statusMap[status] || "⏳";
+  }
+
+  private getTimeAgo(timestamp: string): string {
+    const now = Date.now();
+    const then = new Date(timestamp).getTime();
+    const diffMs = now - then;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${diffDays}d ago`;
+  }
+
   private async postSlackError(channel: string, threadTs: string, message: string): Promise<void> {
     try {
       const res = await fetch("https://slack.com/api/chat.postMessage", {
@@ -796,7 +1011,15 @@ export class Orchestrator extends Container<Bindings> {
       channel?: string;
       thread_ts?: string;
       ts?: string;
+      slash_command?: string;
     }>();
+
+    // Handle slash commands
+    if (slackEvent.slash_command === "status") {
+      console.log(`[Orchestrator] Received /status command from user=${slackEvent.user} channel=${slackEvent.channel}`);
+      await this.handleStatusCommand(slackEvent.channel || "", slackEvent.ts || "");
+      return Response.json({ ok: true, handled: "status_command" });
+    }
 
     // If it's a thread reply, look up existing ticket by thread_ts
     if (slackEvent.thread_ts) {

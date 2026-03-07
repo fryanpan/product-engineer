@@ -580,6 +580,13 @@ async function startSession(initialPrompt: MessageContent) {
 
       // Report token usage
       await reportTokenUsage();
+
+      // Exit the container so it stops using resources
+      // The 15m sleepAfter is a safety net, but we should exit immediately when done
+      console.log("[Agent] Exiting container after successful completion");
+      clearInterval(heartbeatInterval);
+      clearInterval(transcriptBackupInterval);
+      process.exit(0);
     } catch (err) {
       console.error("[Agent] Session error:", err);
       sessionError = String(err);
@@ -593,6 +600,13 @@ async function startSession(initialPrompt: MessageContent) {
       } catch (uploadErr) {
         console.error("[Agent] Failed to upload transcript after error:", uploadErr);
       }
+
+      // Exit the container so it stops using resources
+      console.log("[Agent] Exiting container after error");
+      clearInterval(heartbeatInterval);
+      clearInterval(transcriptBackupInterval);
+      // Use exit code 1 for errors so monitoring can distinguish success vs failure
+      process.exit(1);
     }
   })();
 }

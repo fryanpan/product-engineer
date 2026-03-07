@@ -2,6 +2,27 @@
 
 Session retrospectives and process improvements.
 
+## 2026-03-07 - BC-118: Too many agents continue running
+
+**What worked:**
+- Quick root cause identification by reading the screenshot and correlating with code
+- Agent SDK session lifecycle was well-documented in existing plans
+- Git history search helped understand previous lifecycle fixes
+- The Container SDK's `sleepAfter` concept vs explicit `process.exit()` distinction was clear once we examined the code
+
+**What didn't:**
+- Initial assumption that `sleepAfter = "2h"` would forcefully stop containers - it's actually just a hibernation eligibility marker
+- Containers responding to health checks are never "idle" from SDK perspective, so `sleepAfter` alone doesn't help
+- No monitoring/alerting on container count growth - this should have been caught earlier
+
+**Action:**
+- Added explicit `process.exit()` calls in both success and error paths (agent/src/server.ts:585-589, 606-611)
+- Added lifecycle tests (agent/src/server.test.ts)
+- Created PR #55: https://github.com/fryanpan/product-engineer/pull/55
+- Should add monitoring for container count vs active tickets
+
+---
+
 ## 2026-03-06 - BC-112: Assignee-Based Ticket Triggering
 
 **Context:** Changed Linear webhook behavior to only auto-start tickets when assigned to BC Agent, giving users explicit control over which tickets the agent works on.

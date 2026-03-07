@@ -2,7 +2,13 @@
 
 Technical discoveries that should persist across sessions.
 
-## Cloudflare Container SDK
+## Cloudflare Container SDK (Lifecycle)
+- `sleepAfter` marks containers as "sleep eligible" after the timeout, but doesn't forcefully stop them. It's designed for hibernating idle containers, not stopping active ones.
+- Containers with HTTP servers responding to health checks are never "idle" from the SDK's perspective - they need explicit `process.exit()` to stop.
+- Always call `process.exit(0)` on successful completion and `process.exit(1)` on error to free resources immediately. Without this, containers sit idle until the sleepAfter timeout expires naturally.
+- Exit codes (0 for success, 1 for error) allow monitoring to distinguish outcomes in container lifecycle logs.
+
+## Cloudflare Container SDK (Configuration)
 - `envVars` is a class field on Container base class, not a getter. JavaScript class fields create own properties that shadow prototype getters. Set `this.envVars` in the constructor instead of using `get envVars()`.
 - `sleepAfter` only accepts hours (e.g., `"2h"`), not days. `"4d"` silently fails.
 - `alarm()` override must accept `alarmProps: { isRetry: boolean; retryCount: number }` — zero-arg signature causes type errors.
