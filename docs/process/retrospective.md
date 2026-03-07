@@ -166,3 +166,51 @@
 **Files changed:**
 - `agent/src/server.ts`: Added `/shutdown` endpoint
 - `orchestrator/src/ticket-agent.ts`: Updated `/mark-terminal` to call shutdown
+
+---
+
+## 2026-03-07 - BC-118: Investigation - "Fix did not work"
+
+**Context:** User reported 13 agents still stuck open 6 hours after the fix. "Fix did not work" was added to the ticket description.
+
+**Investigation findings:**
+- The `/shutdown` fix WAS correctly implemented on `ticket/BC-118` branch (commits d3b5728, 857f3d4)
+- PR #61 exists with the complete, reviewed fix
+- BUT: The fix was **never merged to main and deployed to production**
+- Production was still running code without the `/shutdown` endpoint
+- That's why containers kept running - the fix literally wasn't deployed
+
+**Root cause of "fix not working":**
+- **The fix was implemented but not deployed**
+- Branch vs main confusion - fix on branch ≠ fix in production
+- PR sat open without merge for multiple days
+- No verification that deployed code matched expected state
+
+**What worked:**
+- Quick branch comparison revealed the issue immediately
+- `git show main:agent/src/server.ts | grep shutdown` → no results
+- Current branch has fix, main doesn't → deployment gap identified
+- All the code is correct and ready to merge
+
+**What didn't:**
+- Multiple people implementing the fix but not ensuring deployment
+- No deployment verification after "fixing"
+- Critical PR left unmerged while issue persisted in production
+
+**Critical learning:**
+**IMPLEMENTING A FIX ≠ DEPLOYING A FIX**
+
+The full chain must complete:
+1. ✅ Implement fix
+2. ✅ Test fix
+3. ✅ Create PR
+4. ❌ **Merge PR** ← MISSED THIS STEP
+5. ❌ **Deploy to production** ← AND THIS
+6. ❌ **Verify in production** ← AND THIS
+
+**Action:**
+- PR #61 ready to merge immediately
+- After merge: `cd orchestrator && wrangler deploy`
+- After deploy: Monitor Cloudflare dashboard for container count drop
+- Added process rule: Critical fixes must be merged and deployed same day, not left as open PRs
+- Document deployment status in ticket comments ("fix implemented" vs "fix deployed")
