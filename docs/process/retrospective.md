@@ -1,3 +1,33 @@
+## 2026-03-07 - Fix /agent-status command recognition (Slack command)
+
+**Context:** User tried `@product-engineer /agent-status` but the command didn't trigger. Found the code was still looking for `/pe-status` instead of `/agent-status`.
+
+**What worked:**
+- Grep to find all references to the old command name
+- Unit tests passed after updating regex patterns
+- Clear separation: Slack Socket Mode detection → Orchestrator routing → handler
+
+**What didn't:**
+- Inconsistency between retrospective documentation and actual code
+- PR #59's final decision (`/agent-status`) wasn't reflected in the implementation
+
+**Learnings:**
+- When renaming user-facing commands, search for ALL references (code, tests, docs)
+- Regex patterns in multiple files need coordinated updates:
+  - `containers/orchestrator/slack-socket.ts` - detection layer
+  - `orchestrator/src/orchestrator.ts` - routing layer
+  - Documentation
+- Retrospectives document decisions but don't guarantee implementation - verify the code matches the decision
+
+**Changes:**
+- Updated `/(^|\s)\/pe-status(\s|$)/` → `/(^|\s)\/agent-status(\s|$)/` in both files
+- Updated `slash_command === "pe-status"` → `slash_command === "agent-status"`
+- Updated docs/status-command.md
+
+**Action:** Added to docs/process/retrospective.md
+
+---
+
 ## 2026-03-07 - Immediate container shutdown on terminal state (BC-118, PR #61)
 
 **Context:** Copilot review identified 4 issues in the immediate shutdown implementation that could cause containers to hang indefinitely - exactly what the PR was trying to prevent.
@@ -27,6 +57,8 @@
 - AbortController on fetch prevents hung requests from blocking callers
 - Moving clearInterval before await prevents intervals from firing during async cleanup
 - Response validation catches auth failures and other non-2xx responses that would silently fail
+
+---
 
 ## 2026-03-07 - Add session timeout watchdog (BC-118, PR #58)
 

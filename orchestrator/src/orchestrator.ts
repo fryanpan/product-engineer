@@ -1030,14 +1030,14 @@ export class Orchestrator extends Container<Bindings> {
 
     // Handle slash commands or /pe-status mentions
     const isStatusCommand =
-      slackEvent.slash_command === "pe-status" ||
+      slackEvent.slash_command === "agent-status" ||
       (slackEvent.type === "app_mention" &&
         typeof slackEvent.text === "string" &&
-        /(^|\s)\/pe-status(\s|$)/.test(slackEvent.text));
+        /(^|\s)\/agent-status(\s|$)/.test(slackEvent.text));
 
     if (isStatusCommand) {
       console.log(
-        `[Orchestrator] Received /pe-status command from user=${slackEvent.user} channel=${slackEvent.channel}`,
+        `[Orchestrator] Received /agent-status command from user=${slackEvent.user} channel=${slackEvent.channel}`,
       );
       const targetTs = slackEvent.thread_ts || slackEvent.ts || "";
       await this.handleStatusCommand(slackEvent.channel || "", targetTs);
