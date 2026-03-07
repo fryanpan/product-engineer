@@ -1,3 +1,44 @@
+## 2026-03-07 - BC-118: Cleanup endpoint for orphaned terminal containers (PR #63)
+
+**Context:** After PR #61 (immediate shutdown) was merged and deployed, user reported 13 agents were STILL stuck running. The fix wasn't working for existing stuck agents.
+
+**Root cause:** The `/shutdown` fix in PR #61 only applies to tickets that transition to terminal states AFTER the fix was deployed. The 13 stuck agents transitioned to terminal states (merged/closed/deferred/failed) BEFORE the fix existed. They got marked `agent_active = 0` in the DB and `terminal = true` in the TicketAgent DO, but their containers never received the `/shutdown` call because that code didn't exist yet.
+
+**What worked:**
+- Screenshot evidence showed containers still running after fix deployment
+- Understanding the timeline: agents became terminal → fix was deployed → agents still stuck
+- Realized the fix was forward-looking only, not retroactive
+- Simple solution: add cleanup endpoint to forcefully shut down all inactive agents
+
+**What didn't:**
+- PR #61 didn't consider the existing stuck agents, only future ones
+- No mechanism to clean up orphaned containers from before the fix
+- Deployment of a lifecycle fix doesn't automatically apply to already-stuck instances
+
+**Solution:**
+- Add `/cleanup-inactive` endpoint to Orchestrator
+- Queries all tickets with `agent_active = 0`
+- Calls `/mark-terminal` on each TicketAgent DO (which invokes `/shutdown`)
+- Returns summary of shutdown attempts (success/fail per ticket)
+
+**Critical learning:**
+**Lifecycle fixes often need both forward-looking AND retroactive cleanup.**
+
+When fixing a lifecycle bug:
+1. Implement the fix for future instances (PR #61)
+2. Add cleanup mechanism for existing broken instances (PR #63)
+3. Deploy both before declaring the issue resolved
+
+**Action:**
+- Added `/cleanup-inactive` endpoint (one-time manual cleanup)
+- After merge: deploy and run cleanup to shut down the 13 stuck agents
+- Monitor container count to verify cleanup worked
+
+**Files changed:**
+- `orchestrator/src/orchestrator.ts`: Added `cleanupInactiveAgents()` method and `/cleanup-inactive` route
+
+---
+
 ## 2026-03-07 - Fix /agent-status command recognition (Slack command)
 
 **Context:** User tried `@product-engineer /agent-status` but the command didn't trigger. Found the code was still looking for `/pe-status` instead of `/agent-status`.
