@@ -581,15 +581,8 @@ async function startSession(initialPrompt: MessageContent) {
       // Report token usage
       await reportTokenUsage();
 
-      // Upload final transcripts before exiting
-      try {
-        await uploadTranscripts(true);
-      } catch (uploadErr) {
-        console.error("[Agent] Failed to upload transcript after completion:", uploadErr);
-      }
-
       // Exit the container so it stops using resources
-      // The 1h sleepAfter is a safety net, but we should exit immediately when done
+      // The 15m sleepAfter is a safety net, but we should exit immediately when done
       console.log("[Agent] Exiting container after successful completion");
       clearInterval(heartbeatInterval);
       clearInterval(transcriptBackupInterval);

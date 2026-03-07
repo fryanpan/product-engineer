@@ -56,7 +56,7 @@ export function resolveAgentEnvVars(
 
 export class TicketAgent extends Container<Bindings> {
   defaultPort = 3000;
-  sleepAfter = "1h";
+  sleepAfter = "15m";
 
   private configLoaded = false;
 
