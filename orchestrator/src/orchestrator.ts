@@ -764,7 +764,7 @@ export class Orchestrator extends Container<Bindings> {
   private getSystemStatus(): Response {
     // Get active agents
     const activeAgents = this.ctx.storage.sql.exec(
-      `SELECT id, product, status, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts
+      `SELECT id, product, status, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
        FROM tickets
        WHERE agent_active = 1
        ORDER BY updated_at DESC`,
@@ -778,6 +778,7 @@ export class Orchestrator extends Container<Bindings> {
       pr_url: string | null;
       branch_name: string | null;
       slack_thread_ts: string | null;
+      slack_channel: string | null;
     }>;
 
     // Get recent completed tickets (last 24 hours)
@@ -835,6 +836,7 @@ export class Orchestrator extends Container<Bindings> {
           pr_url: string | null;
           branch_name: string | null;
           slack_thread_ts: string | null;
+          slack_channel: string | null;
         }>;
         recentCompleted: Array<{
           id: string;
@@ -883,7 +885,8 @@ export class Orchestrator extends Container<Bindings> {
             message += `   PR: ${agent.pr_url}\n`;
           }
           if (agent.slack_thread_ts) {
-            message += `   Thread: <#${channel}|thread> (${agent.slack_thread_ts})\n`;
+            const threadChannel = agent.slack_channel || channel;
+            message += `   Thread: <#${threadChannel}|thread> (${agent.slack_thread_ts})\n`;
           }
         }
         message += `\n`;
@@ -916,7 +919,7 @@ export class Orchestrator extends Container<Bindings> {
         }
       }
 
-      await fetch("https://slack.com/api/chat.postMessage", {
+      const res = await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
@@ -928,6 +931,17 @@ export class Orchestrator extends Container<Bindings> {
           text: message,
         }),
       });
+
+      if (!res.ok) {
+        console.error(`[Orchestrator] Slack API error: ${res.status} ${res.statusText}`);
+        return;
+      }
+
+      const json = await res.json();
+      if (!json.ok) {
+        console.error(`[Orchestrator] Slack API error: ${json.error}`);
+        return;
+      }
 
       console.log(`[Orchestrator] Posted status to channel=${channel}`);
     } catch (err) {
@@ -1014,10 +1028,19 @@ export class Orchestrator extends Container<Bindings> {
       slash_command?: string;
     }>();
 
-    // Handle slash commands
-    if (slackEvent.slash_command === "status") {
-      console.log(`[Orchestrator] Received /status command from user=${slackEvent.user} channel=${slackEvent.channel}`);
-      await this.handleStatusCommand(slackEvent.channel || "", slackEvent.ts || "");
+    // Handle slash commands or /status mentions
+    const isStatusCommand =
+      slackEvent.slash_command === "status" ||
+      (slackEvent.type === "app_mention" &&
+        typeof slackEvent.text === "string" &&
+        /(^|\s)\/status(\s|$)/.test(slackEvent.text));
+
+    if (isStatusCommand) {
+      console.log(
+        `[Orchestrator] Received /status command from user=${slackEvent.user} channel=${slackEvent.channel}`,
+      );
+      const targetTs = slackEvent.thread_ts || slackEvent.ts || "";
+      await this.handleStatusCommand(slackEvent.channel || "", targetTs);
       return Response.json({ ok: true, handled: "status_command" });
     }
 
