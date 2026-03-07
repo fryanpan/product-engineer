@@ -726,6 +726,53 @@ app.get("/status", (c) =>
   }),
 );
 
+app.post("/shutdown", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || key !== config.apiKey) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Agent] Shutdown requested - exiting container");
+  phoneHome("shutdown_requested", `status=${sessionStatus} msgs=${sessionMessageCount}`);
+
+  // Clear intervals immediately to prevent concurrent work during shutdown
+  clearInterval(heartbeatInterval);
+  clearInterval(transcriptBackupInterval);
+  clearInterval(timeoutWatchdog);
+
+  const SHUTDOWN_TIMEOUT_MS = 15000;
+
+  // Perform shutdown work (upload transcripts, report tokens) with a bounded timeout
+  const shutdownWork = (async () => {
+    // Upload transcripts before shutdown
+    await uploadTranscripts(true);
+
+    // Report final token usage if session was active
+    if (sessionActive || sessionMessageCount > 0) {
+      await reportTokenUsage();
+    }
+  })();
+
+  const timeoutPromise = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      console.warn(
+        `[Agent] Shutdown work exceeded ${SHUTDOWN_TIMEOUT_MS}ms timeout; proceeding with exit`,
+      );
+      resolve();
+    }, SHUTDOWN_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([shutdownWork, timeoutPromise]);
+  } finally {
+    // Schedule process exit regardless of shutdown work outcome
+    setTimeout(() => process.exit(0), 100);
+  }
+
+  // Return response after shutdown sequence has been initiated
+  return c.json({ ok: true });
+});
+
 export default {
   port: 3000,
   fetch: app.fetch,
