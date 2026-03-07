@@ -1,31 +1,30 @@
 import { describe, test, expect } from "bun:test";
 
-describe("Status Command", () => {
-  test("status command adds slash_command field", () => {
-    // Verify the slack-socket.ts changes parse /status correctly
+describe("PE Status Command", () => {
+  test("pe-status command adds slash_command field", () => {
+    // Verify the slack-socket.ts changes parse /pe-status correctly
     const mockEvent = {
       type: "message",
-      text: "/status",
+      text: "/pe-status",
       user: "U123",
       channel: "C123",
       ts: "1234567890.123456",
     };
 
-    // The socket will detect /status and add slash_command field
+    // The socket will detect /pe-status and add slash_command field
     const expectedEvent = {
       ...mockEvent,
-      slash_command: "status",
+      slash_command: "pe-status",
     };
 
-    expect(expectedEvent.slash_command).toBe("status");
+    expect(expectedEvent.slash_command).toBe("pe-status");
   });
 
-  test("status command with mention", () => {
-    const text = "@product-engineer /status";
-    const hasStatus = text.includes("/status");
-    const hasMention = text.includes("@product-engineer");
+  test("pe-status command with mention", () => {
+    // Test with realistic Slack mention format: <@USERID> text
+    const text = "<@U123> /pe-status";
+    const regex = /(^|\s)\/pe-status(\s|$)/;
 
-    expect(hasStatus).toBe(true);
-    expect(hasMention).toBe(true);
+    expect(regex.test(text)).toBe(true);
   });
 });

@@ -937,7 +937,7 @@ export class Orchestrator extends Container<Bindings> {
         return;
       }
 
-      const json = await res.json();
+      const json = (await res.json()) as { ok: boolean; error?: string };
       if (!json.ok) {
         console.error(`[Orchestrator] Slack API error: ${json.error}`);
         return;
@@ -1028,16 +1028,16 @@ export class Orchestrator extends Container<Bindings> {
       slash_command?: string;
     }>();
 
-    // Handle slash commands or /status mentions
+    // Handle slash commands or /pe-status mentions
     const isStatusCommand =
-      slackEvent.slash_command === "status" ||
+      slackEvent.slash_command === "pe-status" ||
       (slackEvent.type === "app_mention" &&
         typeof slackEvent.text === "string" &&
-        /(^|\s)\/status(\s|$)/.test(slackEvent.text));
+        /(^|\s)\/pe-status(\s|$)/.test(slackEvent.text));
 
     if (isStatusCommand) {
       console.log(
-        `[Orchestrator] Received /status command from user=${slackEvent.user} channel=${slackEvent.channel}`,
+        `[Orchestrator] Received /pe-status command from user=${slackEvent.user} channel=${slackEvent.channel}`,
       );
       const targetTs = slackEvent.thread_ts || slackEvent.ts || "";
       await this.handleStatusCommand(slackEvent.channel || "", targetTs);

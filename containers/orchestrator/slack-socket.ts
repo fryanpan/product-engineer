@@ -73,10 +73,10 @@ export class SlackSocket {
         const slackEvent = envelope.payload?.event;
         if (slackEvent && !slackEvent.bot_id) {
           if (slackEvent.type === "app_mention") {
-            // Check if this is a /status command mention
+            // Check if this is a /pe-status command mention
             const text = slackEvent.text?.trim() || "";
-            if (/(^|\s)\/status(\s|$)/.test(text)) {
-              this.onEvent({ ...slackEvent, slash_command: "status" });
+            if (/(^|\s)\/pe-status(\s|$)/.test(text)) {
+              this.onEvent({ ...slackEvent, slash_command: "pe-status" });
             } else {
               this.onEvent(slackEvent);
             }
@@ -86,9 +86,9 @@ export class SlackSocket {
           } else if (slackEvent.type === "message" && !slackEvent.thread_ts && !slackEvent.subtype) {
             // Check for slash commands in top-level messages
             const text = slackEvent.text?.trim() || "";
-            if (/(^|\s)\/status(\s|$)/.test(text)) {
+            if (/(^|\s)\/pe-status(\s|$)/.test(text)) {
               // Mark as slash command for special handling
-              this.onEvent({ ...slackEvent, slash_command: "status" });
+              this.onEvent({ ...slackEvent, slash_command: "pe-status" });
             }
           }
         }
