@@ -2,7 +2,7 @@
 
 ## Problem
 
-20 agent containers were running on March 6th, many appearing stalled. Containers should exit when work completes, but they stay alive for the full 2-hour `sleepAfter` timeout.
+20 agent containers were running on March 6th, many appearing stalled. Containers should exit when work completes, but they were staying alive for the full 2-hour `sleepAfter` timeout.
 
 ## Root Causes
 
@@ -17,7 +17,7 @@ When `sessionStatus = "completed"`, the agent reports completion and token usage
 The `alarm()` override checks session status and marks terminal state in SQLite, but doesn't stop the container process. It just returns to `super.alarm()` which keeps the container alive.
 
 ### 3. sleepAfter isn't a hard stop
-The Container SDK's `sleepAfter = "2h"` marks containers as "sleep eligible" after 2 hours, but doesn't forcefully stop them. It's designed for idle containers, not ones with active HTTP servers responding to health checks.
+The Container SDK's `sleepAfter` marks containers as "sleep eligible" after the timeout, but doesn't forcefully stop them. It's designed for idle containers, not ones with active HTTP servers responding to health checks. Reduced from 2h to 15m as a reasonable safety net now that we have explicit exits.
 
 ## Solution
 

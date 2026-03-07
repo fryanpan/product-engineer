@@ -582,7 +582,7 @@ async function startSession(initialPrompt: MessageContent) {
       await reportTokenUsage();
 
       // Exit the container so it stops using resources
-      // The 2h sleepAfter is a safety net, but we should exit immediately when done
+      // The 15m sleepAfter is a safety net, but we should exit immediately when done
       console.log("[Agent] Exiting container after successful completion");
       clearInterval(heartbeatInterval);
       clearInterval(transcriptBackupInterval);
