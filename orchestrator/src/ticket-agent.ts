@@ -196,6 +196,54 @@ export class TicketAgent extends Container<Bindings> {
       }
       case "/mark-terminal": {
         this.markTerminal();
+
+        // Tell the container to shut down immediately instead of waiting for session timeout.
+        // Use a bounded-time request so a hung container cannot block the orchestrator status path.
+        const shutdownController = new AbortController();
+        const shutdownTimeoutMs = 5000;
+        const shutdownTimeoutId = setTimeout(() => {
+          shutdownController.abort("shutdown request timed out");
+        }, shutdownTimeoutMs);
+
+        try {
+          const res = await this.containerFetch(
+            "http://localhost/shutdown",
+            {
+              method: "POST",
+              headers: {
+                "X-Internal-Key": (this.env.API_KEY as string) || "",
+              },
+              // Best-effort: abort if the shutdown endpoint hangs.
+              signal: shutdownController.signal,
+            },
+            this.defaultPort,
+          );
+
+          if (res.ok) {
+            console.log("[TicketAgent] Container shutdown requested");
+          } else {
+            let bodyText = "";
+            try {
+              bodyText = await res.text();
+            } catch {
+              bodyText = "<unreadable body>";
+            }
+            console.warn(
+              "[TicketAgent] Container shutdown request returned non-2xx response:",
+              res.status,
+              bodyText,
+            );
+          }
+        } catch (err) {
+          // Container might already be stopped or the request may have timed out - that's fine
+          console.log(
+            "[TicketAgent] Container shutdown request failed (container may already be stopped or request timed out):",
+            err,
+          );
+        } finally {
+          clearTimeout(shutdownTimeoutId);
+        }
+
         return Response.json({ ok: true });
       }
       case "/health": {
