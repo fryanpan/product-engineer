@@ -330,7 +330,7 @@ Debugged why `@product-engineer` Slack mentions weren't working, fixed container
 | Slack thread re-trigger duplicates | learnings.md | New "Slack Thread Routing" section |
 | CLAUDE.md missing deployment safety info | CLAUDE.md | Added `agent_active`, `[vars]` config, and deployment-safety.md pointers |
 | Missing test coverage for agent_active | Linear ticket | Created BC-80 |
-## 2026-03-07 - BC-117: Add /status command for viewing agent status
+## 2026-03-07 - BC-117: Add /pe-status command for viewing agent status
 
 **What worked:**
 - Clear architecture from reading existing code (orchestrator/agent/container structure)
@@ -343,8 +343,9 @@ Debugged why `@product-engineer` Slack mentions weren't working, fixed container
 **What didn't:**
 - Test infrastructure has dependency issues (Container SDK not available in test env)
 - Had to work around test failures, wrote simpler unit tests instead
-- Initial slash command detection was too narrow (only matched `/status` exactly)
-- Fixed to also match `@product-engineer /status` patterns
+- Initial slash command detection was too narrow (only matched `/pe-status` exactly)
+- Fixed to also match `@product-engineer /pe-status` patterns
+- Command name `/status` conflicted with existing Slack commands → renamed to `/pe-status`
 
 **Action:**
 - Consider fixing test infrastructure to support Container SDK imports
@@ -357,7 +358,7 @@ Debugged why `@product-engineer` Slack mentions weren't working, fixed container
 - Status endpoint returns JSON for programmatic access, Slack handler formats for humans
 - Implemented in 4 files: slack-socket.ts (detection), orchestrator.ts (logic), test, docs
 
-## 2026-03-07 - BC-117 Review: Copilot feedback on /status command
+## 2026-03-07 - BC-117 Review: Copilot feedback on /pe-status command
 
 **What worked:**
 - Copilot caught 7 distinct issues: sleepAfter format, Slack mention detection, fallback routing, thread channel rendering, error handling, transcript upload, test coverage
@@ -407,7 +408,8 @@ Debugged why `@product-engineer` Slack mentions weren't working, fixed container
 - Consider whether agents should auto-merge after addressing review feedback for low-risk PRs
 
 **Outcome:**
-- `/status` command shipped with robust error handling and proper Slack integration
+- `/pe-status` command shipped with robust error handling and proper Slack integration
 - Documentation complete (docs/status-command.md, retrospective entries)
 - All review feedback addressed, tests passing, merged to main
+- Later renamed from `/status` to `/pe-status` to avoid conflict with existing Slack commands
 
