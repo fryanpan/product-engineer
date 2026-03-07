@@ -418,6 +418,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.listTranscripts(request);
       case "/status":
         return this.getSystemStatus();
+      case "/cleanup-inactive":
+        return this.cleanupInactiveAgents();
       case "/products":
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
@@ -721,6 +723,52 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     return Response.json({ ok: true, stale_agents: staleAgents });
+  }
+
+  private async cleanupInactiveAgents(): Promise<Response> {
+    // Force shutdown of containers for tickets marked inactive (agent_active = 0).
+    // This handles the case where agents transitioned to terminal state before the
+    // /shutdown fix was deployed — their containers are still running but should stop.
+    const inactiveTickets = this.ctx.storage.sql.exec(
+      `SELECT id FROM tickets WHERE agent_active = 0`
+    ).toArray() as Array<{ id: string }>;
+
+    console.log(`[Orchestrator] Cleanup: found ${inactiveTickets.length} inactive tickets`);
+
+    const results: Array<{ ticketId: string; success: boolean; error?: string }> = [];
+
+    for (const ticket of inactiveTickets) {
+      try {
+        const id = this.env.TICKET_AGENT.idFromName(ticket.id);
+        const agent = this.env.TICKET_AGENT.get(id);
+
+        // Call /mark-terminal which will invoke /shutdown on the container
+        const res = await agent.fetch(new Request("http://internal/mark-terminal", {
+          method: "POST",
+        }));
+
+        if (res.ok) {
+          console.log(`[Orchestrator] Cleanup: shutdown requested for ${ticket.id}`);
+          results.push({ ticketId: ticket.id, success: true });
+        } else {
+          console.warn(`[Orchestrator] Cleanup: failed to shutdown ${ticket.id}: ${res.status}`);
+          results.push({ ticketId: ticket.id, success: false, error: `HTTP ${res.status}` });
+        }
+      } catch (err) {
+        console.error(`[Orchestrator] Cleanup: error shutting down ${ticket.id}:`, err);
+        results.push({ ticketId: ticket.id, success: false, error: String(err) });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    console.log(`[Orchestrator] Cleanup complete: ${successCount}/${results.length} successful`);
+
+    return Response.json({
+      ok: true,
+      total: inactiveTickets.length,
+      successful: successCount,
+      results,
+    });
   }
 
   private listTickets(): Response {
