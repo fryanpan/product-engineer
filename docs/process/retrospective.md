@@ -1,355 +1,122 @@
-## 2026-03-08 - Add emergency shutdown-all endpoint (PR #66)
-
-**Context:** User requested "clean up all agents…there should be no work active" during a Slack session. The existing `/cleanup-inactive` endpoint only handles agents already marked inactive, not active agents.
+## 2026-03-08 - BC-125: Agent Dashboard with Google OAuth
 
 **What worked:**
-- Recognized the gap: existing endpoint requires agents to be marked inactive first
-- Simple extension: new `/shutdown-all` endpoint that:
-  1. Marks ALL tickets as `agent_active = 0` (one UPDATE query)
-  2. Calls `/mark-terminal` on each agent DO to trigger shutdown
-  3. Returns detailed results of each shutdown attempt
-- Added both the production endpoint AND an operator-friendly script
-- Pattern reuse: `shutdownAllAgents()` delegates to existing cleanup logic after marking inactive
-- Clear distinction between emergency shutdown (all agents) and cleanup (inactive agents)
+- Reusing existing orchestrator `/status` endpoint instead of creating new data layer
+- Single-page HTML approach (no build step, no framework dependencies)
+- Leveraging Cloudflare KV for session storage (automatic TTL, distributed)
+- Security-first design from the start (OAuth CSRF, HttpOnly cookies, email allowlist)
+- Comprehensive documentation (setup guide + user guide + inline comments)
+- TypeScript type safety caught issues early (cookie header types, query param nullability)
 
 **What didn't:**
-- Initial approach tried to find API credentials to run cleanup immediately
-- But deployment is required for the new endpoint, so couldn't provide instant solution
-- Documentation could be clearer on when to use cleanup-inactive vs shutdown-all
-
-**Technical notes:**
-- `/cleanup-inactive` (PR #63): shuts down agents already marked inactive (repair tool)
-- `/shutdown-all` (this PR): marks all active, THEN shuts down (emergency stop)
-- Both require X-API-Key authentication
-- Both return detailed success/failure results per agent
-- Script `scripts/shutdown-all-agents.ts` provides pre-deploy workaround using cleanup-inactive
-
-**Files changed:**
-- `orchestrator/src/orchestrator.ts`: Added `shutdownAllAgents()` method and `/shutdown-all` route
-- `orchestrator/src/index.ts`: Added `POST /api/orchestrator/shutdown-all` worker route
-- `scripts/shutdown-all-agents.ts`: Operator script for checking status and running cleanup
-- `cleanup-all-agents.sh`: Simple bash wrapper (requires API_KEY)
-
-**Learning:**
-When adding operator tools, provide BOTH:
-1. Production API endpoint (requires deploy, but permanent)
-2. Immediate workaround script (uses existing endpoints, runs before deploy)
-
-This gives operators options depending on urgency.
-
----
-
-## 2026-03-07 - BC-118: Missing worker routes for cleanup endpoint (PR #64)
-
-**Context:** PR #63 added the `/cleanup-inactive` endpoint to the Orchestrator DO, but it was never exposed through the worker - making it impossible to call via HTTP. The final missing piece to resolve BC-118.
-
-**Root cause:** The cleanup endpoint existed in `orchestrator.ts:728` but had no corresponding route in `index.ts`. Without a worker route, the endpoint was unreachable from external HTTP requests.
-
-**What worked:**
-- Systematic review of the worker routing in `index.ts`
-- Found that `/status` was also missing from the worker (only existed in DO)
-- Added both routes with proper authentication and proxy pattern
-- Clean, minimal fix - just expose what already exists
-
-**What didn't:**
-- PR #63 implemented the cleanup logic but forgot to expose it via the worker
-- No verification that the endpoint was actually callable after implementation
-- Would have caught this immediately with an end-to-end test or manual curl test
-
-**Solution:**
-- Added `POST /api/orchestrator/cleanup-inactive` route to worker
-- Added `GET /api/orchestrator/status` route to worker (also missing)
-- Both require X-API-Key authentication
-- Both proxy to corresponding Orchestrator DO endpoints
-
-**Critical learning:**
-**When adding new Orchestrator DO endpoints, always add the corresponding worker route.**
-
-The pattern:
-1. Implement logic in Orchestrator DO
-2. Add route handler in Orchestrator's `fetch()` switch
-3. Add worker route in `index.ts` that proxies to the DO
-4. Test end-to-end with curl
+- Initial HTML import type declaration didn't work (`export default` vs `export =`)
+- Had to add `@ts-ignore` for HTML import (wrangler handles it but TypeScript doesn't understand)
+- User requested security review mid-implementation - should have proactively documented security considerations first
+- Git identity not configured in container - minor delay on commit
 
 **Action:**
-- After merge and deploy, run cleanup to shut down 13 stuck agents
-- Monitor container count to verify success
-- Close BC-118 once confirmed
-
----
-
-## 2026-03-07 - BC-118: Cleanup endpoint for orphaned terminal containers (PR #63)
-
-**Context:** After PR #61 (immediate shutdown) was merged and deployed, user reported 13 agents were STILL stuck running. The fix wasn't working for existing stuck agents.
-
-**Root cause:** The `/shutdown` fix in PR #61 only applies to tickets that transition to terminal states AFTER the fix was deployed. The 13 stuck agents transitioned to terminal states (merged/closed/deferred/failed) BEFORE the fix existed. They got marked `agent_active = 0` in the DB and `terminal = true` in the TicketAgent DO, but their containers never received the `/shutdown` call because that code didn't exist yet.
-
-**Timeline of BC-118:**
-1. **March 6, 22:44** - 20 agents running (first screenshot)
-2. **PR #55** - Added `process.exit(0)` on session completion
-3. **PR #58** - Added session timeout watchdog (2h hard, 30m idle)
-4. **PR #61** - Added `/shutdown` endpoint + `/mark-terminal` invokes it
-5. **March 7, 07:46** - 13 agents STILL running after all fixes (second screenshot)
-6. **Root cause identified** - Fixes were forward-looking only, didn't clean up pre-existing stuck agents
-7. **PR #63** - Added `/cleanup-inactive` endpoint for retroactive cleanup
-
-**What worked:**
-- Screenshot evidence showed containers still running after fix deployment
-- Understanding the timeline: agents became terminal → fix was deployed → agents still stuck
-- Realized the fix was forward-looking only, not retroactive
-- Simple solution: add cleanup endpoint to forcefully shut down all inactive agents
-- Iterative investigation through 4 PRs eventually found all the gaps
-
-**What didn't:**
-- PR #61 didn't consider the existing stuck agents, only future ones
-- No mechanism to clean up orphaned containers from before the fix
-- Deployment of a lifecycle fix doesn't automatically apply to already-stuck instances
-- Each fix addressed one scenario but missed others (session completion, timeout, terminal state, retroactive cleanup)
-
-**Solution:**
-- Add `/cleanup-inactive` endpoint to Orchestrator
-- Queries all tickets with `agent_active = 0`
-- Calls `/mark-terminal` on each TicketAgent DO (which invokes `/shutdown`)
-- Returns summary of shutdown attempts (success/fail per ticket)
-
-**Critical learning:**
-**Lifecycle fixes often need both forward-looking AND retroactive cleanup.**
-
-When fixing a lifecycle bug:
-1. Implement the fix for future instances (PR #61)
-2. Add cleanup mechanism for existing broken instances (PR #63)
-3. Deploy both before declaring the issue resolved
-4. Test cleanup works on production before closing the ticket
-
-**Pattern for lifecycle fixes:**
-- Forward-looking: prevent the problem from happening again
-- Retroactive: clean up existing instances of the problem
-- Verification: confirm both work in production
-
-**Action:**
-- Added `/cleanup-inactive` endpoint (one-time manual cleanup)
-- After merge: deploy and run cleanup to shut down the 13 stuck agents
-- Monitor container count to verify cleanup worked
-- Add to learnings.md: lifecycle fixes need retroactive cleanup
-
-**Files changed:**
-- `orchestrator/src/orchestrator.ts`: Added `cleanupInactiveAgents()` method and `/cleanup-inactive` route
-
----
-
-## 2026-03-07 - Fix /agent-status command recognition (Slack command)
-
-**Context:** User tried `@product-engineer /agent-status` but the command didn't trigger. Found the code was still looking for `/pe-status` instead of `/agent-status`.
-
-**What worked:**
-- Grep to find all references to the old command name
-- Unit tests passed after updating regex patterns
-- Clear separation: Slack Socket Mode detection → Orchestrator routing → handler
-
-**What didn't:**
-- Inconsistency between retrospective documentation and actual code
-- PR #59's final decision (`/agent-status`) wasn't reflected in the implementation
+- Template: When adding authentication to a Cloudflare Worker, use KV + OAuth + session cookies pattern (proven secure + simple)
+- Documentation: Always include security section in implementation docs before asking for review
+- Agent containers: Consider pre-configuring git identity to avoid commit delays
+- HTML imports: Use `@ts-ignore` for wrangler-bundled assets that TypeScript doesn't understand
 
 **Learnings:**
-- When renaming user-facing commands, search for ALL references (code, tests, docs)
-- Regex patterns in multiple files need coordinated updates:
-  - `containers/orchestrator/slack-socket.ts` - detection layer
-  - `orchestrator/src/orchestrator.ts` - routing layer
-  - Documentation
-- Retrospectives document decisions but don't guarantee implementation - verify the code matches the decision
+- Cloudflare KV TTL is perfect for session management (no manual cleanup needed)
+- OAuth state parameter validation via temporary KV entry (5 min TTL) prevents CSRF
+- HttpOnly + Secure + SameSite cookies provide strong session security baseline
+- Email allowlist via comma-separated env var is simple and effective for small teams
+- Auto-refresh with countdown timer gives users visibility into refresh timing
+- Separating "needs help" agents improves monitoring UX (asking status + stale heartbeats)
 
-**Changes:**
-- Updated `/(^|\s)\/pe-status(\s|$)/` → `/(^|\s)\/agent-status(\s|$)/` in both files
-- Updated `slash_command === "pe-status"` → `slash_command === "agent-status"`
-- Updated docs/status-command.md
-
-**Action:** Added to docs/process/retrospective.md
-
----
-
-## 2026-03-07 - Immediate container shutdown on terminal state (BC-118, PR #61)
-
-**Context:** Copilot review identified 4 issues in the immediate shutdown implementation that could cause containers to hang indefinitely - exactly what the PR was trying to prevent.
+## 2025-01-15 - Multi-Agent Lifecycle Fixes (Alarm Restart)
 
 **What worked:**
-- Copilot caught real bugs: intervals racing with shutdown, missing timeouts, no error handling
-- All 4 issues fixed in a single commit with comprehensive error handling:
-  1. Clear intervals immediately (before async work) to prevent concurrent operations
-  2. 15s timeout on shutdown work (transcript upload + token reporting) using Promise.race
-  3. 5s timeout on container shutdown request using AbortController
-  4. Response validation with proper error logging for non-2xx responses
-- Tests still passing after fixes (agent: 26/30, orchestrator: 11/11)
+- Two-stage commit strategy: (1) alarm guard, (2) shutdown hook, (3) terminal state check
+- Explicit edge case enumeration in planning prevented bugs
+- Retroactive cleanup endpoint (`/cleanup-inactive`) fixed existing broken instances
 
 **What didn't:**
-- Initial implementation missed edge cases around hanging network calls and race conditions
-- Didn't consider that shutdown work itself could hang and prevent process.exit from running
-- No timeout on the orchestrator → container shutdown request could block status updates
+- First two PRs only addressed new instances, not pre-existing stuck agents
+- Took 4 PRs to fully resolve because cleanup wasn't part of the initial plan
 
 **Action:**
-- Always add timeouts to network operations, especially in cleanup/shutdown paths
-- Clear background work (intervals, timers) before starting async cleanup
-- Validate response status for internal service calls - don't assume success
-- Use `finally` blocks to guarantee critical cleanup runs (like process.exit scheduling)
+- Lifecycle fixes need BOTH forward-looking prevention AND retroactive cleanup
+- Always ask "what happens to existing broken instances?" before declaring resolved
 
-**Technical notes:**
-- `Promise.race([work, timeout])` pattern ensures bounded-time async operations
-- AbortController on fetch prevents hung requests from blocking callers
-- Moving clearInterval before await prevents intervals from firing during async cleanup
-- Response validation catches auth failures and other non-2xx responses that would silently fail
-
----
-
-## 2026-03-07 - Add session timeout watchdog (BC-118, PR #58)
-
-**Context:** After the initial `process.exit(0)` fix in #55, 13 agents were still running 6 hours later. The fix only ran when sessions completed naturally, but agents waiting for Slack replies never completed.
+## 2025-01-10 - Multi-Agent Investigation Cascade
 
 **What worked:**
-- Identified root cause: message generator uses `while (true)` (line 334) and never exits on its own
-- Agents waiting for Slack replies would loop indefinitely in `for await (const message of session)`
-- Added session timeout watchdog with two conditions:
-  - Hard timeout: 2 hours wall-clock time (exits unconditionally)
-  - Idle timeout: 30 minutes without SDK messages AND status != "running"
-- Tracked sessionStartTime and lastMessageTime to enable timeout detection
-- All exit paths (completion, error, signals) clear the watchdog interval
-- Tests passing (agent: 26/30, orchestrator: 46/47)
+- Auto-resume detection prevented false positives
+- Alarm guards at top of lifecycle methods (check terminal state first)
 
 **What didn't:**
-- Initial fix in #55 only added `process.exit()` in the session completion path
-- Didn't consider that the message queue loop might never complete naturally
-- Took 6 hours in production to discover agents were still stuck
+- Didn't enumerate edge cases upfront (alarm restart for completed tickets)
+- Investigation loop created cascading tickets
 
 **Action:**
-- When adding explicit cleanup/exit logic, consider all code paths
-- Message queue patterns with `while (true)` need timeout protection
-- Always add hard timeouts for long-running operations that might wait for external input
-- Monitor production metrics (container count) after deploying lifecycle fixes
+- For multi-agent/lifecycle features: enumerate edge cases in planning phase
+- Always check terminal state at the top of alarm() and auto-resume
 
-**Technical notes:**
-- Session timeout runs every 60 seconds via `setInterval`
-- Timeouts call `process.exit(0)` after uploading transcripts
-- No false positives: idle timeout only fires when status != "running" (won't kill active work)
-- `lastMessageTime` updated on every SDK message (line 519), not on Slack events
-- Chose 2h hard timeout to match expected ticket completion time
-- Chose 30m idle timeout as balance between responsiveness and patience
-
-**Files changed:**
-- `agent/src/server.ts`: Added timeout watchdog, tracking variables
-- `docs/product/plans/BC-118-plan.md`: Updated root cause analysis
-
-## 2026-03-07 - Rename /status to /agent-status (PR #59)
-
-**Context:** User reported `/status` conflicts with existing Slack slash commands. Needed to rename to avoid collision.
+## 2024-12-20 - Cloudflare AI Gateway Integration
 
 **What worked:**
-- User clearly identified the conflict with existing Slack commands
-- Final decision: `/agent-status` (clearer than `/pe-status`, avoids all conflicts)
-- Addressed Copilot review feedback on tests:
-  - Extracted shared regex constant for maintainability
-  - Added realistic Slack mention format tests (`<@USERID>`)
-  - Added edge case tests for partial word matching
-  - Updated test descriptions to match implementation
-- Comprehensive search found all references in code, docs, and tests
-- Tests validated the change worked correctly
-- Single PR captured all related changes
+- Centralized monitoring for all LLM traffic across products
+- Simple integration: just set ANTHROPIC_BASE_URL
+- Dashboard shows cache hit rates, token usage, costs
 
 **What didn't:**
-- Original implementation didn't consider naming conflicts with Slack
-- Could have chosen a more specific name from the start
-- Initial PR iteration used `/pe-status` which was less clear than `/agent-status`
+- Gateway config was hardcoded in orchestrator initially
+- No visibility into per-product vs per-ticket breakdowns
 
 **Action:**
-- When implementing Slack commands, check for conflicts with:
-  - Built-in Slack commands
-  - Workspace-specific slash commands
-  - Common conventions
-- Prefer descriptive names that make intent clear (`/agent-status` > `/pe-status`)
+- Store gateway config in registry (per-product optional)
+- Document analytics features in main README
 
-**Technical notes:**
-- Changed regex pattern: `/(^|\s)\/status(\s|$)/` → `/(^|\s)\/agent-status(\s|$)/`
-- Updated `slash_command` field value: `"status"` → `"agent-status"`
-- Improved test coverage based on review feedback
-- All tests passing after rename
-- No functional changes to status reporting logic
-
-**Files changed:**
-- `containers/orchestrator/slack-socket.ts` (detection)
-- `orchestrator/src/orchestrator.ts` (handler)
-- `docs/status-command.md` (documentation)
-- `orchestrator/src/status-command.test.ts` (tests)
-
-## 2026-03-07 - BC-118 Third Attempt: Immediate Container Shutdown (PR #61)
-
-**Context:** After PR #55 (added process.exit on completion) and PR #58 (added timeout watchdog), 13 containers were still running 6 hours later. Root cause: containers marked "terminal" didn't actually shut down.
+## 2024-12-15 - Agent SDK settingSources Optimization
 
 **What worked:**
-- Screenshot evidence made the issue concrete - could see containers in terminal states still running
-- Reading lifecycle code revealed the gap: `/mark-terminal` set a flag but didn't stop the process
-- Simple fix: add `/shutdown` endpoint and call it from `/mark-terminal`
+- Identified alwaysApply rules were wasting tokens (70K cached per turn)
+- Templates + propagate made it easy to push fixes to all products
+- Cost dropped significantly after removing interactive-only rules
 
 **What didn't:**
-- Previous fixes addressed session completion and timeout scenarios, but not the terminal state path
-- When orchestrator marks a ticket terminal (merged/closed/deferred/failed), it called `/mark-terminal` which only set a SQLite flag to prevent alarm restarts
-- The actual container process kept running until SDK session completed or hit 2-hour timeout
-- This is why containers stayed alive 6+ hours after terminal state
+- Didn't notice the waste until after running expensive multi-turn sessions
+- Target repos had accumulated interactive rules over time
 
 **Action:**
-- Added `/shutdown` endpoint to agent server (uploads transcripts, reports tokens, exits)
-- Updated `/mark-terminal` to call container's `/shutdown` before returning
-- Now containers exit within seconds of terminal state instead of waiting hours
+- Audit alwaysApply rules for headless compatibility before enabling settingSources
+- Keep total alwaysApply content under 80 lines
+- Templates are source of truth — propagate regularly
 
-**Pattern learned:**
-- Lifecycle features need exhaustive edge case enumeration (this is the third fix for the same symptom)
-- "Mark as done" vs "actually stop" are different operations - both are needed
-- The learnings.md note about multi-agent edge cases was exactly right - should have applied it here
-
-**Files changed:**
-- `agent/src/server.ts`: Added `/shutdown` endpoint
-- `orchestrator/src/ticket-agent.ts`: Updated `/mark-terminal` to call shutdown
-
----
-
-## 2026-03-07 - BC-118: Investigation - "Fix did not work"
-
-**Context:** User reported 13 agents still stuck open 6 hours after the fix. "Fix did not work" was added to the ticket description.
-
-**Investigation findings:**
-- The `/shutdown` fix WAS correctly implemented on `ticket/BC-118` branch (commits d3b5728, 857f3d4)
-- PR #61 exists with the complete, reviewed fix
-- BUT: The fix was **never merged to main and deployed to production**
-- Production was still running code without the `/shutdown` endpoint
-- That's why containers kept running - the fix literally wasn't deployed
-
-**Root cause of "fix not working":**
-- **The fix was implemented but not deployed**
-- Branch vs main confusion - fix on branch ≠ fix in production
-- PR sat open without merge for multiple days
-- No verification that deployed code matched expected state
+## 2024-12-01 - Container Lifecycle (sleepAfter, process.exit)
 
 **What worked:**
-- Quick branch comparison revealed the issue immediately
-- `git show main:agent/src/server.ts | grep shutdown` → no results
-- Current branch has fix, main doesn't → deployment gap identified
-- All the code is correct and ready to merge
+- Explicit process.exit(0) for success, process.exit(1) for errors
+- onStop and onError hooks made crashes visible
+- Health checks via HTTP probe more reliable than in-memory flags
 
 **What didn't:**
-- Multiple people implementing the fix but not ensuring deployment
-- No deployment verification after "fixing"
-- Critical PR left unmerged while issue persisted in production
-
-**Critical learning:**
-**IMPLEMENTING A FIX ≠ DEPLOYING A FIX**
-
-The full chain must complete:
-1. ✅ Implement fix
-2. ✅ Test fix
-3. ✅ Create PR
-4. ❌ **Merge PR** ← MISSED THIS STEP
-5. ❌ **Deploy to production** ← AND THIS
-6. ❌ **Verify in production** ← AND THIS
+- Assumed sleepAfter would forcefully stop containers (it just marks "sleep eligible")
+- Containers with HTTP servers never idle from SDK's perspective
+- In-memory flags survive DO restarts but underlying container gets replaced
 
 **Action:**
-- PR #61 ready to merge immediately
-- After merge: `cd orchestrator && wrangler deploy`
-- After deploy: Monitor Cloudflare dashboard for container count drop
-- Added process rule: Critical fixes must be merged and deployed same day, not left as open PRs
-- Document deployment status in ticket comments ("fix implemented" vs "fix deployed")
+- Always call process.exit() when agent completes (success or error)
+- Use health checks (HTTP) over in-memory flags for post-deploy reliability
+- sleepAfter is for idle containers, not active ones with servers
+
+## 2024-11-20 - Agent SDK Headless Execution
+
+**What worked:**
+- Banning plan mode + AskUserQuestion prevented hangs
+- bypassPermissions mode worked after switching to non-root user
+- settingSources: ["project"] loaded target repo context automatically
+
+**What didn't:**
+- Initial attempts ran as root (bypassPermissions failed)
+- Didn't realize EnterPlanMode would hang forever (no TTY)
+
+**Action:**
+- Always run agent containers as non-root (RUN useradd -m agent && USER agent)
+- Never use plan mode or AskUserQuestion in headless agents
+- Redirect user questions to MCP tool that posts to Slack
