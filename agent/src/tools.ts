@@ -19,6 +19,10 @@ export async function persistSlackThreadTs(
 ) {
   if (config.slackThreadTs || !ts) return;
 
+  // Set locally immediately so rapid follow-up Slack posts stay threaded.
+  // The retry loop below persists to the orchestrator DB as a separate concern.
+  config.slackThreadTs = ts;
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const res = await fetchFn(`${config.workerUrl}/api/internal/status`, {
@@ -33,10 +37,7 @@ export async function persistSlackThreadTs(
         }),
       });
 
-      if (res.ok) {
-        config.slackThreadTs = ts;
-        return;
-      }
+      if (res.ok) return;
       console.warn(`[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} failed: ${res.status}`);
     } catch (err) {
       console.warn(`[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} error:`, err);
@@ -46,9 +47,7 @@ export async function persistSlackThreadTs(
       await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt - 1)));
     }
   }
-  // Still set it locally even if persistence failed — at least in-process Slack calls will use the right thread
-  config.slackThreadTs = ts;
-  console.error("[Agent] Failed to persist slack_thread_ts after all retries — set locally only");
+  console.error("[Agent] Failed to persist slack_thread_ts to orchestrator after all retries");
 }
 
 async function postToSlack(
