@@ -138,6 +138,16 @@ export class TicketAgent extends Container<Bindings> {
 
   private bufferEvent(event: TicketEvent) {
     this.initEventBuffer();
+    // Cap buffer at 50 events to prevent unbounded growth
+    const countRow = this.ctx.storage.sql.exec(
+      "SELECT COUNT(*) as cnt FROM event_buffer"
+    ).toArray()[0] as { cnt: number };
+    if (countRow.cnt >= 50) {
+      this.ctx.storage.sql.exec(
+        "DELETE FROM event_buffer WHERE id IN (SELECT id FROM event_buffer ORDER BY id ASC LIMIT ?)",
+        countRow.cnt - 49,
+      );
+    }
     this.ctx.storage.sql.exec(
       "INSERT INTO event_buffer (event_json) VALUES (?)",
       JSON.stringify(event),

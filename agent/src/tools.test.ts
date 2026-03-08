@@ -38,9 +38,8 @@ describe("persistSlackThreadTs", () => {
     expect(config.slackThreadTs).toBe("1234567890.123456");
 
     // Verify the request body
-    const call = mockFetch.mock.calls[0];
-    const url = call[0];
-    const opts = call[1] as RequestInit;
+    const call = mockFetch.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, opts] = call;
     expect(url).toBe("https://worker.example.com/api/internal/status");
     expect(opts.method).toBe("POST");
     const body = JSON.parse(opts.body as string);
@@ -91,7 +90,7 @@ describe("persistSlackThreadTs", () => {
     await persistSlackThreadTs(config, "1234567890.123456", 3, mockFetch as any);
 
     expect(mockFetch).toHaveBeenCalledTimes(3);
-    // Config still gets set optimistically on entry
+    // Config still gets set locally as fallback even when persistence fails
     expect(config.slackThreadTs).toBe("1234567890.123456");
   });
 

@@ -17,46 +17,38 @@ export async function persistSlackThreadTs(
   maxRetries = 3,
   fetchFn: typeof fetch = fetch,
 ) {
-  if (!config.slackThreadTs && ts) {
-    config.slackThreadTs = ts;
+  if (config.slackThreadTs || !ts) return;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const res = await fetchFn(`${config.workerUrl}/api/internal/status`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-Key": config.apiKey,
-          },
-          body: JSON.stringify({
-            ticketId: config.ticketId,
-            slack_thread_ts: ts,
-          }),
-        });
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetchFn(`${config.workerUrl}/api/internal/status`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Key": config.apiKey,
+        },
+        body: JSON.stringify({
+          ticketId: config.ticketId,
+          slack_thread_ts: ts,
+        }),
+      });
 
-        if (res.ok) {
-          console.log(`[Agent] Persisted slack_thread_ts=${ts} (attempt ${attempt})`);
-          return;
-        }
-
-        console.warn(
-          `[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} failed: ${res.status}`,
-        );
-      } catch (err) {
-        console.warn(
-          `[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} error:`,
-          err,
-        );
+      if (res.ok) {
+        config.slackThreadTs = ts;
+        return;
       }
-
-      // Exponential backoff: 500ms, 1000ms, 2000ms
-      if (attempt < maxRetries) {
-        await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, attempt - 1)));
-      }
+      console.warn(`[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} failed: ${res.status}`);
+    } catch (err) {
+      console.warn(`[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} error:`, err);
     }
 
-    console.error(`[Agent] Failed to persist slack_thread_ts after ${maxRetries} attempts`);
+    if (attempt < maxRetries) {
+      await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt - 1)));
+    }
   }
+  // Still set it locally even if persistence failed — at least in-process Slack calls will use the right thread
+  config.slackThreadTs = ts;
+  console.error("[Agent] Failed to persist slack_thread_ts after all retries — set locally only");
 }
 
 async function postToSlack(

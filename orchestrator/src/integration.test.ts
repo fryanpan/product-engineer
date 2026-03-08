@@ -16,12 +16,12 @@ describe("Agent Lifecycle Integration", () => {
       expect(event.slackChannel).toBe("C12345");
     });
 
-    test("buildTicketEvent handles undefined slackThreadTs for new mentions", () => {
+    test("buildTicketEvent preserves undefined slackThreadTs when not provided", () => {
       const event = buildTicketEvent("slack", "slack_mention", {
         product: "test-app",
         text: "fix the bug",
         channel: "C12345",
-        // No threadTs — simulates orchestrator posting initial message
+        // No threadTs provided — ensure we don't synthesize a thread ID
       });
       expect(event.slackThreadTs).toBeUndefined();
     });

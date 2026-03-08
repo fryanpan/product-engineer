@@ -327,23 +327,39 @@ process.on("SIGINT", () => handleShutdown("SIGINT"));
 // Events are buffered when the container is unreachable during session transitions.
 // Called after a session starts so messageYielder is available to inject them.
 async function drainBufferedEvents() {
+  // Wait for messageYielder to be ready
+  const maxWaitMs = 5000;
+  const intervalMs = 100;
+  let waited = 0;
+  while (!messageYielder && waited < maxWaitMs) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    waited += intervalMs;
+  }
+  if (!messageYielder) {
+    console.warn("[Agent] messageYielder not ready after 5s; skipping drain to avoid losing events");
+    return;
+  }
+
   try {
-    const drainRes = await fetch(
-      `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketId)}/drain-events`,
-      { headers: { "X-Internal-Key": config.apiKey } },
-    );
-    if (drainRes.ok) {
+    // Loop until all buffered events are drained (DO limits to 20 per batch)
+    let batch = 0;
+    const maxBatches = 10;
+    while (batch < maxBatches) {
+      const drainRes = await fetch(
+        `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketId)}/drain-events`,
+        { headers: { "X-Internal-Key": config.apiKey } },
+      );
+      if (!drainRes.ok) break;
+
       const { events } = (await drainRes.json()) as { events: TicketEvent[] };
-      if (events.length > 0) {
-        console.log(`[Agent] Drained ${events.length} buffered events`);
-        if (!messageYielder) {
-          console.warn(`[Agent] messageYielder not ready during drain — ${events.length} events will be lost`);
-        } else {
-          for (const event of events) {
-            const prompt = await buildEventPrompt(event, config.slackBotToken);
-            messageYielder(userMessage(prompt));
-          }
-        }
+      if (!events || events.length === 0) break;
+
+      batch++;
+      console.log(`[Agent] Drained ${events.length} buffered events (batch ${batch})`);
+
+      for (const event of events) {
+        const prompt = await buildEventPrompt(event, config.slackBotToken);
+        messageYielder(userMessage(prompt));
       }
     }
   } catch (err) {
@@ -728,7 +744,7 @@ app.post("/event", async (c) => {
       const prompt = await buildPrompt(taskPayload, config.slackBotToken);
       await startSession(prompt);
       // Drain any events buffered while the container was unreachable
-      setTimeout(() => drainBufferedEvents(), 2000);
+      drainBufferedEvents();
     } else if (messageYielder) {
       const continuationPrompt = await buildEventPrompt(event, config.slackBotToken);
       messageYielder(userMessage(continuationPrompt));
@@ -834,13 +850,9 @@ setTimeout(async () => {
           const ticketStatus = (await statusRes.json()) as {
             agent_active?: number;
             status?: string;
+            terminal?: boolean;
           };
-          // Must match TERMINAL_STATUSES in orchestrator/src/types.ts
-          const terminalStatuses = ["merged", "closed", "deferred", "failed"];
-          if (
-            ticketStatus.agent_active === 0 ||
-            terminalStatuses.includes(ticketStatus.status || "")
-          ) {
+          if (ticketStatus.agent_active === 0 || ticketStatus.terminal) {
             console.log(
               `[Agent] Ticket ${config.ticketId} is inactive (agent_active=${ticketStatus.agent_active}, status=${ticketStatus.status}) — skipping auto-resume`,
             );
@@ -896,7 +908,7 @@ setTimeout(async () => {
 
       await startSession(resumePrompt);
       // Drain any events buffered while the container was restarting
-      setTimeout(() => drainBufferedEvents(), 2000);
+      drainBufferedEvents();
     } else {
       console.log("[Agent] No existing work branch found — waiting for event");
     }

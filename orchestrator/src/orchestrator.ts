@@ -433,7 +433,10 @@ export class Orchestrator extends Container<Bindings> {
             ticketId,
           ).toArray()[0] as { agent_active: number; status: string } | undefined;
           if (!row) return Response.json({ error: "not found" }, { status: 404 });
-          return Response.json(row);
+          return Response.json({
+            ...row,
+            terminal: (TERMINAL_STATUSES as readonly string[]).includes(row.status),
+          });
         }
         if (url.pathname.startsWith("/products/")) {
           if (url.pathname === "/products/seed") {
@@ -1197,9 +1200,10 @@ export class Orchestrator extends Container<Bindings> {
 
     const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
 
-    // Post a "working on it" message to Slack before creating the ticket.
-    // This captures the thread ts so the agent always replies in the same thread.
-    let slackThreadTs: string | undefined;
+    // Always use the original message ts as thread identity (Slack threads are keyed by parent ts)
+    const slackThreadTs = slackEvent.ts;
+
+    // Best-effort: post acknowledgment in the thread
     try {
       const slackRes = await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
@@ -1216,9 +1220,7 @@ export class Orchestrator extends Container<Bindings> {
 
       if (slackRes.ok) {
         const slackData = await slackRes.json() as { ok: boolean; ts?: string; error?: string };
-        if (slackData.ok && slackData.ts) {
-          // Use the original message ts as the thread identity (Slack threads are keyed by parent ts)
-          slackThreadTs = slackEvent.ts;
+        if (slackData.ok) {
           console.log(`[Orchestrator] Posted acknowledgment, thread_ts=${slackThreadTs}`);
         } else {
           console.warn(`[Orchestrator] Slack API returned error: ${slackData.error}`);
@@ -1236,7 +1238,7 @@ export class Orchestrator extends Container<Bindings> {
       ticketId,
       product,
       payload: slackEvent,
-      slackThreadTs, // Set from acknowledgment message, or undefined if it failed (agent fallback)
+      slackThreadTs, // Always set from slackEvent.ts — ack post is best-effort UI
       slackChannel: slackEvent.channel,
     };
 
