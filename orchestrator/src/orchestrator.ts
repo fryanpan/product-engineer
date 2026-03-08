@@ -459,8 +459,18 @@ export class Orchestrator extends Container<Bindings> {
     const event = await request.json<TicketEvent>();
     event.ticketId = sanitizeTicketId(event.ticketId);
 
-    // Upsert ticket — re-activate agent on new events (handles re-assignment after
-    // the health monitor marked a stuck ticket inactive)
+    // Check if this ticket is already in a terminal state — don't re-activate it
+    const existing = this.ctx.storage.sql.exec(
+      "SELECT status FROM tickets WHERE id = ?",
+      event.ticketId,
+    ).toArray()[0] as { status: string } | undefined;
+
+    if (existing && (TERMINAL_STATUSES as readonly string[]).includes(existing.status)) {
+      console.log(`[Orchestrator] Ignoring event for terminal ticket ${event.ticketId} (status: ${existing.status})`);
+      return Response.json({ ok: true, ticketId: event.ticketId, ignored: true, reason: "terminal ticket" });
+    }
+
+    // Upsert ticket — only re-activate non-terminal tickets
     this.ctx.storage.sql.exec(
       `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel)
        VALUES (?, ?, ?, ?)
@@ -547,6 +557,11 @@ export class Orchestrator extends Container<Bindings> {
 
       if (!initRes.ok) {
         console.error(`[Orchestrator] Failed to initialize agent for ${event.ticketId}: ${initRes.status}`);
+        // Mark inactive so the orphaned container doesn't block future attempts
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+          event.ticketId,
+        );
         return;
       }
     }
@@ -572,6 +587,11 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     console.error(`[Orchestrator] Agent event delivery failed after retries for ${event.ticketId}: ${lastStatus}`);
+    // Mark inactive to prevent orphaned container from blocking future events
+    this.ctx.storage.sql.exec(
+      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+      event.ticketId,
+    );
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
