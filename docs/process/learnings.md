@@ -10,7 +10,8 @@ Technical discoveries that should persist across sessions.
 
 ## Cloudflare Container SDK (Configuration)
 - `envVars` is a class field on Container base class, not a getter. JavaScript class fields create own properties that shadow prototype getters. Set `this.envVars` in the constructor instead of using `get envVars()`.
-- `sleepAfter` only accepts hours (e.g., `"2h"`), not days. `"4d"` silently fails.
+- `sleepAfter` only accepts hours (e.g., `"96h"`), not days. `"4d"` silently fails.
+- `sleepAfter` was increased from `"15m"` to `"4h"` to allow time for CI, Copilot review, and deploy verification. Zombie container prevention now relies on orchestrator state checks (auto-resume and alarm both verify `agent_active`) rather than short container lifetimes.
 - `alarm()` override must accept `alarmProps: { isRetry: boolean; retryCount: number }` — zero-arg signature causes type errors.
 - `startAndWaitForPorts` accepts `{ ports, startOptions: { envVars } }` to pass env vars at start time.
 - `containerFetch` auto-starts the container using `this.envVars` — set them in constructor from persisted config so cold restarts work.
