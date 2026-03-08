@@ -285,10 +285,12 @@ const timeoutWatchdog = setInterval(() => {
     process.exit(0);
   }
 
-  // Idle timeout: 30 minutes without SDK messages AND not actively running
+  // Idle timeout: 30 minutes without any activity (SDK messages or webhook events)
+  // Keep sessionStatus guard — during long tool runs (tests, builds), the SDK status stays
+  // "running" without producing messages. We only timeout truly idle sessions.
   if (idleDuration > IDLE_TIMEOUT_MS && sessionStatus !== "running") {
     console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${sessionStatus} — exiting`);
-    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus}`);
+    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus} msgs=${sessionMessageCount}`);
     clearInterval(heartbeatInterval);
     clearInterval(transcriptBackupInterval);
     clearInterval(timeoutWatchdog);
@@ -320,6 +322,50 @@ async function handleShutdown(signal: string) {
 
 process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 process.on("SIGINT", () => handleShutdown("SIGINT"));
+
+// Drain buffered events from the TicketAgent DO.
+// Events are buffered when the container is unreachable during session transitions.
+// Called after a session starts so messageYielder is available to inject them.
+async function drainBufferedEvents() {
+  // Wait for messageYielder to be ready
+  const maxWaitMs = 5000;
+  const intervalMs = 100;
+  let waited = 0;
+  while (!messageYielder && waited < maxWaitMs) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    waited += intervalMs;
+  }
+  if (!messageYielder) {
+    console.warn("[Agent] messageYielder not ready after 5s; skipping drain to avoid losing events");
+    return;
+  }
+
+  try {
+    // Loop until all buffered events are drained (DO limits to 20 per batch)
+    let batch = 0;
+    const maxBatches = 10;
+    while (batch < maxBatches) {
+      const drainRes = await fetch(
+        `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketId)}/drain-events`,
+        { headers: { "X-Internal-Key": config.apiKey } },
+      );
+      if (!drainRes.ok) break;
+
+      const { events } = (await drainRes.json()) as { events: TicketEvent[] };
+      if (!events || events.length === 0) break;
+
+      batch++;
+      console.log(`[Agent] Drained ${events.length} buffered events (batch ${batch})`);
+
+      for (const event of events) {
+        const prompt = await buildEventPrompt(event, config.slackBotToken);
+        messageYielder(userMessage(prompt));
+      }
+    }
+  } catch (err) {
+    console.warn("[Agent] Failed to drain buffered events:", err);
+  }
+}
 
 let sessionActive = false;
 let messageYielder: ((msg: SDKUserMessage) => void) | null = null;
@@ -661,6 +707,9 @@ app.post("/event", async (c) => {
   const event = await c.req.json<TicketEvent>();
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
 
+  // Update last activity time for idle timeout tracking
+  lastMessageTime = Date.now();
+
   try {
     // Capture thread_ts from event so Slack tools reply in-thread
     if (event.slackThreadTs) {
@@ -694,6 +743,8 @@ app.post("/event", async (c) => {
 
       const prompt = await buildPrompt(taskPayload, config.slackBotToken);
       await startSession(prompt);
+      // Drain any events buffered while the container was unreachable
+      drainBufferedEvents();
     } else if (messageYielder) {
       const continuationPrompt = await buildEventPrompt(event, config.slackBotToken);
       messageYielder(userMessage(continuationPrompt));
@@ -789,6 +840,38 @@ setTimeout(async () => {
     const branch = await checkAndCheckoutWorkBranch();
 
     if (branch) {
+      // Check orchestrator state before resuming — skip if ticket is inactive
+      try {
+        const statusRes = await fetch(
+          `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketId)}`,
+          { headers: { "X-Internal-Key": config.apiKey } },
+        );
+        if (statusRes.ok) {
+          const ticketStatus = (await statusRes.json()) as {
+            agent_active?: number;
+            status?: string;
+            terminal?: boolean;
+          };
+          if (ticketStatus.agent_active === 0 || ticketStatus.terminal) {
+            console.log(
+              `[Agent] Ticket ${config.ticketId} is inactive (agent_active=${ticketStatus.agent_active}, status=${ticketStatus.status}) — skipping auto-resume`,
+            );
+            phoneHome(
+              "auto_resume_skipped",
+              `reason=inactive,status=${ticketStatus.status}`,
+            );
+            process.exit(0);
+            return;
+          }
+        }
+      } catch (err) {
+        // Fail-open: if we can't reach orchestrator, proceed with resume
+        console.warn(
+          "[Agent] Could not check orchestrator status, proceeding with resume:",
+          err,
+        );
+      }
+
       console.log(`[Agent] Auto-resuming from branch: ${branch}`);
       phoneHome("auto_resume", `branch=${branch}`);
 
@@ -824,6 +907,8 @@ setTimeout(async () => {
       }
 
       await startSession(resumePrompt);
+      // Drain any events buffered while the container was restarting
+      drainBufferedEvents();
     } else {
       console.log("[Agent] No existing work branch found — waiting for event");
     }

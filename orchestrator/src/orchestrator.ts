@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
+import { TERMINAL_STATUSES, type TicketEvent, type TicketAgentConfig, type Bindings } from "./types";
 import type { ProductConfig } from "./registry";
 import { selectModelForTicket } from "./model-selection";
 
@@ -420,12 +420,26 @@ export class Orchestrator extends Container<Bindings> {
         return this.getSystemStatus();
       case "/cleanup-inactive":
         return this.cleanupInactiveAgents();
+      case "/shutdown-all":
+        return this.shutdownAllAgents();
       case "/products":
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
         return this.listSettings();
       default:
         // Handle dynamic routes
+        if (url.pathname.startsWith("/ticket-status/")) {
+          const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
+          const row = this.ctx.storage.sql.exec(
+            "SELECT agent_active, status FROM tickets WHERE id = ?",
+            ticketId,
+          ).toArray()[0] as { agent_active: number; status: string } | undefined;
+          if (!row) return Response.json({ error: "not found" }, { status: 404 });
+          return Response.json({
+            ...row,
+            terminal: (TERMINAL_STATUSES as readonly string[]).includes(row.status),
+          });
+        }
         if (url.pathname.startsWith("/products/")) {
           if (url.pathname === "/products/seed") {
             return this.seedProducts(request);
@@ -582,8 +596,7 @@ export class Orchestrator extends Container<Bindings> {
 
       // Terminal states: mark agent as inactive so we don't spawn new agents
       // on deployment-triggered events
-      const terminalStates = ["merged", "closed", "deferred", "failed"];
-      if (terminalStates.includes(status)) {
+      if ((TERMINAL_STATUSES as readonly string[]).includes(status)) {
         updates.push("agent_active = 0");
         console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
 
@@ -767,6 +780,59 @@ export class Orchestrator extends Container<Bindings> {
       ok: true,
       total: inactiveTickets.length,
       successful: successCount,
+      results,
+    });
+  }
+
+  private async shutdownAllAgents(): Promise<Response> {
+    // Force shutdown of ALL agent containers, regardless of state.
+    // Use case: operator wants to stop all work immediately.
+
+    // Get ALL tickets (active and inactive)
+    const allTickets = this.ctx.storage.sql.exec(
+      `SELECT id, status, agent_active FROM tickets`
+    ).toArray() as Array<{ id: string; status: string; agent_active: number }>;
+
+    console.log(`[Orchestrator] Shutdown all: found ${allTickets.length} total tickets`);
+
+    // Mark all as inactive
+    this.ctx.storage.sql.exec(`UPDATE tickets SET agent_active = 0`);
+    console.log(`[Orchestrator] Marked all agents as inactive`);
+
+    const results: Array<{ ticketId: string; previousStatus: string; success: boolean; error?: string }> = [];
+
+    // Shut down all containers
+    for (const ticket of allTickets) {
+      try {
+        const id = this.env.TICKET_AGENT.idFromName(ticket.id);
+        const agent = this.env.TICKET_AGENT.get(id);
+
+        // Call /mark-terminal which will invoke /shutdown on the container
+        const res = await agent.fetch(new Request("http://internal/mark-terminal", {
+          method: "POST",
+        }));
+
+        if (res.ok) {
+          console.log(`[Orchestrator] Shutdown all: shutdown requested for ${ticket.id}`);
+          results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
+        } else {
+          console.warn(`[Orchestrator] Shutdown all: failed to shutdown ${ticket.id}: ${res.status}`);
+          results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: `HTTP ${res.status}` });
+        }
+      } catch (err) {
+        console.error(`[Orchestrator] Shutdown all: error shutting down ${ticket.id}:`, err);
+        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: String(err) });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    console.log(`[Orchestrator] Shutdown all complete: ${successCount}/${results.length} successful`);
+
+    return Response.json({
+      ok: true,
+      total: allTickets.length,
+      successful: successCount,
+      failed: results.length - successCount,
       results,
     });
   }
@@ -1096,13 +1162,20 @@ export class Orchestrator extends Container<Bindings> {
     if (slackEvent.thread_ts) {
       console.log(`[Orchestrator] Thread reply received: thread_ts=${slackEvent.thread_ts} type=${slackEvent.type} user=${slackEvent.user || "unknown"}`);
       const rows = this.ctx.storage.sql.exec(
-        "SELECT id, product FROM tickets WHERE slack_thread_ts = ?",
+        "SELECT id, product, status, agent_active FROM tickets WHERE slack_thread_ts = ?",
         slackEvent.thread_ts,
-      ).toArray() as { id: string; product: string }[];
+      ).toArray() as { id: string; product: string; status: string; agent_active: number }[];
 
       if (rows.length > 0) {
         const ticket = rows[0];
         console.log(`[Orchestrator] Thread reply matched ticket=${ticket.id} product=${ticket.product}`);
+
+        // Don't re-activate terminal tickets
+        if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status)) {
+          console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.id} (status=${ticket.status}) — ignoring`);
+          return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
+        }
+
         // Re-activate agent on thread reply — user is explicitly engaging
         this.ctx.storage.sql.exec(
           "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
@@ -1181,13 +1254,46 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
+
+    // Always use the original message ts as thread identity (Slack threads are keyed by parent ts)
+    const slackThreadTs = slackEvent.ts;
+
+    // Best-effort: post acknowledgment in the thread
+    try {
+      const slackRes = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: slackEvent.channel,
+          thread_ts: slackEvent.ts,
+          text: "⏳ Working on it...",
+        }),
+      });
+
+      if (slackRes.ok) {
+        const slackData = await slackRes.json() as { ok: boolean; ts?: string; error?: string };
+        if (slackData.ok) {
+          console.log(`[Orchestrator] Posted acknowledgment, thread_ts=${slackThreadTs}`);
+        } else {
+          console.warn(`[Orchestrator] Slack API returned error: ${slackData.error}`);
+        }
+      } else {
+        console.warn(`[Orchestrator] Slack post failed: ${slackRes.status}`);
+      }
+    } catch (err) {
+      console.warn("[Orchestrator] Failed to post acknowledgment to Slack:", err);
+    }
+
     const event: TicketEvent = {
       type: "slack_mention",
       source: "slack",
       ticketId,
       product,
       payload: slackEvent,
-      slackThreadTs: undefined, // Don't set thread_ts — let agent create its own thread
+      slackThreadTs, // Always set from slackEvent.ts — ack post is best-effort UI
       slackChannel: slackEvent.channel,
     };
 

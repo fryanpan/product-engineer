@@ -56,7 +56,7 @@ export function resolveAgentEnvVars(
 
 export class TicketAgent extends Container<Bindings> {
   defaultPort = 3000;
-  sleepAfter = "15m";
+  sleepAfter = "4h";
 
   private configLoaded = false;
 
@@ -120,6 +120,60 @@ export class TicketAgent extends Container<Bindings> {
     throw error;
   }
 
+  // --- Event buffer: stores events that arrive while the container is unreachable ---
+
+  private eventBufferInitialized = false;
+
+  private initEventBuffer() {
+    if (this.eventBufferInitialized) return;
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS event_buffer (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_json TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    this.eventBufferInitialized = true;
+  }
+
+  private bufferEvent(event: TicketEvent) {
+    this.initEventBuffer();
+    // Cap buffer at 50 events to prevent unbounded growth
+    const countRow = this.ctx.storage.sql.exec(
+      "SELECT COUNT(*) as cnt FROM event_buffer"
+    ).toArray()[0] as { cnt: number };
+    if (countRow.cnt >= 50) {
+      this.ctx.storage.sql.exec(
+        "DELETE FROM event_buffer WHERE id IN (SELECT id FROM event_buffer ORDER BY id ASC LIMIT ?)",
+        countRow.cnt - 49,
+      );
+    }
+    this.ctx.storage.sql.exec(
+      "INSERT INTO event_buffer (event_json) VALUES (?)",
+      JSON.stringify(event),
+    );
+    console.log(`[TicketAgent] Buffered event: ${event.type} for ${event.ticketId}`);
+  }
+
+  private drainEventBuffer(): TicketEvent[] {
+    this.initEventBuffer();
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT id, event_json FROM event_buffer ORDER BY id ASC LIMIT 20"
+    ).toArray() as { id: number; event_json: string }[];
+
+    if (rows.length > 0) {
+      const ids = rows.map(r => r.id);
+      const placeholders = ids.map(() => "?").join(",");
+      this.ctx.storage.sql.exec(
+        `DELETE FROM event_buffer WHERE id IN (${placeholders})`,
+        ...ids,
+      );
+      console.log(`[TicketAgent] Drained ${rows.length} buffered events`);
+    }
+
+    return rows.map(r => JSON.parse(r.event_json));
+  }
+
   private isTerminal(): boolean {
     this.initDb();
     const row = this.ctx.storage.sql.exec(
@@ -142,13 +196,32 @@ export class TicketAgent extends Container<Bindings> {
       return super.alarm(alarmProps);
     }
 
-    // If this ticket has active work, keep the container alive
     const config = this.getConfig();
     if (config) {
+      // Check orchestrator state — don't restart containers for tickets that are no longer active
+      try {
+        const orchestratorId = this.env.ORCHESTRATOR.idFromName("main");
+        const orchestratorStub = this.env.ORCHESTRATOR.get(orchestratorId);
+        const statusRes = await orchestratorStub.fetch(
+          new Request(`http://internal/ticket-status/${encodeURIComponent(config.ticketId)}`)
+        );
+        if (statusRes.ok) {
+          const status = await statusRes.json<{ agent_active: number; status: string }>();
+          if (status.agent_active === 0) {
+            console.log(`[TicketAgent] Orchestrator says ${config.ticketId} is inactive (status=${status.status}) — marking terminal, skipping restart`);
+            this.markTerminal();
+            return super.alarm(alarmProps);
+          }
+        }
+      } catch (err) {
+        console.warn(`[TicketAgent] Could not check orchestrator status for ${config.ticketId}:`, err);
+        // Fall through to existing container health check
+      }
+
+      // Check container health — mark terminal if session completed/errored
       try {
         const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
         const status = await res.json<{ sessionStatus: string }>();
-        // If session completed or errored, mark terminal so we don't keep restarting
         if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
           console.log(`[TicketAgent] Session ${status.sessionStatus} for ${config.ticketId}, marking terminal`);
           this.markTerminal();
@@ -178,7 +251,7 @@ export class TicketAgent extends Container<Bindings> {
         try {
           // containerFetch auto-starts the container if needed, using this.envVars
           // (set in constructor from SQLite or in setConfig from /initialize)
-          return await this.containerFetch("http://localhost/event", {
+          const res = await this.containerFetch("http://localhost/event", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -186,12 +259,19 @@ export class TicketAgent extends Container<Bindings> {
             },
             body: JSON.stringify(event),
           }, this.defaultPort);
+
+          if (res.ok) return res;
+          if (res.status === 503) {
+            // Container not ready — buffer the event for later drain
+            this.bufferEvent(event);
+            return Response.json({ buffered: true }, { status: 202 });
+          }
+          return res;
         } catch (err) {
-          console.error("[TicketAgent] Container not ready, event may be lost:", err);
-          return Response.json(
-            { error: "Container not ready" },
-            { status: 503 },
-          );
+          // Container unreachable — buffer the event for later drain
+          console.warn("[TicketAgent] Container not ready, buffering event:", err);
+          this.bufferEvent(event);
+          return Response.json({ buffered: true }, { status: 202 });
         }
       }
       case "/mark-terminal": {
@@ -257,6 +337,10 @@ export class TicketAgent extends Container<Bindings> {
         } catch (err) {
           return Response.json({ error: "Container not reachable" }, { status: 503 });
         }
+      }
+      case "/drain-events": {
+        const events = this.drainEventBuffer();
+        return Response.json({ events });
       }
       default:
         return Response.json({ error: "not found" }, { status: 404 });

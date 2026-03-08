@@ -222,6 +222,29 @@ app.get("/api/transcripts/:r2Key", async (c) => {
   }
 });
 
+// Internal: check orchestrator ticket state (used by agent auto-resume)
+app.get("/api/orchestrator/ticket-status/:ticketId", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const ticketId = c.req.param("ticketId");
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request(`http://internal/ticket-status/${encodeURIComponent(ticketId)}`));
+});
+
+// Internal: drain buffered events from a ticket agent (called by agent on session start)
+app.get("/api/agent/:ticketId/drain-events", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const ticketId = c.req.param("ticketId");
+  const id = c.env.TICKET_AGENT.idFromName(ticketId);
+  const agent = c.env.TICKET_AGENT.get(id);
+  return agent.fetch(new Request("http://internal/drain-events"));
+});
+
 // Debug: query a specific ticket agent's container status
 app.get("/api/agent/:ticketId/status", async (c) => {
   const apiKey = c.req.header("X-API-Key");
@@ -354,6 +377,18 @@ app.post("/api/orchestrator/cleanup-inactive", async (c) => {
   }
   const orchestrator = getOrchestrator(c.env);
   return orchestrator.fetch(new Request("http://internal/cleanup-inactive", {
+    method: "POST",
+  }));
+});
+
+// Orchestrator: shutdown all agents (emergency stop)
+app.post("/api/orchestrator/shutdown-all", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/shutdown-all", {
     method: "POST",
   }));
 });
