@@ -789,6 +789,41 @@ setTimeout(async () => {
     const branch = await checkAndCheckoutWorkBranch();
 
     if (branch) {
+      // Check orchestrator state before resuming — skip if ticket is inactive
+      try {
+        const statusRes = await fetch(
+          `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketId)}`,
+          { headers: { "X-Internal-Key": config.apiKey } },
+        );
+        if (statusRes.ok) {
+          const ticketStatus = (await statusRes.json()) as {
+            agent_active?: number;
+            status?: string;
+          };
+          const terminalStatuses = ["merged", "closed", "deferred", "failed"];
+          if (
+            ticketStatus.agent_active === 0 ||
+            terminalStatuses.includes(ticketStatus.status || "")
+          ) {
+            console.log(
+              `[Agent] Ticket ${config.ticketId} is inactive (agent_active=${ticketStatus.agent_active}, status=${ticketStatus.status}) — skipping auto-resume`,
+            );
+            phoneHome(
+              "auto_resume_skipped",
+              `reason=inactive,status=${ticketStatus.status}`,
+            );
+            process.exit(0);
+            return;
+          }
+        }
+      } catch (err) {
+        // Fail-open: if we can't reach orchestrator, proceed with resume
+        console.warn(
+          "[Agent] Could not check orchestrator status, proceeding with resume:",
+          err,
+        );
+      }
+
       console.log(`[Agent] Auto-resuming from branch: ${branch}`);
       phoneHome("auto_resume", `branch=${branch}`);
 

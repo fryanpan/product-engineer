@@ -222,6 +222,17 @@ app.get("/api/transcripts/:r2Key", async (c) => {
   }
 });
 
+// Internal: check orchestrator ticket state (used by agent auto-resume)
+app.get("/api/orchestrator/ticket-status/:ticketId", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const ticketId = c.req.param("ticketId");
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request(`http://internal/ticket-status/${encodeURIComponent(ticketId)}`));
+});
+
 // Debug: query a specific ticket agent's container status
 app.get("/api/agent/:ticketId/status", async (c) => {
   const apiKey = c.req.header("X-API-Key");

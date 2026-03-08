@@ -426,6 +426,15 @@ export class Orchestrator extends Container<Bindings> {
         return this.listSettings();
       default:
         // Handle dynamic routes
+        if (url.pathname.startsWith("/ticket-status/")) {
+          const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
+          const row = this.ctx.storage.sql.exec(
+            "SELECT agent_active, status FROM tickets WHERE id = ?",
+            ticketId,
+          ).toArray()[0] as { agent_active: number; status: string } | undefined;
+          if (!row) return Response.json({ error: "not found" }, { status: 404 });
+          return Response.json(row);
+        }
         if (url.pathname.startsWith("/products/")) {
           if (url.pathname === "/products/seed") {
             return this.seedProducts(request);
