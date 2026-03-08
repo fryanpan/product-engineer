@@ -596,14 +596,18 @@ export class Orchestrator extends Container<Bindings> {
         updates.push("agent_active = 0");
         console.log(`[Orchestrator] Marking agent inactive for terminal/shutdown state: ${status}`);
 
-        // Notify the TicketAgent DO so it marks itself terminal and stops
-        // restarting containers on alarm
-        try {
-          const id = this.env.TICKET_AGENT.idFromName(ticketId);
-          const agent = this.env.TICKET_AGENT.get(id);
-          await agent.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
-        } catch (err) {
-          console.error(`[Orchestrator] Failed to mark TicketAgent terminal for ${ticketId}:`, err);
+        // Only notify the TicketAgent DO for terminal ticket states (merged, closed, etc.)
+        // where the container might still be running. Skip for agent:* shutdown statuses
+        // since the container is already stopping/stopped and containerFetch would
+        // unnecessarily auto-start it just to shut it down again.
+        if (terminalStates.includes(status)) {
+          try {
+            const id = this.env.TICKET_AGENT.idFromName(ticketId);
+            const agent = this.env.TICKET_AGENT.get(id);
+            await agent.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
+          } catch (err) {
+            console.error(`[Orchestrator] Failed to mark TicketAgent terminal for ${ticketId}:`, err);
+          }
         }
       }
     }
