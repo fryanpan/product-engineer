@@ -11,22 +11,51 @@ import { normalizeImageMediaType, type AgentConfig } from "./config";
 
 type ToolResult = { content: { type: "text"; text: string }[] };
 
-function persistSlackThreadTs(config: AgentConfig, ts: string) {
+export async function persistSlackThreadTs(
+  config: AgentConfig,
+  ts: string,
+  maxRetries = 3,
+  fetchFn: typeof fetch = fetch,
+) {
   if (!config.slackThreadTs && ts) {
     config.slackThreadTs = ts;
-    fetch(`${config.workerUrl}/api/internal/status`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Key": config.apiKey,
-      },
-      body: JSON.stringify({
-        ticketId: config.ticketId,
-        slack_thread_ts: ts,
-      }),
-    }).catch((err) =>
-      console.error("[Agent] Failed to persist slack_thread_ts:", err),
-    );
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await fetchFn(`${config.workerUrl}/api/internal/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": config.apiKey,
+          },
+          body: JSON.stringify({
+            ticketId: config.ticketId,
+            slack_thread_ts: ts,
+          }),
+        });
+
+        if (res.ok) {
+          console.log(`[Agent] Persisted slack_thread_ts=${ts} (attempt ${attempt})`);
+          return;
+        }
+
+        console.warn(
+          `[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} failed: ${res.status}`,
+        );
+      } catch (err) {
+        console.warn(
+          `[Agent] persist slack_thread_ts attempt ${attempt}/${maxRetries} error:`,
+          err,
+        );
+      }
+
+      // Exponential backoff: 500ms, 1000ms, 2000ms
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, attempt - 1)));
+      }
+    }
+
+    console.error(`[Agent] Failed to persist slack_thread_ts after ${maxRetries} attempts`);
   }
 }
 
@@ -56,7 +85,10 @@ async function postToSlack(
     return { content: [{ type: "text", text: `Slack API error: ${data.error}` }] };
   }
 
-  if (data.ts) persistSlackThreadTs(config, data.ts);
+  if (data.ts) {
+    // Fire-and-forget with retries — don't block the tool response
+    persistSlackThreadTs(config, data.ts).catch(() => {});
+  }
   return { content: [{ type: "text", text: "Message posted to Slack" }] };
 }
 

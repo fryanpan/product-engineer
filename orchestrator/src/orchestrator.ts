@@ -1181,13 +1181,47 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
+
+    // Post a "working on it" message to Slack before creating the ticket.
+    // This captures the thread ts so the agent always replies in the same thread.
+    let slackThreadTs: string | undefined;
+    try {
+      const slackRes = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: slackEvent.channel,
+          thread_ts: slackEvent.ts,
+          text: "⏳ Working on it...",
+        }),
+      });
+
+      if (slackRes.ok) {
+        const slackData = await slackRes.json() as { ok: boolean; ts?: string; error?: string };
+        if (slackData.ok && slackData.ts) {
+          // Use the original message ts as the thread identity (Slack threads are keyed by parent ts)
+          slackThreadTs = slackEvent.ts;
+          console.log(`[Orchestrator] Posted acknowledgment, thread_ts=${slackThreadTs}`);
+        } else {
+          console.warn(`[Orchestrator] Slack API returned error: ${slackData.error}`);
+        }
+      } else {
+        console.warn(`[Orchestrator] Slack post failed: ${slackRes.status}`);
+      }
+    } catch (err) {
+      console.warn("[Orchestrator] Failed to post acknowledgment to Slack:", err);
+    }
+
     const event: TicketEvent = {
       type: "slack_mention",
       source: "slack",
       ticketId,
       product,
       payload: slackEvent,
-      slackThreadTs: undefined, // Don't set thread_ts — let agent create its own thread
+      slackThreadTs, // Set from acknowledgment message, or undefined if it failed (agent fallback)
       slackChannel: slackEvent.channel,
     };
 
