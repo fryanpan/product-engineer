@@ -420,6 +420,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.getSystemStatus();
       case "/cleanup-inactive":
         return this.cleanupInactiveAgents();
+      case "/shutdown-all":
+        return this.shutdownAllAgents();
       case "/products":
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
@@ -778,6 +780,59 @@ export class Orchestrator extends Container<Bindings> {
       ok: true,
       total: inactiveTickets.length,
       successful: successCount,
+      results,
+    });
+  }
+
+  private async shutdownAllAgents(): Promise<Response> {
+    // Force shutdown of ALL agent containers, regardless of state.
+    // Use case: operator wants to stop all work immediately.
+
+    // Get ALL tickets (active and inactive)
+    const allTickets = this.ctx.storage.sql.exec(
+      `SELECT id, status, agent_active FROM tickets`
+    ).toArray() as Array<{ id: string; status: string; agent_active: number }>;
+
+    console.log(`[Orchestrator] Shutdown all: found ${allTickets.length} total tickets`);
+
+    // Mark all as inactive
+    this.ctx.storage.sql.exec(`UPDATE tickets SET agent_active = 0`);
+    console.log(`[Orchestrator] Marked all agents as inactive`);
+
+    const results: Array<{ ticketId: string; previousStatus: string; success: boolean; error?: string }> = [];
+
+    // Shut down all containers
+    for (const ticket of allTickets) {
+      try {
+        const id = this.env.TICKET_AGENT.idFromName(ticket.id);
+        const agent = this.env.TICKET_AGENT.get(id);
+
+        // Call /mark-terminal which will invoke /shutdown on the container
+        const res = await agent.fetch(new Request("http://internal/mark-terminal", {
+          method: "POST",
+        }));
+
+        if (res.ok) {
+          console.log(`[Orchestrator] Shutdown all: shutdown requested for ${ticket.id}`);
+          results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
+        } else {
+          console.warn(`[Orchestrator] Shutdown all: failed to shutdown ${ticket.id}: ${res.status}`);
+          results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: `HTTP ${res.status}` });
+        }
+      } catch (err) {
+        console.error(`[Orchestrator] Shutdown all: error shutting down ${ticket.id}:`, err);
+        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: String(err) });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    console.log(`[Orchestrator] Shutdown all complete: ${successCount}/${results.length} successful`);
+
+    return Response.json({
+      ok: true,
+      total: allTickets.length,
+      successful: successCount,
+      failed: results.length - successCount,
       results,
     });
   }

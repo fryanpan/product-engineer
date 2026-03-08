@@ -381,6 +381,18 @@ app.post("/api/orchestrator/cleanup-inactive", async (c) => {
   }));
 });
 
+// Orchestrator: shutdown all agents (emergency stop)
+app.post("/api/orchestrator/shutdown-all", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/shutdown-all", {
+    method: "POST",
+  }));
+});
+
 export function getOrchestrator(env: Bindings): DurableObjectStub {
   const id = env.ORCHESTRATOR.idFromName("main");
   return env.ORCHESTRATOR.get(id);
