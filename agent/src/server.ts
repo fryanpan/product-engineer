@@ -286,9 +286,11 @@ const timeoutWatchdog = setInterval(() => {
   }
 
   // Idle timeout: 30 minutes without any activity (SDK messages or webhook events)
-  if (idleDuration > IDLE_TIMEOUT_MS) {
-    console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m — exiting`);
-    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m msgs=${sessionMessageCount}`);
+  // Keep sessionStatus guard — during long tool runs (tests, builds), the SDK status stays
+  // "running" without producing messages. We only timeout truly idle sessions.
+  if (idleDuration > IDLE_TIMEOUT_MS && sessionStatus !== "running") {
+    console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${sessionStatus} — exiting`);
+    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus} msgs=${sessionMessageCount}`);
     clearInterval(heartbeatInterval);
     clearInterval(transcriptBackupInterval);
     clearInterval(timeoutWatchdog);
@@ -334,8 +336,10 @@ async function drainBufferedEvents() {
       const { events } = (await drainRes.json()) as { events: TicketEvent[] };
       if (events.length > 0) {
         console.log(`[Agent] Drained ${events.length} buffered events`);
-        for (const event of events) {
-          if (messageYielder) {
+        if (!messageYielder) {
+          console.warn(`[Agent] messageYielder not ready during drain — ${events.length} events will be lost`);
+        } else {
+          for (const event of events) {
             const prompt = await buildEventPrompt(event, config.slackBotToken);
             messageYielder(userMessage(prompt));
           }
@@ -831,6 +835,7 @@ setTimeout(async () => {
             agent_active?: number;
             status?: string;
           };
+          // Must match TERMINAL_STATUSES in orchestrator/src/types.ts
           const terminalStatuses = ["merged", "closed", "deferred", "failed"];
           if (
             ticketStatus.agent_active === 0 ||

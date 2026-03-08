@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
+import { TERMINAL_STATUSES, type TicketEvent, type TicketAgentConfig, type Bindings } from "./types";
 import type { ProductConfig } from "./registry";
 import { selectModelForTicket } from "./model-selection";
 
@@ -591,8 +591,7 @@ export class Orchestrator extends Container<Bindings> {
 
       // Terminal states: mark agent as inactive so we don't spawn new agents
       // on deployment-triggered events
-      const terminalStates = ["merged", "closed", "deferred", "failed"];
-      if (terminalStates.includes(status)) {
+      if ((TERMINAL_STATUSES as readonly string[]).includes(status)) {
         updates.push("agent_active = 0");
         console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
 
@@ -1114,8 +1113,7 @@ export class Orchestrator extends Container<Bindings> {
         console.log(`[Orchestrator] Thread reply matched ticket=${ticket.id} product=${ticket.product}`);
 
         // Don't re-activate terminal tickets
-        const terminalStatuses = ["merged", "closed", "deferred", "failed"];
-        if (terminalStatuses.includes(ticket.status)) {
+        if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status)) {
           console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.id} (status=${ticket.status}) — ignoring`);
           return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
         }

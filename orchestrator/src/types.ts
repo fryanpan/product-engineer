@@ -1,3 +1,7 @@
+/** Statuses that represent completed/closed tickets — agents should not restart for these. */
+export const TERMINAL_STATUSES = ["merged", "closed", "deferred", "failed"] as const;
+export type TerminalStatus = typeof TERMINAL_STATUSES[number];
+
 export interface TicketEvent {
   type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_mention", "slack_reply"
   source: string;     // "linear", "github", "slack", "api"

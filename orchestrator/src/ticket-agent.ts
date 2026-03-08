@@ -153,8 +153,10 @@ export class TicketAgent extends Container<Bindings> {
 
     if (rows.length > 0) {
       const ids = rows.map(r => r.id);
+      const placeholders = ids.map(() => "?").join(",");
       this.ctx.storage.sql.exec(
-        `DELETE FROM event_buffer WHERE id IN (${ids.join(",")})`,
+        `DELETE FROM event_buffer WHERE id IN (${placeholders})`,
+        ...ids,
       );
       console.log(`[TicketAgent] Drained ${rows.length} buffered events`);
     }

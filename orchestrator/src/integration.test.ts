@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
 import { resolveAgentEnvVars } from "./ticket-agent";
-import type { TicketAgentConfig } from "./types";
+import { TERMINAL_STATUSES, type TicketAgentConfig } from "./types";
 
 describe("Agent Lifecycle Integration", () => {
   describe("Thread Identity Flow", () => {
@@ -44,13 +44,11 @@ describe("Agent Lifecycle Integration", () => {
   });
 
   describe("Terminal State Consistency", () => {
-    // These terminal statuses must be consistent across:
-    // 1. orchestrator.ts handleSlackEvent (thread reply guard)
-    // 2. agent/src/server.ts auto-resume check
-    // 3. orchestrator.ts handleStatusUpdate terminal detection
-    const TERMINAL_STATUSES = ["merged", "closed", "deferred", "failed"];
+    // TERMINAL_STATUSES is the shared constant imported from types.ts.
+    // It is used by orchestrator.ts (handleStatusUpdate, handleSlackEvent)
+    // and must match the inline list in agent/src/server.ts auto-resume.
 
-    test("terminal statuses are well-defined", () => {
+    test("terminal statuses include all expected values", () => {
       expect(TERMINAL_STATUSES).toContain("merged");
       expect(TERMINAL_STATUSES).toContain("closed");
       expect(TERMINAL_STATUSES).toContain("deferred");
@@ -58,10 +56,10 @@ describe("Agent Lifecycle Integration", () => {
       expect(TERMINAL_STATUSES.length).toBe(4);
     });
 
-    test("non-terminal statuses should allow re-activation", () => {
+    test("non-terminal statuses are not in TERMINAL_STATUSES", () => {
       const nonTerminal = ["in_progress", "in_review", "asking", "idle", ""];
       for (const status of nonTerminal) {
-        expect(TERMINAL_STATUSES).not.toContain(status);
+        expect((TERMINAL_STATUSES as readonly string[])).not.toContain(status);
       }
     });
   });
