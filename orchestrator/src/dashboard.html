@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Dashboard - Product Engineer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    header {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h1 { font-size: 24px; color: #333; }
+    .user-info { color: #666; font-size: 14px; }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
+    }
+    button:hover { background: #0056b3; }
+    button.danger { background: #dc3545; }
+    button.danger:hover { background: #c82333; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .section {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .section h2 {
+      font-size: 18px;
+      margin-bottom: 15px;
+      color: #333;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge.warning { background: #fff3cd; color: #856404; }
+    .badge.success { background: #d4edda; color: #155724; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th {
+      text-align: left;
+      padding: 12px;
+      background: #f8f9fa;
+      border-bottom: 2px solid #dee2e6;
+      font-size: 13px;
+      color: #495057;
+      font-weight: 600;
+    }
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #dee2e6;
+      font-size: 14px;
+    }
+    tr:hover { background: #f8f9fa; }
+    .empty {
+      padding: 40px;
+      text-align: center;
+      color: #999;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .status-in_progress { background: #cfe2ff; color: #084298; }
+    .status-pr_open { background: #d1e7dd; color: #0f5132; }
+    .status-asking { background: #fff3cd; color: #664d03; }
+    .status-failed { background: #f8d7da; color: #842029; }
+    .status-merged { background: #d1e7dd; color: #0f5132; }
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    .actions button {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+    a { color: #007bff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .time { color: #6c757d; font-size: 13px; }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #999;
+    }
+    .error {
+      background: #f8d7da;
+      color: #842029;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .refresh-info {
+      color: #6c757d;
+      font-size: 13px;
+      margin-left: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🤖 Agent Dashboard</h1>
+      <div class="user-info" id="userInfo">Loading...</div>
+    </header>
+
+    <div class="controls">
+      <button onclick="refreshData()">🔄 Refresh</button>
+      <button class="danger" onclick="shutdownAll()">���️ Kill All Agents</button>
+      <div class="refresh-info">Auto-refresh: <span id="countdown">30</span>s</div>
+    </div>
+
+    <div id="error" class="error" style="display: none;"></div>
+
+    <div class="section">
+      <h2>
+        ⚠️ Agents Needing Help
+        <span class="badge warning" id="needsHelpCount">0</span>
+      </h2>
+      <div id="needsHelpSection"></div>
+    </div>
+
+    <div class="section">
+      <h2>
+        ✅ Active Agents
+        <span class="badge success" id="activeCount">0</span>
+      </h2>
+      <div id="activeSection"></div>
+    </div>
+  </div>
+
+  <script>
+    let refreshInterval;
+    let countdownInterval;
+    let countdownValue = 30;
+
+    async function fetchData() {
+      const response = await fetch('/api/dashboard/agents', {
+        credentials: 'include'
+      });
+      if (response.status === 401) {
+        window.location.href = '/api/auth/login';
+        return null;
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      }
+      return response.json();
+    }
+
+    async function fetchUserInfo() {
+      const response = await fetch('/api/auth/user', {
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const user = await response.json();
+        document.getElementById('userInfo').textContent = `👤 ${user.email}`;
+      }
+    }
+
+    function formatTime(isoString) {
+      if (!isoString) return 'Never';
+      const date = new Date(isoString);
+      const now = new Date();
+      const diff = Math.floor((now - date) / 1000);
+
+      if (diff < 60) return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      return `${Math.floor(diff / 86400)}d ago`;
+    }
+
+    function formatStatus(status) {
+      const statusMap = {
+        'in_progress': 'In Progress',
+        'pr_open': 'PR Open',
+        'asking': 'Asking',
+        'needs_revision': 'Needs Revision',
+        'failed': 'Failed',
+        'merged': 'Merged',
+        'closed': 'Closed'
+      };
+      return statusMap[status] || status;
+    }
+
+    function renderAgents(agents, containerId) {
+      const container = document.getElementById(containerId);
+      if (agents.length === 0) {
+        container.innerHTML = '<div class="empty">No agents</div>';
+        return;
+      }
+
+      const table = `
+        <table>
+          <thead>
+            <tr>
+              <th>Ticket</th>
+              <th>Product</th>
+              <th>Status</th>
+              <th>Slack Thread</th>
+              <th>Latest Message</th>
+              <th>Last Heartbeat</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${agents.map(agent => `
+              <tr>
+                <td><strong>${agent.id}</strong></td>
+                <td>${agent.product}</td>
+                <td><span class="status-badge status-${agent.status}">${formatStatus(agent.status)}</span></td>
+                <td>
+                  ${agent.slack_thread_ts && agent.slack_channel
+                    ? `<a href="https://slack.com/app_redirect?channel=${agent.slack_channel}&thread_ts=${agent.slack_thread_ts}" target="_blank">View Thread</a>`
+                    : '—'}
+                </td>
+                <td class="time">${formatTime(agent.updated_at)}</td>
+                <td class="time">${formatTime(agent.last_heartbeat)}</td>
+                <td>
+                  <div class="actions">
+                    ${agent.pr_url ? `<a href="${agent.pr_url}" target="_blank"><button>View PR</button></a>` : ''}
+                    <button class="danger" onclick="killAgent('${agent.id}')">Kill</button>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+      container.innerHTML = table;
+    }
+
+    async function refreshData() {
+      try {
+        document.getElementById('error').style.display = 'none';
+        const data = await fetchData();
+        if (!data) return;
+
+        // Separate agents needing help (asking status or stale)
+        const needsHelp = data.agents.filter(a =>
+          a.status === 'asking' ||
+          (a.last_heartbeat && isStale(a.last_heartbeat))
+        );
+        const active = data.agents.filter(a => !needsHelp.includes(a));
+
+        document.getElementById('needsHelpCount').textContent = needsHelp.length;
+        document.getElementById('activeCount').textContent = active.length;
+
+        renderAgents(needsHelp, 'needsHelpSection');
+        renderAgents(active, 'activeSection');
+
+        resetCountdown();
+      } catch (err) {
+        document.getElementById('error').textContent = `Error: ${err.message}`;
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+
+    function isStale(lastHeartbeat) {
+      if (!lastHeartbeat) return false;
+      const diff = Date.now() - new Date(lastHeartbeat).getTime();
+      return diff > 30 * 60 * 1000; // 30 minutes
+    }
+
+    async function killAgent(ticketId) {
+      if (!confirm(`Kill agent for ticket ${ticketId}?`)) return;
+
+      try {
+        const response = await fetch(`/api/dashboard/agents/${ticketId}/kill`, {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (!response.ok) throw new Error(await response.text());
+
+        alert('Agent shutdown requested');
+        await refreshData();
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    }
+
+    async function shutdownAll() {
+      if (!confirm('⚠️ Kill ALL active agents? This will stop all work immediately.')) return;
+
+      try {
+        const response = await fetch('/api/dashboard/agents/shutdown-all', {
+          method: 'POST',
+          credentials: 'include'
+        });
+        if (!response.ok) throw new Error(await response.text());
+
+        const result = await response.json();
+        alert(`Shutdown requested for ${result.total} agents`);
+        await refreshData();
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    }
+
+    function resetCountdown() {
+      countdownValue = 30;
+      document.getElementById('countdown').textContent = countdownValue;
+    }
+
+    function startCountdown() {
+      countdownInterval = setInterval(() => {
+        countdownValue--;
+        document.getElementById('countdown').textContent = countdownValue;
+        if (countdownValue <= 0) {
+          resetCountdown();
+        }
+      }, 1000);
+    }
+
+    // Auto-refresh every 30 seconds
+    refreshInterval = setInterval(refreshData, 30000);
+    startCountdown();
+
+    // Initial load
+    fetchUserInfo();
+    refreshData();
+  </script>
+</body>
+</html>
