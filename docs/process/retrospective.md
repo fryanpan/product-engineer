@@ -1,3 +1,101 @@
+## 2026-03-07 - BC-118: Missing worker routes for cleanup endpoint (PR #64)
+
+**Context:** PR #63 added the `/cleanup-inactive` endpoint to the Orchestrator DO, but it was never exposed through the worker - making it impossible to call via HTTP. The final missing piece to resolve BC-118.
+
+**Root cause:** The cleanup endpoint existed in `orchestrator.ts:728` but had no corresponding route in `index.ts`. Without a worker route, the endpoint was unreachable from external HTTP requests.
+
+**What worked:**
+- Systematic review of the worker routing in `index.ts`
+- Found that `/status` was also missing from the worker (only existed in DO)
+- Added both routes with proper authentication and proxy pattern
+- Clean, minimal fix - just expose what already exists
+
+**What didn't:**
+- PR #63 implemented the cleanup logic but forgot to expose it via the worker
+- No verification that the endpoint was actually callable after implementation
+- Would have caught this immediately with an end-to-end test or manual curl test
+
+**Solution:**
+- Added `POST /api/orchestrator/cleanup-inactive` route to worker
+- Added `GET /api/orchestrator/status` route to worker (also missing)
+- Both require X-API-Key authentication
+- Both proxy to corresponding Orchestrator DO endpoints
+
+**Critical learning:**
+**When adding new Orchestrator DO endpoints, always add the corresponding worker route.**
+
+The pattern:
+1. Implement logic in Orchestrator DO
+2. Add route handler in Orchestrator's `fetch()` switch
+3. Add worker route in `index.ts` that proxies to the DO
+4. Test end-to-end with curl
+
+**Action:**
+- After merge and deploy, run cleanup to shut down 13 stuck agents
+- Monitor container count to verify success
+- Close BC-118 once confirmed
+
+---
+
+## 2026-03-07 - BC-118: Cleanup endpoint for orphaned terminal containers (PR #63)
+
+**Context:** After PR #61 (immediate shutdown) was merged and deployed, user reported 13 agents were STILL stuck running. The fix wasn't working for existing stuck agents.
+
+**Root cause:** The `/shutdown` fix in PR #61 only applies to tickets that transition to terminal states AFTER the fix was deployed. The 13 stuck agents transitioned to terminal states (merged/closed/deferred/failed) BEFORE the fix existed. They got marked `agent_active = 0` in the DB and `terminal = true` in the TicketAgent DO, but their containers never received the `/shutdown` call because that code didn't exist yet.
+
+**Timeline of BC-118:**
+1. **March 6, 22:44** - 20 agents running (first screenshot)
+2. **PR #55** - Added `process.exit(0)` on session completion
+3. **PR #58** - Added session timeout watchdog (2h hard, 30m idle)
+4. **PR #61** - Added `/shutdown` endpoint + `/mark-terminal` invokes it
+5. **March 7, 07:46** - 13 agents STILL running after all fixes (second screenshot)
+6. **Root cause identified** - Fixes were forward-looking only, didn't clean up pre-existing stuck agents
+7. **PR #63** - Added `/cleanup-inactive` endpoint for retroactive cleanup
+
+**What worked:**
+- Screenshot evidence showed containers still running after fix deployment
+- Understanding the timeline: agents became terminal → fix was deployed → agents still stuck
+- Realized the fix was forward-looking only, not retroactive
+- Simple solution: add cleanup endpoint to forcefully shut down all inactive agents
+- Iterative investigation through 4 PRs eventually found all the gaps
+
+**What didn't:**
+- PR #61 didn't consider the existing stuck agents, only future ones
+- No mechanism to clean up orphaned containers from before the fix
+- Deployment of a lifecycle fix doesn't automatically apply to already-stuck instances
+- Each fix addressed one scenario but missed others (session completion, timeout, terminal state, retroactive cleanup)
+
+**Solution:**
+- Add `/cleanup-inactive` endpoint to Orchestrator
+- Queries all tickets with `agent_active = 0`
+- Calls `/mark-terminal` on each TicketAgent DO (which invokes `/shutdown`)
+- Returns summary of shutdown attempts (success/fail per ticket)
+
+**Critical learning:**
+**Lifecycle fixes often need both forward-looking AND retroactive cleanup.**
+
+When fixing a lifecycle bug:
+1. Implement the fix for future instances (PR #61)
+2. Add cleanup mechanism for existing broken instances (PR #63)
+3. Deploy both before declaring the issue resolved
+4. Test cleanup works on production before closing the ticket
+
+**Pattern for lifecycle fixes:**
+- Forward-looking: prevent the problem from happening again
+- Retroactive: clean up existing instances of the problem
+- Verification: confirm both work in production
+
+**Action:**
+- Added `/cleanup-inactive` endpoint (one-time manual cleanup)
+- After merge: deploy and run cleanup to shut down the 13 stuck agents
+- Monitor container count to verify cleanup worked
+- Add to learnings.md: lifecycle fixes need retroactive cleanup
+
+**Files changed:**
+- `orchestrator/src/orchestrator.ts`: Added `cleanupInactiveAgents()` method and `/cleanup-inactive` route
+
+---
+
 ## 2026-03-07 - Fix /agent-status command recognition (Slack command)
 
 **Context:** User tried `@product-engineer /agent-status` but the command didn't trigger. Found the code was still looking for `/pe-status` instead of `/agent-status`.
