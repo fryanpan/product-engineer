@@ -583,9 +583,18 @@ export class Orchestrator extends Container<Bindings> {
       // Terminal states: mark agent as inactive so we don't spawn new agents
       // on deployment-triggered events
       const terminalStates = ["merged", "closed", "deferred", "failed"];
-      if (terminalStates.includes(status)) {
+      // Container shutdown states: mark agent as inactive when container exits
+      const containerShutdownStates = [
+        "agent:session_timeout",
+        "agent:idle_timeout",
+        "agent:container_shutdown",
+        "agent:shutdown_requested",
+        "agent:session_error"
+      ];
+
+      if (terminalStates.includes(status) || containerShutdownStates.includes(status)) {
         updates.push("agent_active = 0");
-        console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
+        console.log(`[Orchestrator] Marking agent inactive for terminal/shutdown state: ${status}`);
 
         // Notify the TicketAgent DO so it marks itself terminal and stops
         // restarting containers on alarm
