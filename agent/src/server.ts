@@ -321,6 +321,32 @@ async function handleShutdown(signal: string) {
 process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 process.on("SIGINT", () => handleShutdown("SIGINT"));
 
+// Drain buffered events from the TicketAgent DO.
+// Events are buffered when the container is unreachable during session transitions.
+// Called after a session starts so messageYielder is available to inject them.
+async function drainBufferedEvents() {
+  try {
+    const drainRes = await fetch(
+      `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketId)}/drain-events`,
+      { headers: { "X-Internal-Key": config.apiKey } },
+    );
+    if (drainRes.ok) {
+      const { events } = (await drainRes.json()) as { events: TicketEvent[] };
+      if (events.length > 0) {
+        console.log(`[Agent] Drained ${events.length} buffered events`);
+        for (const event of events) {
+          if (messageYielder) {
+            const prompt = await buildEventPrompt(event, config.slackBotToken);
+            messageYielder(userMessage(prompt));
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[Agent] Failed to drain buffered events:", err);
+  }
+}
+
 let sessionActive = false;
 let messageYielder: ((msg: SDKUserMessage) => void) | null = null;
 let repoCloned = false;
@@ -697,6 +723,8 @@ app.post("/event", async (c) => {
 
       const prompt = await buildPrompt(taskPayload, config.slackBotToken);
       await startSession(prompt);
+      // Drain any events buffered while the container was unreachable
+      setTimeout(() => drainBufferedEvents(), 2000);
     } else if (messageYielder) {
       const continuationPrompt = await buildEventPrompt(event, config.slackBotToken);
       messageYielder(userMessage(continuationPrompt));
@@ -862,6 +890,8 @@ setTimeout(async () => {
       }
 
       await startSession(resumePrompt);
+      // Drain any events buffered while the container was restarting
+      setTimeout(() => drainBufferedEvents(), 2000);
     } else {
       console.log("[Agent] No existing work branch found — waiting for event");
     }

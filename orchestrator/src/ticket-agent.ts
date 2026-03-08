@@ -120,6 +120,48 @@ export class TicketAgent extends Container<Bindings> {
     throw error;
   }
 
+  // --- Event buffer: stores events that arrive while the container is unreachable ---
+
+  private eventBufferInitialized = false;
+
+  private initEventBuffer() {
+    if (this.eventBufferInitialized) return;
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS event_buffer (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_json TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+    this.eventBufferInitialized = true;
+  }
+
+  private bufferEvent(event: TicketEvent) {
+    this.initEventBuffer();
+    this.ctx.storage.sql.exec(
+      "INSERT INTO event_buffer (event_json) VALUES (?)",
+      JSON.stringify(event),
+    );
+    console.log(`[TicketAgent] Buffered event: ${event.type} for ${event.ticketId}`);
+  }
+
+  private drainEventBuffer(): TicketEvent[] {
+    this.initEventBuffer();
+    const rows = this.ctx.storage.sql.exec(
+      "SELECT id, event_json FROM event_buffer ORDER BY id ASC LIMIT 20"
+    ).toArray() as { id: number; event_json: string }[];
+
+    if (rows.length > 0) {
+      const ids = rows.map(r => r.id);
+      this.ctx.storage.sql.exec(
+        `DELETE FROM event_buffer WHERE id IN (${ids.join(",")})`,
+      );
+      console.log(`[TicketAgent] Drained ${rows.length} buffered events`);
+    }
+
+    return rows.map(r => JSON.parse(r.event_json));
+  }
+
   private isTerminal(): boolean {
     this.initDb();
     const row = this.ctx.storage.sql.exec(
@@ -197,7 +239,7 @@ export class TicketAgent extends Container<Bindings> {
         try {
           // containerFetch auto-starts the container if needed, using this.envVars
           // (set in constructor from SQLite or in setConfig from /initialize)
-          return await this.containerFetch("http://localhost/event", {
+          const res = await this.containerFetch("http://localhost/event", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -205,12 +247,19 @@ export class TicketAgent extends Container<Bindings> {
             },
             body: JSON.stringify(event),
           }, this.defaultPort);
+
+          if (res.ok) return res;
+          if (res.status === 503) {
+            // Container not ready — buffer the event for later drain
+            this.bufferEvent(event);
+            return Response.json({ buffered: true }, { status: 202 });
+          }
+          return res;
         } catch (err) {
-          console.error("[TicketAgent] Container not ready, event may be lost:", err);
-          return Response.json(
-            { error: "Container not ready" },
-            { status: 503 },
-          );
+          // Container unreachable — buffer the event for later drain
+          console.warn("[TicketAgent] Container not ready, buffering event:", err);
+          this.bufferEvent(event);
+          return Response.json({ buffered: true }, { status: 202 });
         }
       }
       case "/mark-terminal": {
@@ -276,6 +325,10 @@ export class TicketAgent extends Container<Bindings> {
         } catch (err) {
           return Response.json({ error: "Container not reachable" }, { status: 503 });
         }
+      }
+      case "/drain-events": {
+        const events = this.drainEventBuffer();
+        return Response.json({ events });
       }
       default:
         return Response.json({ error: "not found" }, { status: 404 });
