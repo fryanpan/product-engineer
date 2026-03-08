@@ -142,13 +142,32 @@ export class TicketAgent extends Container<Bindings> {
       return super.alarm(alarmProps);
     }
 
-    // If this ticket has active work, keep the container alive
     const config = this.getConfig();
     if (config) {
+      // Check orchestrator state — don't restart containers for tickets that are no longer active
+      try {
+        const orchestratorId = this.env.ORCHESTRATOR.idFromName("main");
+        const orchestratorStub = this.env.ORCHESTRATOR.get(orchestratorId);
+        const statusRes = await orchestratorStub.fetch(
+          new Request(`http://internal/ticket-status/${encodeURIComponent(config.ticketId)}`)
+        );
+        if (statusRes.ok) {
+          const status = await statusRes.json<{ agent_active: number; status: string }>();
+          if (status.agent_active === 0) {
+            console.log(`[TicketAgent] Orchestrator says ${config.ticketId} is inactive (status=${status.status}) — marking terminal, skipping restart`);
+            this.markTerminal();
+            return super.alarm(alarmProps);
+          }
+        }
+      } catch (err) {
+        console.warn(`[TicketAgent] Could not check orchestrator status for ${config.ticketId}:`, err);
+        // Fall through to existing container health check
+      }
+
+      // Check container health — mark terminal if session completed/errored
       try {
         const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
         const status = await res.json<{ sessionStatus: string }>();
-        // If session completed or errored, mark terminal so we don't keep restarting
         if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
           console.log(`[TicketAgent] Session ${status.sessionStatus} for ${config.ticketId}, marking terminal`);
           this.markTerminal();
