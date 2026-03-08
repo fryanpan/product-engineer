@@ -1,3 +1,44 @@
+## 2026-03-08 - Add emergency shutdown-all endpoint (PR #66)
+
+**Context:** User requested "clean up all agents…there should be no work active" during a Slack session. The existing `/cleanup-inactive` endpoint only handles agents already marked inactive, not active agents.
+
+**What worked:**
+- Recognized the gap: existing endpoint requires agents to be marked inactive first
+- Simple extension: new `/shutdown-all` endpoint that:
+  1. Marks ALL tickets as `agent_active = 0` (one UPDATE query)
+  2. Calls `/mark-terminal` on each agent DO to trigger shutdown
+  3. Returns detailed results of each shutdown attempt
+- Added both the production endpoint AND an operator-friendly script
+- Pattern reuse: `shutdownAllAgents()` delegates to existing cleanup logic after marking inactive
+- Clear distinction between emergency shutdown (all agents) and cleanup (inactive agents)
+
+**What didn't:**
+- Initial approach tried to find API credentials to run cleanup immediately
+- But deployment is required for the new endpoint, so couldn't provide instant solution
+- Documentation could be clearer on when to use cleanup-inactive vs shutdown-all
+
+**Technical notes:**
+- `/cleanup-inactive` (PR #63): shuts down agents already marked inactive (repair tool)
+- `/shutdown-all` (this PR): marks all active, THEN shuts down (emergency stop)
+- Both require X-API-Key authentication
+- Both return detailed success/failure results per agent
+- Script `scripts/shutdown-all-agents.ts` provides pre-deploy workaround using cleanup-inactive
+
+**Files changed:**
+- `orchestrator/src/orchestrator.ts`: Added `shutdownAllAgents()` method and `/shutdown-all` route
+- `orchestrator/src/index.ts`: Added `POST /api/orchestrator/shutdown-all` worker route
+- `scripts/shutdown-all-agents.ts`: Operator script for checking status and running cleanup
+- `cleanup-all-agents.sh`: Simple bash wrapper (requires API_KEY)
+
+**Learning:**
+When adding operator tools, provide BOTH:
+1. Production API endpoint (requires deploy, but permanent)
+2. Immediate workaround script (uses existing endpoints, runs before deploy)
+
+This gives operators options depending on urgency.
+
+---
+
 ## 2026-03-07 - BC-118: Missing worker routes for cleanup endpoint (PR #64)
 
 **Context:** PR #63 added the `/cleanup-inactive` endpoint to the Orchestrator DO, but it was never exposed through the worker - making it impossible to call via HTTP. The final missing piece to resolve BC-118.
