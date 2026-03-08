@@ -285,10 +285,10 @@ const timeoutWatchdog = setInterval(() => {
     process.exit(0);
   }
 
-  // Idle timeout: 30 minutes without SDK messages AND not actively running
-  if (idleDuration > IDLE_TIMEOUT_MS && sessionStatus !== "running") {
-    console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${sessionStatus} — exiting`);
-    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus}`);
+  // Idle timeout: 30 minutes without any activity (SDK messages or webhook events)
+  if (idleDuration > IDLE_TIMEOUT_MS) {
+    console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m — exiting`);
+    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m msgs=${sessionMessageCount}`);
     clearInterval(heartbeatInterval);
     clearInterval(transcriptBackupInterval);
     clearInterval(timeoutWatchdog);
@@ -660,6 +660,9 @@ app.post("/event", async (c) => {
 
   const event = await c.req.json<TicketEvent>();
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
+
+  // Update last activity time for idle timeout tracking
+  lastMessageTime = Date.now();
 
   try {
     // Capture thread_ts from event so Slack tools reply in-thread
