@@ -1105,13 +1105,21 @@ export class Orchestrator extends Container<Bindings> {
     if (slackEvent.thread_ts) {
       console.log(`[Orchestrator] Thread reply received: thread_ts=${slackEvent.thread_ts} type=${slackEvent.type} user=${slackEvent.user || "unknown"}`);
       const rows = this.ctx.storage.sql.exec(
-        "SELECT id, product FROM tickets WHERE slack_thread_ts = ?",
+        "SELECT id, product, status, agent_active FROM tickets WHERE slack_thread_ts = ?",
         slackEvent.thread_ts,
-      ).toArray() as { id: string; product: string }[];
+      ).toArray() as { id: string; product: string; status: string; agent_active: number }[];
 
       if (rows.length > 0) {
         const ticket = rows[0];
         console.log(`[Orchestrator] Thread reply matched ticket=${ticket.id} product=${ticket.product}`);
+
+        // Don't re-activate terminal tickets
+        const terminalStatuses = ["merged", "closed", "deferred", "failed"];
+        if (terminalStatuses.includes(ticket.status)) {
+          console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.id} (status=${ticket.status}) — ignoring`);
+          return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
+        }
+
         // Re-activate agent on thread reply — user is explicitly engaging
         this.ctx.storage.sql.exec(
           "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
