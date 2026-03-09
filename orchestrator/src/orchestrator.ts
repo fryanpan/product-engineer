@@ -75,8 +75,22 @@ export class Orchestrator extends Container<Bindings> {
   // Always-on: when the SDK's alarm loop fires and the container is dead,
   // restart it before handing control to the base class. This ensures the
   // Slack Socket Mode container self-heals after crashes or deployments.
+  // Also runs the LLM supervisor tick every 5 minutes.
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
+    this.initDb();
     await this.ensureContainerRunning();
+
+    // Schedule next alarm (5 minutes) for supervisor tick
+    this.ctx.storage.setAlarm(Date.now() + 300_000);
+
+    // Run LLM supervisor tick — checks agent health, stale PRs, queued tickets
+    try {
+      await this.runSupervisorTick();
+    } catch (err) {
+      console.error("[Orchestrator] Supervisor tick failed:", err);
+      // Don't let supervisor failures break the alarm loop
+    }
+
     return super.alarm(alarmProps);
   }
 
@@ -582,6 +596,19 @@ export class Orchestrator extends Container<Bindings> {
       return Response.json({ ok: true, ticketId: event.ticketId });
     }
 
+    // CI passed + PR exists → evaluate merge gate (orchestrator decides, not agent)
+    if (event.type === "checks_passed") {
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT pr_url FROM tickets WHERE id = ?", event.ticketId
+      ).toArray()[0] as { pr_url: string | null } | undefined;
+
+      if (ticketRow?.pr_url) {
+        await this.evaluateMergeGate(event.ticketId, event.product);
+        return Response.json({ ok: true, ticketId: event.ticketId });
+      }
+      // No PR yet — route to agent normally
+    }
+
     // Route to TicketAgent for all other event types
     await this.routeToAgent(event);
 
@@ -841,6 +868,270 @@ export class Orchestrator extends Container<Bindings> {
           await this.sendEventToAgent(expandedEvent);
         }
         break;
+      }
+    }
+  }
+
+  /**
+   * LLM Merge Gate — evaluates whether a PR is ready to auto-merge.
+   * Called when CI passes and PR exists for a tracked ticket.
+   */
+  private async evaluateMergeGate(
+    ticketId: string,
+    product: string,
+  ): Promise<void> {
+    const ticketRow = this.ctx.storage.sql.exec(
+      "SELECT * FROM tickets WHERE id = ?", ticketId
+    ).toArray()[0] as Record<string, unknown> | undefined;
+
+    if (!ticketRow?.pr_url) {
+      console.log(`[Orchestrator] No PR URL for ${ticketId}, skipping merge gate`);
+      return;
+    }
+
+    // Load product config directly from SQLite (avoid loadRegistry which calls back to self)
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) {
+      console.log(`[Orchestrator] No product config for ${product}, skipping merge gate`);
+      return;
+    }
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+
+    const engine = this.getDecisionEngine();
+    const assembler = this.getContextAssembler();
+
+    const context = await assembler.forMergeGate({
+      ticketId,
+      identifier: null,
+      title: "",
+      product,
+      pr_url: ticketRow.pr_url as string,
+      branch: (ticketRow.branch_name as string) || "",
+      repo: productConfig.repos[0],
+    });
+
+    let decision;
+    try {
+      decision = await engine.makeDecision("merge-gate", context);
+    } catch (err) {
+      console.error("[Orchestrator] Merge gate LLM call failed:", err);
+      // Don't auto-merge on failure — escalate instead
+      decision = { action: "escalate", reason: "Merge gate LLM call failed", confidence: 0 };
+    }
+
+    // Log the decision
+    await engine.logDecision({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      type: "merge_gate",
+      ticket_id: ticketId,
+      context_summary: `PR: ${ticketRow.pr_url}`,
+      action: decision.action,
+      reason: decision.reason,
+      confidence: decision.confidence || 0,
+    }, {
+      sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+      slackChannel: (ticketRow.slack_channel as string) || undefined,
+      slackThreadTs: (ticketRow.slack_thread_ts as string) || undefined,
+      linearIssueId: ticketId,
+    });
+
+    switch (decision.action) {
+      case "auto_merge":
+        await this.autoMergePR(ticketId, product, ticketRow);
+        break;
+      case "escalate":
+        // Post escalation to Slack
+        if (ticketRow.slack_channel && ticketRow.slack_thread_ts) {
+          await fetch("https://slack.com/api/chat.postMessage", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              channel: ticketRow.slack_channel,
+              text: `\u26A0\uFE0F *Merge Gate \u2014 Human Review Needed*\n${ticketRow.pr_url}\n*Reason:* ${decision.reason}`,
+              thread_ts: ticketRow.slack_thread_ts,
+            }),
+          });
+        }
+        break;
+      case "send_back": {
+        // Route back to agent
+        const sendBackEvent: TicketEvent = {
+          type: "merge_feedback",
+          source: "orchestrator",
+          ticketId,
+          product,
+          payload: { feedback: decision.reason, missing: (decision as unknown as Record<string, unknown>).missing },
+        };
+        await this.sendEventToAgent(sendBackEvent);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Auto-merge a PR via GitHub API (squash merge).
+   */
+  private async autoMergePR(
+    ticketId: string,
+    product: string,
+    ticketRow: Record<string, unknown>,
+  ): Promise<void> {
+    const ghTokens = this.getGithubTokens();
+    const ghToken = ghTokens[product];
+    const prUrl = ticketRow.pr_url as string;
+    if (!ghToken || !prUrl) return;
+
+    const prMatch = prUrl.match(/\/pull\/(\d+)/);
+    if (!prMatch) return;
+
+    // Load repo from product config directly from SQLite
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) return;
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+    const repo = productConfig.repos[0];
+    const prNumber = prMatch[1];
+
+    console.log(`[Orchestrator] Auto-merging PR #${prNumber} on ${repo}`);
+
+    const mergeRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github.v3+json",
+      },
+      body: JSON.stringify({ merge_method: "squash" }),
+    });
+
+    if (mergeRes.ok) {
+      console.log(`[Orchestrator] PR #${prNumber} merged successfully`);
+      // The pr_merged webhook will trigger handleStatusUpdate -> terminal state
+    } else {
+      const errorText = await mergeRes.text();
+      console.error(`[Orchestrator] Failed to merge PR #${prNumber}: ${mergeRes.status} ${errorText}`);
+    }
+  }
+
+  /**
+   * LLM Supervisor — runs on every alarm tick to check system health.
+   * Evaluates active agents, stale PRs, and queued tickets, then takes
+   * action (kill stuck agents, trigger merge evals, escalate, start queued).
+   */
+  private async runSupervisorTick(): Promise<void> {
+    const assembler = this.getContextAssembler();
+    const engine = this.getDecisionEngine();
+
+    const context = await assembler.forSupervisor();
+
+    // Skip LLM call if nothing needs attention
+    if ((context.agentCount as number) === 0 &&
+        (context.stalePRs as unknown[]).length === 0 &&
+        (context.queuedTickets as unknown[]).length === 0) {
+      return;
+    }
+
+    let actions: Array<{ target: string; action: string; reason: string }>;
+    try {
+      const response = await engine.makeDecision("supervisor", context);
+      // Supervisor template asks for a JSON array
+      // The response might be a single object or an array
+      if (Array.isArray(response)) {
+        actions = response;
+      } else {
+        actions = [response as unknown as { target: string; action: string; reason: string }];
+      }
+    } catch (err) {
+      console.error("[Orchestrator] Supervisor LLM call failed:", err);
+      return; // Don't take action on LLM failure
+    }
+
+    for (const action of actions) {
+      if (action.action === "none") continue;
+
+      // Log each action
+      await engine.logDecision({
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        type: "supervisor",
+        ticket_id: action.target !== "system" ? action.target : null,
+        context_summary: `Supervisor: ${action.action} on ${action.target}`,
+        action: action.action,
+        reason: action.reason,
+        confidence: 0,
+      }, {
+        sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+      });
+
+      switch (action.action) {
+        case "kill": {
+          // Mark agent inactive and tell container to shut down
+          if (action.target !== "system") {
+            this.ctx.storage.sql.exec(
+              "UPDATE tickets SET agent_active = 0, status = 'failed', updated_at = datetime('now') WHERE id = ?",
+              action.target,
+            );
+            try {
+              const agentId = this.env.TICKET_AGENT.idFromName(action.target);
+              const agentStub = this.env.TICKET_AGENT.get(agentId);
+              await agentStub.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
+            } catch (err) {
+              console.warn(`[Orchestrator] Failed to kill agent for ${action.target}:`, err);
+            }
+          }
+          break;
+        }
+        case "trigger_merge_eval": {
+          if (action.target !== "system") {
+            const ticketRow = this.ctx.storage.sql.exec(
+              "SELECT product FROM tickets WHERE id = ?", action.target
+            ).toArray()[0] as { product: string } | undefined;
+            if (ticketRow) {
+              await this.evaluateMergeGate(action.target, ticketRow.product);
+            }
+          }
+          break;
+        }
+        case "escalate": {
+          // Post to decisions channel
+          await fetch("https://slack.com/api/chat.postMessage", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              channel: (this.env as Record<string, unknown>).DECISIONS_CHANNEL as string || "#product-engineer-decisions",
+              text: `\u26A0\uFE0F *Supervisor Escalation*\n*Target:* ${action.target}\n*Reason:* ${action.reason}`,
+            }),
+          });
+          break;
+        }
+        case "start_queued": {
+          // Pop the highest-priority ticket from the queue
+          const queuedRow = this.ctx.storage.sql.exec(
+            "SELECT id, ticket_id, payload FROM ticket_queue ORDER BY priority ASC, created_at ASC LIMIT 1"
+          ).toArray()[0] as { id: string; ticket_id: string; payload: string } | undefined;
+          if (queuedRow) {
+            this.ctx.storage.sql.exec("DELETE FROM ticket_queue WHERE id = ?", queuedRow.id);
+            const queuedEvent = JSON.parse(queuedRow.payload) as TicketEvent;
+            await this.handleTicketReview(queuedEvent);
+          }
+          break;
+        }
+        // "restart", "redeliver_events", "defer_new_tickets" — can be added later
       }
     }
   }
