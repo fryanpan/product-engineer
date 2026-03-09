@@ -3,7 +3,7 @@ export const TERMINAL_STATUSES = ["merged", "closed", "deferred", "failed"] as c
 export type TerminalStatus = typeof TERMINAL_STATUSES[number];
 
 export interface TicketEvent {
-  type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_mention", "slack_reply"
+  type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_mention", "slack_reply", "linear_comment"
   source: string;     // "linear", "github", "slack", "api"
   ticketId: string;
   product: string;
@@ -33,6 +33,30 @@ export interface TicketAgentConfig {
   secrets: Record<string, string>; // logical name → binding name
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
   model?: string; // Claude model to use (e.g., "sonnet", "opus", "haiku")
+}
+
+// Decision engine types
+export interface DecisionRequest {
+  type: "ticket_review" | "merge_gate" | "supervisor";
+  context: Record<string, unknown>;
+}
+
+export interface DecisionResponse {
+  action: string;
+  reason: string;
+  confidence: number;
+  model?: string; // For ticket_review: which model to assign
+}
+
+export interface DecisionLog {
+  id: string;
+  timestamp: string;
+  type: "ticket_review" | "merge_gate" | "supervisor";
+  ticket_id: string | null;
+  context_summary: string;
+  action: string;
+  reason: string;
+  confidence: number;
 }
 
 export interface Bindings {
