@@ -365,6 +365,75 @@ This follows Stripe's "70% deterministic / 30% LLM" pattern — most of the valu
 
 ---
 
+## Tool Access by Decision Type
+
+Each decision type and the ticket agents have different tool access based on what they need:
+
+### Orchestrator Decision Engine
+
+| Tool / API | Ticket Review | Merge Gate | Supervisor | Notes |
+| --- | --- | --- | --- | --- |
+| **SQLite** (tickets, decisions, outcomes) | ✅ | ✅ | ✅ | All decisions read/write ticket state |
+| **Slack API** (post messages) | ✅ | ✅ | ✅ | Decisions channel + ticket threads + Linear |
+| **Linear API** (create/update/comment) | ✅ | ✅ | ✅ | Create tickets from Slack, comment decisions |
+| **GitHub API** (PR diff, checks, merge) | — | ✅ | ✅ | Merge gate reads diff + CI; supervisor checks PR state |
+| **Anthropic API** (LLM calls) | ✅ | ✅ | ✅ | Core decision-making |
+| **Container management** (spawn/kill agents) | ✅ | — | ✅ | Ticket review spawns; supervisor kills |
+| **GitHub Actions API** (re-run workflow) | — | ✅ | — | Retry flaky CI |
+
+### Ticket Agents (Claude Code Agent SDK)
+
+| Tool / API | Available | Notes |
+| --- | --- | --- |
+| **Claude Code built-in tools** (Read, Write, Edit, Bash, Grep, Glob) | ✅ | Full code implementation capability |
+| **MCP: notify\_slack** | ✅ | Progress updates in ticket thread |
+| **MCP: ask\_question** | ✅ | Ask clarifying questions (posts to Slack) |
+| **MCP: update\_task\_status** | ✅ | Status updates to orchestrator (phone-home) |
+| **MCP: list\_transcripts / fetch\_transcript** | ✅ | Review past agent work |
+| **MCP: fetch\_slack\_file** | ✅ | Fetch images/files from Slack |
+| **Git** (via Bash) | ✅ | Branch, commit, push |
+| **gh CLI** (via Bash) | ✅ | Create PR, check CI, read reviews |
+| **Merge PRs** | ❌ | Agent delegates merge to orchestrator |
+| **Deploy to staging** | ✅ | Agent can deploy to verify features |
+| **Deploy to production** | ❌ | Orchestrator controls via merge gate |
+
+**Key constraint:** Agents cannot merge PRs or deploy to production. They implement, test, create PRs, deploy to staging for verification, and exit. The orchestrator decides when to merge.
+
+---
+
+## Decision Logging
+
+Every decision is logged to **four places** for maximum visibility:
+
+1. **SQLite ****`decision_log`**** table** — permanent record with full context, for analysis and self-improvement
+2. #product**-engineer-decisions Slack channel** — real-time visibility for the human
+3. **Linear comment on the ticket** — decision history attached to the ticket
+4. **Ticket's Slack thread** — so anyone following the thread sees what happened
+
+```typescript
+interface DecisionLog {
+  id: string;
+  timestamp: string;
+  type: "ticket_review" | "merge_gate" | "supervisor";
+  ticket_id: string | null;
+  context_summary: string;   // Compact summary of inputs
+  action: string;
+  reason: string;
+  confidence: number;
+}
+```
+
+**Slack format example:**
+> **🎫 Ticket Review** — `BC-140: Fix chart rendering`
+> **Action:** Start agent (Sonnet)
+> **Reason:** Clear requirements, single-component bug fix, 4 agents active (capacity ok)
+
+> **✅ Merge Gate** — `BC-140` PR #72
+> **Action:** Auto-merge
+> **Reason:** CI green, staging verified, no hard gates touched, diff matches ticket
+
+---
+
 ## Decision Engine Design
 
 ```typescript
@@ -381,8 +450,8 @@ interface DecisionResponse {
 ```
 
 - **Max 30 seconds** per decision
-- **Log every decision** to SQLite (`decision_log` table)
-- **On API failure** → fall back to current rules-based behavior
+- **Log every decision** to SQLite + Slack + Linear + ticket thread
+- **No fallback to rules-based system** — LLM decisions are the only path. If the API is down, queue the event and retry when it's back.
 - **Model per decision:** Haiku for triage (speed), Sonnet for merge evaluation (quality)
 - **Cost:** ~$0.005-0.05 per decision, ~50 decisions/day = $0.25-2.50/day
 
