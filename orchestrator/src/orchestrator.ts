@@ -1299,8 +1299,10 @@ export class Orchestrator extends Container<Bindings> {
 
     const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
 
-    // Always use the original message ts as thread identity (Slack threads are keyed by parent ts)
-    const slackThreadTs = slackEvent.ts;
+    // If the mention is inside an existing thread, use the thread root ts.
+    // Otherwise, use the mention message ts (which will become the thread root).
+    // Slack threads are keyed by the first message's ts.
+    const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
 
     // Best-effort: post acknowledgment in the thread
     try {
@@ -1312,7 +1314,7 @@ export class Orchestrator extends Container<Bindings> {
         },
         body: JSON.stringify({
           channel: slackEvent.channel,
-          thread_ts: slackEvent.ts,
+          thread_ts: slackThreadTs,
           text: "⏳ Working on it...",
         }),
       });
