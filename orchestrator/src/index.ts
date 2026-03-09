@@ -8,7 +8,11 @@
 import * as Sentry from "@sentry/cloudflare";
 import { Hono } from "hono";
 import { linearWebhook, githubWebhook } from "./webhooks";
+import { dashboardRouter } from "./dashboard";
 import type { Bindings } from "./types";
+import { authHandlers, requireAuth } from "./auth";
+// @ts-ignore - HTML file imported as string
+import dashboardHTML from "./dashboard.html";
 
 // Export DO classes for wrangler
 export { Orchestrator } from "./orchestrator";
@@ -42,6 +46,7 @@ app.get("/health", async (c) => {
   return c.json({ ok: true, service: "product-engineer-worker", orchestrator: doStatus });
 });
 
+app.route("/dashboard", dashboardRouter);
 app.route("/api/webhooks/linear", linearWebhook);
 app.route("/api/webhooks/github", githubWebhook);
 
@@ -387,6 +392,104 @@ app.post("/api/orchestrator/shutdown-all", async (c) => {
   if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/shutdown-all", {
+    method: "POST",
+  }));
+});
+
+// === Dashboard & Auth ===
+
+// Auth routes
+app.get("/api/auth/login", authHandlers.login);
+app.get("/api/auth/callback", authHandlers.callback);
+app.get("/api/auth/user", authHandlers.user);
+app.post("/api/auth/logout", authHandlers.logout);
+
+// Dashboard UI
+app.get("/dashboard", async (c) => {
+  const authResult = await requireAuth(c);
+  if (authResult instanceof Response) return authResult;
+
+  return c.html(dashboardHTML);
+});
+
+// Dashboard API: list active agents
+app.get("/api/dashboard/agents", async (c) => {
+  const authResult = await requireAuth(c);
+  if (authResult instanceof Response) return authResult;
+
+  const orchestrator = getOrchestrator(c.env);
+  const response = await orchestrator.fetch(new Request("http://internal/status"));
+  const data = await response.json<{
+    activeAgents: Array<{
+      id: string;
+      product: string;
+      status: string;
+      last_heartbeat: string | null;
+      created_at: string;
+      updated_at: string;
+      pr_url: string | null;
+      branch_name: string | null;
+      slack_thread_ts: string | null;
+      slack_channel: string | null;
+    }>;
+  }>();
+
+  return c.json({ agents: data.activeAgents });
+});
+
+// Dashboard API: kill a specific agent
+app.post("/api/dashboard/agents/:ticketId/kill", async (c) => {
+  const authResult = await requireAuth(c);
+  if (authResult instanceof Response) return authResult;
+
+  const ticketId = c.req.param("ticketId");
+
+  // Mark agent as inactive in orchestrator
+  const orchestrator = getOrchestrator(c.env);
+  const statusResponse = await orchestrator.fetch(new Request("http://internal/ticket/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticketId, agent_active: 0 }),
+  }));
+
+  // If the orchestrator failed to mark the agent inactive, abort shutdown
+  if (!statusResponse.ok) {
+    let errorBody: string | undefined;
+    try {
+      errorBody = await statusResponse.text();
+    } catch {
+      // ignore body parsing errors
+    }
+
+    return c.json(
+      {
+        ok: false,
+        ticketId,
+        error: "Failed to mark agent inactive in orchestrator",
+        status: statusResponse.status,
+        body: errorBody,
+      },
+      502,
+    );
+  }
+
+  // Request shutdown of the container
+  const id = c.env.TICKET_AGENT.idFromName(ticketId);
+  const agent = c.env.TICKET_AGENT.get(id);
+  await agent.fetch(new Request("http://internal/mark-terminal", {
+    method: "POST",
+  }));
+
+  return c.json({ ok: true, ticketId });
+});
+
+// Dashboard API: kill all agents
+app.post("/api/dashboard/agents/shutdown-all", async (c) => {
+  const authResult = await requireAuth(c);
+  if (authResult instanceof Response) return authResult;
+
   const orchestrator = getOrchestrator(c.env);
   return orchestrator.fetch(new Request("http://internal/shutdown-all", {
     method: "POST",

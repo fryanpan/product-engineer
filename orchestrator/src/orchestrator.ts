@@ -595,20 +595,28 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
-    const { ticketId, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key } = await request.json<{
+    const { ticketId, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, agent_active } = await request.json<{
       ticketId: string;
       status?: string;
       pr_url?: string;
       branch_name?: string;
       slack_thread_ts?: string;
       transcript_r2_key?: string;
+      agent_active?: number;
     }>();
 
     // Log phone-home payloads so they appear in wrangler tail
-    console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""}`);
+    console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
     const updates: string[] = ["updated_at = datetime('now')", "last_heartbeat = datetime('now')"];
-    const values: (string | null)[] = [];
+    const values: (string | number | null)[] = [];
+
+    // Allow explicit control of agent_active flag (for dashboard kill operations)
+    if (agent_active !== undefined) {
+      updates.push("agent_active = ?");
+      values.push(agent_active);
+      console.log(`[Orchestrator] Explicitly setting agent_active=${agent_active} for ticket ${ticketId}`);
+    }
 
     if (status) {
       updates.push("status = ?");
