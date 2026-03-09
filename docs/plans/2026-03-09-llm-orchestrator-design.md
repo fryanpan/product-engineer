@@ -1,1121 +1,537 @@
-# LLM Orchestrator Implementation Plan
+# LLM Orchestrator Design: Event Catalogue & Decision Framework
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+**Goal:** Replace the rules-based orchestrator with LLM-enhanced decision-making that eliminates the 1+ hour/day of human oversight.
 
-**Goal:** Replace the rules-based orchestrator with an LLM-enhanced orchestrator that makes intelligent decisions at key workflow points — event triage, merge gating, lifecycle management, and self-improvement — reducing human oversight from 1+ hour/day to near-zero.
+**Core insight:** The current system has "Smart + Narrow" (TicketAgent sees one ticket deeply) and "Dumb + Wide" (Orchestrator sees all tickets but uses if/else). Nobody has **both intelligence and system-wide awareness**. The LLM Orchestrator gives the wide-scope component actual reasoning ability.
 
-**Architecture:** The Orchestrator DO gains a Decision Engine that makes Anthropic API calls at 5 key decision points. Decisions are async (non-blocking via `ctx.waitUntil()`), logged to SQLite for auditability, and fall back to current rules-based behavior on failure. The TicketAgent's role narrows to implementation only — merge/deploy decisions move to the orchestrator. A periodic supervisor tick (alarm every 5 minutes) reviews system-wide state and takes corrective actions.
-
-**Tech Stack:** Cloudflare Workers (Hono), Durable Objects, SQLite, Anthropic Messages API (direct fetch, no SDK), GitHub REST API.
+**Architecture (unchanged):** Orchestrator DO gains a Decision Engine that makes Anthropic API calls at key decision points. Decisions are async, logged to SQLite, and fall back to rules-based behavior on failure. The TicketAgent remains the implementation engine.
 
 ---
 
-## Intended Workflows
+## Event Catalogue
 
-### Workflow 1: Ticket Lifecycle (New)
-
-```mermaid
-flowchart TD
-    E[Event arrives] --> T{Terminal ticket?}
-    T -->|Yes| IGN[Ignore]
-    T -->|No| TRIAGE[LLM Triage]
-    TRIAGE -->|route| ROUTE[Route to agent]
-    TRIAGE -->|ignore| IGN
-    TRIAGE -->|escalate| SLACK[Notify user in Slack]
-    TRIAGE -->|restart_agent| RESTART[Restart agent container]
-
-    ROUTE --> AGENT[Agent implements]
-    RESTART --> AGENT
-    AGENT --> PR[Creates PR, status: pr_open]
-    PR --> WAIT[Orchestrator waits for CI]
-
-    WAIT --> CI{CI webhook}
-    CI -->|checks_passed| MERGE_EVAL[LLM Merge Evaluation]
-    CI -->|checks_failed| FIX[Send ci_failure to agent]
-    FIX --> AGENT
-
-    MERGE_EVAL -->|merge| AUTO[Orchestrator merges via GitHub API]
-    MERGE_EVAL -->|request_review| REV[Notify user for review]
-    MERGE_EVAL -->|block| BLOCK[Tell agent to fix issues]
-
-    AUTO --> DONE[Status: merged]
-    REV --> REVIEW{Review webhook}
-    REVIEW -->|approved| AUTO
-    REVIEW -->|changes_requested| AGENT
-    BLOCK --> AGENT
-```
-
-### Workflow 2: Periodic Supervisor
-
-```mermaid
-flowchart TD
-    ALARM[Alarm fires every 5min] --> STATE[Gather system state]
-    STATE --> LLM[LLM evaluates all agents]
-    LLM --> ACTIONS{Actions needed?}
-
-    ACTIONS -->|stuck agent| DIAG[Diagnose: restart or shutdown]
-    ACTIONS -->|missed event| REDELIVER[Re-deliver event to agent]
-    ACTIONS -->|stale PR| CHECK[Check CI status, nudge]
-    ACTIONS -->|cost alert| NOTIFY[Notify user]
-    ACTIONS -->|nothing| DONE[Done, sleep 5min]
-
-    DIAG --> EXEC[Execute action]
-    REDELIVER --> EXEC
-    CHECK --> EXEC
-    NOTIFY --> EXEC
-    EXEC --> LOG[Log decision]
-    LOG --> DONE
-```
-
-### Workflow 3: Self-Improvement Loop
-
-```mermaid
-flowchart TD
-    TERMINAL[Ticket reaches terminal state] --> RECORD[Record outcome summary]
-    RECORD --> OUTCOMES[(Outcomes table)]
-
-    DAILY[Daily audit trigger] --> REVIEW[LLM reviews recent outcomes]
-    REVIEW --> PATTERNS{Patterns found?}
-
-    PATTERNS -->|yes| PROPOSE[Propose skill changes]
-    PROPOSE --> SLACK[Post to Slack for approval]
-    SLACK --> APPROVE{User approves?}
-    APPROVE -->|yes| APPLY[Apply changes to skills]
-    APPROVE -->|no| LOG[Log rejection, learn from it]
-
-    PATTERNS -->|no| DONE[No changes needed]
-```
+Every event that flows through the system, with real examples and how the LLM should reason about them.
 
 ---
 
-## Key Decision Points
+### 1. Ticket Creation (`ticket_created`)
 
-### Decision 1: Event Triage
+**Source:** Linear webhook (issue create, assigned to agent)
+**Current handling:** If assigned to agent email AND not terminal → create ticket row, route to agent, select model by keyword heuristic
+**Frequency:** ~3-10/day
 
-| Aspect | Detail |
-|--------|--------|
-| **When** | Every incoming event (webhook or Slack) |
-| **Current behavior** | If/else: terminal → ignore, else → route to agent |
-| **New behavior** | Fast path for obvious cases (terminal, duplicate), LLM for ambiguous cases |
-| **LLM input** | Event type, ticket state, agent status, recent events for this ticket |
-| **LLM output** | `route` / `ignore` / `escalate` / `restart_agent` + reasoning |
-| **Fallback** | If LLM fails or times out (10s), use current rules-based logic |
-| **Model** | Haiku (fast, cheap — this is high-volume) |
+#### Real Examples
 
-**Examples of decisions the LLM makes better than rules:**
-- "This CI failure is for a check that always fails (flaky). Ignore it."
-- "This PR review comment is from Copilot and is nitpicky. Route to agent but mark as low-priority."
-- "This is a post-merge webhook (deploy succeeded). The ticket is merged. Ignore."
-- "This Slack mention is in a channel not registered to any product, but the user is asking about a specific ticket. Escalate."
+**Example A: BC-125 (Agent Dashboard with Google OAuth)**
+- Linear ticket created, priority 2 (High), labels: `feature`
+- Title: "Agent Dashboard with Google OAuth"
+- Orchestrator created ticket, selected Sonnet (medium complexity), routed to TicketAgent
+- Agent implemented full OAuth flow, dashboard UI, deployment
+- Result: **PR #67 merged** — took ~45 minutes, worked well
+- **Decision was correct.** Standard routing worked fine.
 
-### Decision 2: Merge Evaluation
+**Example B: BC-133 (Fix Slack Threading)**
+- Linear ticket, priority 2, labels: `bug`
+- Title: "Fix Slack threading — replies go to ticket thread"
+- Orchestrator routed to agent, selected Sonnet
+- Agent found the bug, fixed it, but the fix was incomplete — needed 3 separate sessions (commits edf0236, 9b014f6, 9c79c4c) to fully resolve
+- Result: **PR #69 merged** — took multiple sessions across 2 days
+- **What went wrong?** Nothing wrong with triage. The issue was that the agent didn't fully test the fix before declaring done. The orchestrator can't help here — this is TicketAgent quality.
 
-| Aspect | Detail |
-|--------|--------|
-| **When** | Agent sets status to `pr_open` AND `checks_passed` webhook arrives |
-| **Current behavior** | Agent decides autonomously based on change category |
-| **New behavior** | Orchestrator evaluates with full context before merging |
-| **LLM input** | PR diff summary, CI status, review comments, change categories, deployment context, recent merge outcomes |
-| **LLM output** | `merge` / `request_review` / `fix_issues` / `block` + reasoning |
-| **Fallback** | If LLM fails, request_review (conservative default) |
-| **Model** | Sonnet (needs good judgment) |
+**Example C: BC-118 (Agent Container Cleanup — investigation ticket)**
+- Linear ticket created as investigation: "20 agents running, need cleanup"
+- Orchestrator routed normally
+- Agent began investigating, found 5 separate root causes, created 5 PRs (#55, #58, #61, #63, #64)
+- Result: **Closed after manual coordination** — took days, required human oversight at every step
+- **What went wrong?** This was a *meta-ticket about the orchestration system itself*. The agent couldn't fix the system it was running on. An LLM orchestrator should recognize self-referential tickets and escalate immediately: "This ticket is about the orchestrator infrastructure. I can't fix my own container lifecycle. Escalating to human."
 
-**What the LLM checks:**
-1. **CI green?** — Fetched via GitHub API, not trusted from agent
-2. **Open review comments?** — Any unresolved threads or requested changes
-3. **Diff risk** — Not just category (CSS vs API) but actual content analysis
-4. **Recent history** — "Last 3 auto-merges from this repo had issues" → be more cautious
-5. **Deployment context** — "It's Friday evening" → request review instead of auto-merge
+**Example D: Slack-triggered ticket (hypothetical from workflows.md)**
+- User @mentions agent: "Fix the BMI chart — it's showing wrong values"
+- Creates `slack-{ts}` ticket ID, routes to agent
+- Agent clones repo, reads code, fixes chart, creates PR, auto-merges
+- Result: **Merged in 15 minutes**
+- **Decision was correct.** Simple, well-scoped task.
 
-### Decision 3: Agent Lifecycle
+#### How Should the LLM Decide?
 
-| Aspect | Detail |
-|--------|--------|
-| **When** | Every 5-minute supervisor tick |
-| **Current behavior** | Heartbeat detection (report only), no auto-action |
-| **New behavior** | LLM evaluates each agent and takes action |
-| **LLM input** | Agent status, time since last heartbeat, last tool call, PR state, CI state |
-| **LLM output** | Per-agent: `healthy` / `restart` / `shutdown` / `notify_user` / `send_event` |
-| **Fallback** | If LLM fails, current report-only behavior |
-| **Model** | Haiku (fast, runs every 5min) |
+The LLM triage gets: event type, ticket metadata (title, description, priority, labels), current system state (how many agents running, any stuck), and the product config.
 
-**Examples:**
-- "Agent idle for 20 min, PR has 3 unaddressed Copilot comments → send pr_review_comment events"
-- "Agent idle for 45 min, no PR, last tool was `git push` 40 min ago → shutdown, mark failed"
-- "Agent running for 100 min, 50 tool calls, still implementing → healthy, no action"
-- "Agent session ended 5 min ago, PR merged, container still alive → shutdown"
+**Decision output:** `{ action: "route" | "ignore" | "escalate" | "defer", model: "haiku" | "sonnet" | "opus", reason: string }`
 
-### Decision 4: CI/Review Response
+**Key reasoning the LLM should apply:**
 
-| Aspect | Detail |
-|--------|--------|
-| **When** | CI failure, review comment, or deploy failure arrives for a ticket whose agent has exited |
-| **Current behavior** | Event goes to DO buffer, agent never restarts to drain it |
-| **New behavior** | Orchestrator detects "agent is gone" and decides what to do |
-| **LLM input** | Event details, ticket state, whether agent is alive, time since last activity |
-| **LLM output** | `restart_agent` / `notify_user` / `ignore` |
-| **Fallback** | Restart agent (most events need action) |
-| **Model** | Haiku |
+1. **Is this a self-referential ticket?** (mentions orchestrator, container, agent lifecycle, deployment pipeline) → **Escalate.** The agent can't fix its own infrastructure.
 
-### Decision 5: Outcome Review (Self-Improvement)
+2. **Is this a duplicate of an active ticket?** Compare title/description against active tickets. If substantially similar → **Ignore** and note in Slack: "This looks like a duplicate of [active ticket]. Ignoring."
 
-| Aspect | Detail |
-|--------|--------|
-| **When** | Daily (configurable), or on-demand |
-| **Current behavior** | None — no automated review |
-| **New behavior** | LLM reviews recent outcomes, proposes improvements |
-| **LLM input** | All terminal tickets from last 24h: ticket, outcome, cost, time, any issues |
-| **LLM output** | Observations, proposed skill changes, priority recommendations |
-| **Fallback** | Skip if LLM fails |
-| **Model** | Sonnet (needs deep analysis) |
+3. **Is the system overloaded?** If 5+ agents already running, consider deferring low-priority tickets. The LLM can reason about resource pressure in a way rules can't.
+
+4. **Model selection should be richer than keyword matching.** Current heuristic scores keywords like "architecture" and "typo." The LLM should read the actual description and assess: How many files will this touch? Does it require cross-system changes? Is there ambiguity in the requirements? A "simple-sounding" ticket with vague requirements needs Opus more than a complex-sounding ticket with clear specs.
+
+5. **Does this ticket need clarification before starting?** If the description is too vague to act on, the orchestrator should ask for clarification in Slack BEFORE spawning an agent. Current behavior wastes a container on vague tickets.
+
+**What this replaces:** `model-selection.ts` keyword scoring, hardcoded `isAssignedToAgent` check, simple terminal-state guard.
 
 ---
 
-## How Decisions Are Made
+### 2. PR Review Events (`pr_review`, `pr_review_comment`, `pr_comment`)
 
-### Decision Engine Architecture
+**Source:** GitHub webhook (review submitted, comment on PR)
+**Current handling:** Extract branch → extract task ID → route event to agent. No filtering, no intelligence.
+**Frequency:** ~2-5/day per active ticket
 
-```mermaid
-flowchart LR
-    subgraph Orchestrator DO
-        HE[handleEvent] --> DE[Decision Engine]
-        HS[handleStatusUpdate] --> DE
-        ALARM[alarm / supervisor] --> DE
+#### Real Examples
 
-        DE --> API[Anthropic API call]
-        API --> PARSE[Parse structured response]
-        PARSE --> LOG[Log to decisions table]
-        LOG --> ACT[Execute action]
+**Example A: BC-125 Copilot Review — 15 items**
+- Copilot submitted automated review with 15 suggestions on PR #67
+- Event forwarded to agent as `pr_review` with `review_state: "commented"` and `review_body`
+- Agent received all 15 items, addressed them in one commit (fa9be54)
+- Result: **Fixed all items, merged** — worked well
+- **Decision was correct.** But the current system sends ALL review comments to the agent even if they're bot-generated noise. An LLM orchestrator could filter: "These are automated style suggestions, not human feedback. Route to agent but note: 'These are automated suggestions — fix what's valid, skip what's noise.'"
 
-        API -->|timeout/error| FB[Fallback: rules-based]
-        FB --> ACT
-    end
-```
+**Example B: Copilot Review on PR with no meaningful feedback**
+- Copilot submits "LGTM" review with `review_state: "approved"` and empty body
+- Current system: Routes to agent, agent wakes up, reads empty review, does nothing useful, wastes a turn
+- **What went wrong?** Empty/trivial approvals from bots should be handled without waking the agent. An LLM orchestrator should recognize: "This is an automated approval with no action items. If checks pass, proceed to merge evaluation."
 
-### Prompt Structure
+**Example C: Human review requesting changes**
+- User reviews PR, requests specific code changes
+- Event forwarded to agent
+- Agent reads feedback, implements changes, pushes, notifies Slack
+- **Decision was correct.** Human reviews with `changes_requested` should always route to agent.
 
-Each decision type has a system prompt + structured user message:
+**Example D: Review comment on a merged PR**
+- After PR merges, someone leaves a comment
+- GitHub sends `issue_comment` event
+- Current system: Extracts branch, finds task ID, looks up ticket... which is already `merged` (terminal)
+- Orchestrator ignores because terminal state check catches it
+- **Decision is correct** but for wrong reason. An LLM should recognize: "This is a post-merge comment. If it describes a bug, create a new ticket. If it's just feedback, acknowledge in Slack."
 
-```
-System: You are the orchestrator for a software engineering agent system.
-You make decisions about event routing, merge gating, and agent lifecycle.
-Respond with JSON only. Be concise. Default to the safe/conservative option when unsure.
+#### How Should the LLM Decide?
 
-User:
-## Decision: {type}
+**Decision output:** `{ action: "route_to_agent" | "auto_handle" | "ignore" | "create_followup", reason: string }`
 
-## Context
-{structured context: ticket state, agent status, event details}
+**Key reasoning:**
 
-## Recent History
-{last 5 decisions for this ticket}
+1. **Who is the reviewer?** Bot (Copilot, CodeRabbit) vs human. Bot reviews with only "LGTM" → auto-handle (skip agent, proceed to merge evaluation). Bot reviews with specific changes → route to agent but label as "automated suggestions."
 
-## Question
-{specific question for this decision type}
+2. **What state is the review?** `approved` → trigger merge evaluation (don't need agent). `changes_requested` → always route to agent. `commented` → depends on content (substantive feedback vs drive-by comment).
 
-Respond with:
-{"action": "...", "reasoning": "...", "confidence": 0.0-1.0}
-```
+3. **Is the PR already merged?** Post-merge feedback should create a followup ticket, not re-activate a dead agent.
 
-### Latency Budget
-
-| Decision | Model | Target Latency | Blocking? |
-|----------|-------|---------------|-----------|
-| Event triage | Haiku | <5s | No (waitUntil) |
-| Merge evaluation | Sonnet | <30s | No (async after webhook) |
-| Lifecycle check | Haiku | <10s | No (alarm handler) |
-| CI/review response | Haiku | <5s | No (waitUntil) |
-| Outcome review | Sonnet | <60s | No (scheduled) |
-
-### Cost Estimate
-
-- Haiku calls: ~$0.001/call × ~50 calls/day = ~$0.05/day
-- Sonnet calls: ~$0.01/call × ~10 calls/day = ~$0.10/day
-- Total: ~$0.15/day (~$4.50/month) — negligible vs current agent costs
+4. **How many review rounds have happened?** If this is the 4th review cycle, the agent may be going in circles. LLM should check: "Has the same feedback been given twice? If so, escalate to human."
 
 ---
 
-## Edge Cases
+### 3. CI/Check Events (`checks_passed`, `checks_failed`, `ci_failure`, `workflow_failure`)
 
-| Scenario | Handling |
-|----------|---------|
-| LLM API down | Fallback to rules-based behavior, log the failure |
-| LLM returns invalid JSON | Parse error → fallback, log with raw response |
-| LLM says "merge" but CI is actually failing | Double-check CI via GitHub API AFTER LLM decision, override if mismatch |
-| Two events arrive simultaneously | Each gets its own decision call, decisions are idempotent |
-| Alarm fires during active decision | Alarm skips tickets with pending decisions |
-| Agent reports "merged" but orchestrator didn't approve | Accept it (agent has shell access), but log the discrepancy |
-| Deploy webhook arrives after merge | Terminal ticket check prevents re-spawn (existing behavior) |
-| Orchestrator deploy during LLM call | waitUntil completes before DO hibernates |
-| Self-improvement proposes bad skill change | All changes require human approval via Slack |
+**Source:** GitHub webhook (`check_suite`, `check_run`, `workflow_run`)
+**Current handling:** Only routes failures; ignores successes (except `check_suite` which routes both). No merge triggering on success.
+**Frequency:** ~5-20/day (multiple checks per push)
 
----
+#### Real Examples
 
-## Tasks
+**Example A: Tests pass after agent push**
+- Agent pushes fix, CI runs, `check_suite` completes with `conclusion: "success"`
+- Current: `checks_passed` event routed to agent
+- Agent receives it but has no clear instruction on what to do — the agent prompt for `ci_status` just says "If it passed, continue with the workflow"
+- **What went wrong?** The orchestrator should own the merge decision. When CI passes, the orchestrator should evaluate whether to merge — not send a vague prompt to the agent.
 
-### Task 1: Decision Engine Core
+**Example B: CI failure — agent fixes and pushes again**
+- Agent creates PR, CI fails due to test regression
+- `ci_failure` event sent to agent with check name, conclusion, output summary
+- Agent reads failure, fixes code, pushes again
+- CI passes on second attempt
+- Result: **Eventually merged** — but added latency. The agent had to wake up, parse CI output, fix, push.
+- **Decision was mostly correct.** But the CI failure event currently only includes `output_title` and `output_summary` — often not enough to diagnose. The event should include the actual failure logs or a link the agent can fetch.
 
-**Files:**
-- Create: `orchestrator/src/decision-engine.ts`
-- Modify: `orchestrator/src/orchestrator.ts` (add decisions table, instantiate engine)
-- Test: `orchestrator/src/decision-engine.test.ts`
+**Example C: Flaky test / external service timeout**
+- CI fails due to intermittent network issue, not code problem
+- Current: Agent wakes up, reads vague failure output, tries to "fix" code that isn't broken
+- Result: **Wasted agent turns and money**
+- **What should happen?** LLM orchestrator should recognize: "This is a flaky failure (network timeout, not assertion failure). Retry CI rather than waking the agent." It can distinguish flaky failures by checking: (1) Has this check failed before on other branches? (2) Is the failure message about timeouts/connections rather than assertions? (3) Did the same check pass recently?
 
-**Step 1: Write the decision engine module**
+**Example D: Copilot review check suite vs CI test check suite**
+- GitHub sends separate `check_suite` events for Copilot review, CI tests, and deploy previews
+- Current system: Treats all check suites the same way
+- **What should happen?** The orchestrator should distinguish: Copilot review completion → check for review comments. CI test completion → evaluate merge readiness. Deploy preview completion → note URL for testing.
 
-Create `orchestrator/src/decision-engine.ts` with:
+#### How Should the LLM Decide?
 
-```typescript
-/**
- * LLM-powered decision engine for the orchestrator.
- * Makes Anthropic API calls at key decision points.
- * Falls back to rules-based behavior on failure.
- */
+**Decision output:** `{ action: "evaluate_merge" | "route_failure_to_agent" | "retry_ci" | "ignore" | "escalate", reason: string }`
 
-export interface DecisionContext {
-  ticketId: string;
-  ticketState?: { status: string; agent_active: number; pr_url?: string; created_at: string };
-  event?: { type: string; source: string; payload: unknown };
-  agentHealth?: { lastHeartbeat: string | null; sessionStatus: string; messageCount: number };
-  systemState?: { activeAgentCount: number; staleAgentCount: number };
-  recentDecisions?: Array<{ action: string; reasoning: string; created_at: string }>;
-}
+**Key reasoning:**
 
-export type TriageAction = "route" | "ignore" | "escalate" | "restart_agent";
-export type MergeAction = "merge" | "request_review" | "fix_issues" | "block";
-export type LifecycleAction = "healthy" | "restart" | "shutdown" | "notify_user" | "send_event";
+1. **On success:** Don't route to agent. Evaluate merge readiness directly. Check: Are ALL required checks passing? Is there an approved review? Are there unresolved review comments? If all green → merge (or request review for high-risk changes).
 
-export interface Decision<T extends string = string> {
-  action: T;
-  reasoning: string;
-  confidence: number;
-}
+2. **On failure — is this flaky?** Check failure message content. Network timeouts, "service unavailable", rate limits → retry CI. Assertion failures, type errors, lint failures → route to agent.
 
-export class DecisionEngine {
-  constructor(
-    private apiKey: string,
-    private gatewayConfig?: { account_id: string; gateway_id: string } | null,
-  ) {}
+3. **On failure — how many retries?** First failure → route to agent. Same test failing 3+ times → escalate to human: "Agent has failed to fix this test after 3 attempts."
 
-  async triageEvent(ctx: DecisionContext): Promise<Decision<TriageAction>> {
-    // ... implementation
-  }
-
-  async evaluateMerge(ctx: DecisionContext & {
-    ciStatus: string;
-    reviewComments: string[];
-    diffSummary: string;
-  }): Promise<Decision<MergeAction>> {
-    // ... implementation
-  }
-
-  async evaluateLifecycle(agents: Array<DecisionContext & {
-    minutesSinceHeartbeat: number;
-    minutesRunning: number;
-  }>): Promise<Array<{ ticketId: string } & Decision<LifecycleAction>>> {
-    // ... implementation
-  }
-
-  async reviewOutcomes(outcomes: Array<{
-    ticketId: string;
-    product: string;
-    status: string;
-    costUsd: number;
-    durationMinutes: number;
-    issues?: string;
-  }>): Promise<{ observations: string[]; proposedChanges: string[]; priority: string }> {
-    // ... implementation
-  }
-
-  private async callAnthropic(
-    model: string,
-    system: string,
-    userMessage: string,
-    maxTokens?: number,
-    timeoutMs?: number,
-  ): Promise<string> {
-    // Direct fetch to Anthropic API (or AI Gateway if configured)
-    // With timeout and error handling
-  }
-
-  private parseJsonResponse<T>(raw: string, fallback: T): T {
-    // Safe JSON parsing with fallback
-  }
-}
-```
-
-Key implementation details:
-- `callAnthropic()` uses `fetch()` directly (no SDK — this is a Cloudflare Worker)
-- Route through AI Gateway if `gatewayConfig` is set (use the same pattern as `ticket-agent.ts:51`)
-- Base URL: `gatewayConfig ? \`https://gateway.ai.cloudflare.com/v1/${account_id}/${gateway_id}/anthropic\` : "https://api.anthropic.com"`
-- All methods have a timeout (default 10s for Haiku, 30s for Sonnet)
-- All methods return a fallback decision on error (never throw)
-- Model IDs: `"claude-haiku-4-5-20251001"` for fast decisions, `"claude-sonnet-4-6-20250514"` for complex ones
-
-**Step 2: Write tests for the decision engine**
-
-Create `orchestrator/src/decision-engine.test.ts`:
-- Mock fetch to simulate Anthropic API responses
-- Test each decision type with various contexts
-- Test timeout/error fallback behavior
-- Test JSON parsing edge cases (malformed, missing fields)
-- Test that AI Gateway URL is constructed correctly when configured
-
-**Step 3: Add decisions table to orchestrator**
-
-In `orchestrator/src/orchestrator.ts`, add to `initDb()`:
-
-```sql
-CREATE TABLE IF NOT EXISTS decisions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_id TEXT,
-  decision_type TEXT NOT NULL,
-  action TEXT NOT NULL,
-  reasoning TEXT,
-  confidence REAL,
-  model TEXT,
-  latency_ms INTEGER,
-  input_summary TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_decisions_ticket ON decisions(ticket_id);
-CREATE INDEX IF NOT EXISTS idx_decisions_type ON decisions(decision_type, created_at);
-```
-
-**Step 4: Add outcome tracking table**
-
-In `orchestrator/src/orchestrator.ts`, add to `initDb()`:
-
-```sql
-CREATE TABLE IF NOT EXISTS outcomes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ticket_id TEXT NOT NULL,
-  product TEXT NOT NULL,
-  final_status TEXT NOT NULL,
-  duration_minutes INTEGER,
-  cost_usd REAL,
-  issues TEXT,
-  summary TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-```
-
-**Step 5: Instantiate DecisionEngine in Orchestrator**
-
-Add `private decisionEngine: DecisionEngine` field to the Orchestrator class. Initialize in constructor using `this.env.ANTHROPIC_API_KEY` and gateway config loaded from settings.
-
-**Step 6: Add helper to log decisions**
-
-```typescript
-private logDecision(
-  ticketId: string | null,
-  type: string,
-  decision: Decision,
-  model: string,
-  latencyMs: number,
-  inputSummary: string,
-) {
-  this.ctx.storage.sql.exec(
-    `INSERT INTO decisions (ticket_id, decision_type, action, reasoning, confidence, model, latency_ms, input_summary)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ticketId, type, decision.action, decision.reasoning, decision.confidence, model, latencyMs, inputSummary,
-  );
-}
-```
-
-**Step 7: Run tests**
-
-Run: `cd orchestrator && bun test`
-
-**Step 8: Commit**
-
-```bash
-git add orchestrator/src/decision-engine.ts orchestrator/src/decision-engine.test.ts orchestrator/src/orchestrator.ts
-git commit -m "feat: add LLM decision engine core with Anthropic API client"
-```
+4. **Which check is this?** Not all checks matter equally. A Copilot review "check" completing doesn't mean CI passed. The orchestrator needs to track which checks are required for merge.
 
 ---
 
-### Task 2: LLM Event Triage
+### 4. PR Merge Events (`pr_merged`)
 
-**Files:**
-- Modify: `orchestrator/src/orchestrator.ts` (handleEvent, routeToAgent)
-- Modify: `orchestrator/src/decision-engine.ts` (triageEvent implementation)
-- Test: `orchestrator/src/decision-engine.test.ts` (triage-specific tests)
+**Source:** GitHub webhook (PR closed + merged)
+**Current handling:** Route event to agent → agent updates status to `merged` → orchestrator marks terminal → container shuts down
+**Frequency:** ~2-5/day
 
-**Step 1: Implement triageEvent in decision engine**
+#### Real Examples
 
-The triage prompt should include:
-- Event type and source
-- Current ticket state (if exists)
-- Whether agent is alive (heartbeat, session status)
-- Recent events for this ticket (last 5)
-- System context (how many active agents, time of day)
+**Example A: Agent auto-merges its own PR (BC-125)**
+- Agent finished dashboard, created PR, CI passed, agent ran `gh pr merge --squash`
+- GitHub sends `pr_merged` webhook
+- Orchestrator receives it, forwards to agent
+- Agent gets event, calls `update_task_status(merged)`, does retro, exits
+- **Decision was correct** but the handshake is redundant. The agent already knows it merged — it initiated the merge. The webhook is just confirmation.
 
-System prompt:
-```
-You are the orchestrator for a software engineering agent system.
-You decide whether incoming events should be routed to agents, ignored, or escalated to the user.
+**Example B: Human merges agent's PR**
+- Agent created PR, requested review, human approved and merged
+- GitHub sends `pr_merged` webhook
+- Orchestrator receives, forwards to agent
+- Agent gets event, updates status, does retro
+- **Decision was correct.** The agent needs this event to know it can wrap up.
 
-Guidelines:
-- Terminal tickets (merged, closed, failed, deferred) → always ignore
-- Post-merge webhooks (deploy status, check runs after merge) → ignore
-- CI failures for active tickets → route to agent (restart if needed)
-- PR reviews/comments → route to agent (restart if needed)
-- Slack mentions → route (create new ticket or route to existing)
-- Duplicate events (same type within 60s) → ignore
-- When unsure → escalate to user via Slack
-```
+**Example C: PR merged after container died (post-BC-118 scenario)**
+- Agent created PR, container timed out before merge happened
+- Human merged PR manually later
+- GitHub sends `pr_merged` webhook
+- Orchestrator receives it, looks up ticket... ticket might still be `pr_open` with `agent_active = 1`
+- Routes to TicketAgent, but container is dead
+- Event gets buffered in TicketAgent DO's event_buffer table
+- **What went wrong?** The orchestrator should handle `pr_merged` itself — update status to `merged`, mark terminal, notify Slack — WITHOUT needing the agent container. The agent is just the implementation engine; the orchestrator should own state transitions.
 
-Response format:
-```json
-{"action": "route|ignore|escalate|restart_agent", "reasoning": "brief explanation", "confidence": 0.0-1.0}
-```
+#### How Should the LLM Decide?
 
-**Step 2: Add fast-path bypass in handleEvent**
+**Decision output:** `{ action: "finalize" | "route_to_agent", reason: string }`
 
-Before calling the LLM, check for obvious cases that don't need LLM:
-- Terminal ticket → ignore (existing behavior, keep it)
-- `slack_reply` for known active ticket → route immediately (no triage needed)
-- New `ticket_created` event → route immediately (always process new tickets)
+**Key reasoning:**
 
-Only call LLM triage for:
-- GitHub events (CI, reviews, deploys) where the right action isn't obvious
-- Events for tickets where the agent is no longer alive
-- Events that might be duplicates or noise
+1. **`pr_merged`**** is a terminal event.** The orchestrator should handle it directly: update ticket to `merged`, mark `agent_active = 0`, notify Slack, shut down container. No need to route to agent first.
 
-**Step 3: Integrate triage into handleEvent**
+2. **If agent is alive:** Also send event so agent can do a brief retro. But don't DEPEND on the agent — the state transition should happen regardless.
 
-```typescript
-private async handleEvent(request: Request): Promise<Response> {
-  const event = await request.json<TicketEvent>();
-  event.ticketId = sanitizeTicketId(event.ticketId);
-
-  // Fast path: terminal tickets (existing behavior)
-  const existing = this.getTicket(event.ticketId);
-  if (existing && TERMINAL_STATUSES.includes(existing.status)) {
-    return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
-  }
-
-  // Fast path: new tickets and Slack replies always route
-  if (event.type === "ticket_created" || event.type === "slack_mention") {
-    return this.routeEvent(event);
-  }
-  if (event.type === "slack_reply" && existing) {
-    return this.routeEvent(event);
-  }
-
-  // LLM triage for everything else
-  const start = Date.now();
-  const decision = await this.decisionEngine.triageEvent({
-    ticketId: event.ticketId,
-    ticketState: existing,
-    event: { type: event.type, source: event.source, payload: event.payload },
-    agentHealth: await this.getAgentHealth(event.ticketId),
-    recentDecisions: this.getRecentDecisions(event.ticketId, 5),
-  });
-  this.logDecision(event.ticketId, "triage", decision, "haiku", Date.now() - start, event.type);
-
-  switch (decision.action) {
-    case "route":
-      return this.routeEvent(event);
-    case "restart_agent":
-      // Re-activate agent, then route
-      this.ctx.storage.sql.exec("UPDATE tickets SET agent_active = 1 WHERE id = ?", event.ticketId);
-      return this.routeEvent(event);
-    case "escalate":
-      await this.escalateToSlack(event, decision.reasoning);
-      return Response.json({ ok: true, escalated: true });
-    case "ignore":
-    default:
-      return Response.json({ ok: true, ignored: true, reason: decision.reasoning });
-  }
-}
-```
-
-**Step 4: Add `escalateToSlack` helper**
-
-Posts to the ticket's Slack thread (or the product's default channel) with the event details and the LLM's reasoning for escalation.
-
-**Step 5: Add `getAgentHealth` helper**
-
-Fetches the TicketAgent DO's container status (calls `/status`) and returns heartbeat info. Wraps in try/catch — if container is unreachable, returns `{ alive: false }`.
-
-**Step 6: Write triage tests**
-
-Test cases:
-- CI failure for active agent → route
-- CI failure for dead agent → restart_agent
-- Post-merge deploy webhook → ignore
-- Duplicate CI failure within 60s → ignore
-- Unknown event type → escalate
-- LLM timeout → fallback to route (conservative)
-
-**Step 7: Run tests**
-
-Run: `cd orchestrator && bun test`
-
-**Step 8: Commit**
-
-```bash
-git add orchestrator/src/orchestrator.ts orchestrator/src/decision-engine.ts orchestrator/src/decision-engine.test.ts
-git commit -m "feat: add LLM event triage to orchestrator"
-```
+3. **Check for follow-up work:** Was there a deployment? Any post-merge checks to monitor? The LLM can note: "PR merged. Deployment should happen within 5 minutes. I'll check deployment status at next supervisor tick."
 
 ---
 
-### Task 3: Orchestrator-Gated Merge
+### 5. Slack Mentions & Thread Replies (`app_mention`, `slack_reply`)
 
-**Files:**
-- Modify: `orchestrator/src/orchestrator.ts` (handleMergeEvaluation, handleCheckSuiteForMerge)
-- Modify: `orchestrator/src/decision-engine.ts` (evaluateMerge implementation)
-- Modify: `orchestrator/src/webhooks.ts` (route checks_passed to merge evaluation)
-- Modify: `.claude/skills/product-engineer/SKILL.md` (remove auto-merge, agent just creates PR)
-- Modify: `agent/src/prompt.ts` (update workflow instructions)
-- Test: `orchestrator/src/decision-engine.test.ts` (merge-specific tests)
+**Source:** Slack Socket Mode via orchestrator companion container
+**Current handling:** New mentions → create ticket, route to agent. Thread replies → look up ticket by `thread_ts`, route `slack_reply` event.
+**Frequency:** ~5-15/day
 
-**Step 1: Implement evaluateMerge in decision engine**
+#### Real Examples
 
-The merge evaluation prompt includes:
-- PR URL and diff stats (files changed, insertions, deletions)
-- CI status (all checks passed? any warnings?)
-- Open review comments (unresolved threads)
-- Change categories (what types of files changed)
-- Recent merge outcomes for this product (last 5: any issues after merge?)
-- Time context (weekday? working hours?)
+**Example A: New @mention — clear task**
+- User: "@product-engineer fix the BMI chart — values are wrong for metric units"
+- Orchestrator creates `slack-{ts}` ticket, resolves product from channel, routes to agent
+- Agent clones, fixes, creates PR, auto-merges
+- Result: **Merged in 15 minutes**
+- **Decision was correct.** Clear, actionable request.
 
-System prompt:
-```
-You are deciding whether a pull request should be auto-merged, sent for human review, or blocked.
+**Example B: New @mention — vague task (from user's frustrations)**
+- User: "@product-engineer improve the dashboard"
+- Orchestrator creates ticket, routes to agent
+- Agent starts working on... what exactly? Picks some random improvement, spends 30 minutes implementing something the user didn't want
+- Result: **Wasted credits, user frustrated**
+- **What should happen?** LLM should recognize: "This request is vague. Before spawning an agent, ask clarifying questions in the thread: 'What specifically would you like improved? The layout, the data displayed, the performance?'"
 
-Merge criteria:
-- All CI checks must pass (non-negotiable)
-- No unresolved review comments
-- Low-risk changes (docs, CSS, text, tests, config, simple bug fixes) → merge
-- Medium-risk changes (new features, refactors, dependency updates) → merge if CI passes and changes look correct
-- High-risk changes (auth, data model, security, infrastructure, API contracts) → request review
-- If recent merges from this product had post-merge issues → be more cautious
+**Example C: @mention in existing thread (BC-133 bug)**
+- User replies in an active ticket's thread: "@product-engineer actually, also fix the header color"
+- Before BC-133 fix: Used `slackEvent.ts` (reply ts) as thread root → created NEW thread instead of using existing one
+- After fix (9c79c4c): Uses `slackEvent.thread_ts` to route to existing ticket
+- **Decision is now correct** after the fix. But the current system always adds the extra request to the existing ticket — even if it's unrelated. An LLM should assess: "Is this related to the current ticket, or should this be a new task?"
 
-Always err on the side of caution. When in doubt, request review.
-```
+**Example D: Thread reply answering agent's question**
+- Agent asked: "Should I use REST or GraphQL for this endpoint?"
+- User replies: "REST is fine"
+- `slack_reply` event forwarded to agent
+- Agent continues implementation
+- **Decision was correct.** Simple question-answer flow.
 
-**Step 2: Add GitHub API helper to fetch PR context**
+**Example E: Thread reply with status question**
+- User: "what's the status on this?"
+- Current: Forwarded to agent, agent wakes up, posts a status update, wastes a turn
+- **What should happen?** The orchestrator has all the status information already (SQLite). It should answer status questions directly: "Status: `in_progress`, branch: `ticket/BC-125`, last heartbeat: 2 minutes ago." No need to wake the agent.
 
-Create `orchestrator/src/github.ts`:
+#### How Should the LLM Decide?
 
-```typescript
-export async function getPRContext(
-  repo: string,
-  prNumber: number,
-  token: string,
-): Promise<{
-  ciStatus: "passing" | "failing" | "pending";
-  reviewComments: string[];
-  diffStats: { filesChanged: number; additions: number; deletions: number };
-  changedFiles: string[];
-  reviewState: "approved" | "changes_requested" | "none";
-}> {
-  // Fetch check runs, reviews, and diff stats via GitHub API
-}
-```
+**Decision output:** `{ action: "route_to_agent" | "ask_clarification" | "answer_directly" | "create_new_ticket" | "ignore", reason: string }`
 
-**Step 3: Add merge evaluation handler to orchestrator**
+**Key reasoning:**
 
-When `checks_passed` event arrives for a ticket with status `pr_open`:
-1. Fetch PR context via GitHub API
-2. Call `evaluateMerge`
-3. If merge: call GitHub API to merge the PR
-4. If request_review: notify user in Slack
-5. If fix_issues: send event to agent
-6. Log decision
+1. **Is the request clear enough to act on?** If vague → ask clarifying questions in thread before spawning agent. The LLM can distinguish "fix the bug where X happens when Y" (actionable) from "improve the dashboard" (vague).
 
-```typescript
-private async handleMergeEvaluation(ticketId: string, event: TicketEvent): Promise<void> {
-  const ticket = this.getTicket(ticketId);
-  if (!ticket || ticket.status !== "pr_open" || !ticket.pr_url) return;
+2. **Is this a status question?** "What's the status?" / "How's it going?" / "Update?" → Answer directly from SQLite. Don't wake agent.
 
-  const product = this.getProduct(ticket.product);
-  const ghToken = this.resolveGithubToken(product);
-  const prContext = await getPRContext(ticket.pr_url, ghToken);
+3. **Is this a new task or continuation?** If @mention is in an existing ticket's thread, the LLM should assess: Is the request related to the current ticket (add it as continuation) or a separate task (create new ticket)?
 
-  if (prContext.ciStatus !== "passing") {
-    // CI still failing — send failure event to agent
-    await this.routeToAgent({ type: "ci_failure", ... });
-    return;
-  }
-
-  const decision = await this.decisionEngine.evaluateMerge({
-    ticketId,
-    ticketState: ticket,
-    ciStatus: prContext.ciStatus,
-    reviewComments: prContext.reviewComments,
-    diffSummary: `${prContext.diffStats.filesChanged} files, +${prContext.diffStats.additions}/-${prContext.diffStats.deletions}`,
-  });
-
-  this.logDecision(ticketId, "merge", decision, "sonnet", ...);
-
-  switch (decision.action) {
-    case "merge":
-      await this.mergeViaGitHub(ticket.pr_url, ghToken);
-      this.updateTicketStatus(ticketId, "merged");
-      await this.notifySlack(ticket, `✅ Auto-merged: ${decision.reasoning}`);
-      break;
-    case "request_review":
-      await this.notifySlack(ticket, `👀 Needs review: ${decision.reasoning}`);
-      break;
-    case "fix_issues":
-      await this.routeToAgent({ type: "merge_blocked", ticketId, payload: { reason: decision.reasoning } });
-      break;
-    case "block":
-      await this.notifySlack(ticket, `🚫 Blocked: ${decision.reasoning}`);
-      break;
-  }
-}
-```
-
-**Step 4: Wire checks_passed to merge evaluation**
-
-In `handleEvent()`, add special handling for `checks_passed`:
-```typescript
-if (event.type === "checks_passed") {
-  const ticket = this.getTicket(event.ticketId);
-  if (ticket?.status === "pr_open") {
-    // Don't route to agent — orchestrator handles merge decision
-    this.ctx.waitUntil(this.handleMergeEvaluation(event.ticketId, event));
-    return Response.json({ ok: true, merge_evaluation: "pending" });
-  }
-}
-```
-
-**Step 5: Add `mergeViaGitHub` helper**
-
-```typescript
-private async mergeViaGitHub(prUrl: string, token: string): Promise<boolean> {
-  // Extract owner/repo/number from PR URL
-  // PUT /repos/{owner}/{repo}/pulls/{number}/merge with merge_method: "squash"
-}
-```
-
-**Step 6: Update agent skill — remove auto-merge**
-
-In `.claude/skills/product-engineer/SKILL.md`, change step 8-9:
-
-```markdown
-8. After creating PR and updating status to `pr_open`:
-   - The orchestrator will evaluate whether to auto-merge or request review
-   - You do NOT need to merge — the orchestrator handles this
-   - Do a brief retro, commit it to the PR branch
-   - If low-risk: the orchestrator will auto-merge after CI passes
-   - If the orchestrator requests changes, you'll receive a `merge_blocked` event
-9. Stay alive briefly for any feedback events, then exit
-```
-
-**Step 7: Update agent prompt**
-
-In `agent/src/prompt.ts`, update the workflow section to remove `gh pr merge --squash` instructions. Replace with:
-```
-5. Auto-merge is handled by the orchestrator after CI passes. Do NOT call `gh pr merge` yourself.
-```
-
-**Step 8: Write merge evaluation tests**
-
-Test cases:
-- CI passing + low-risk diff → merge
-- CI passing + high-risk diff → request_review
-- CI failing → fix_issues (not merge)
-- Open review comments → request_review
-- Recent merge failures for this product → request_review (extra caution)
-- LLM timeout → request_review (conservative fallback)
-
-**Step 9: Run tests**
-
-Run: `cd orchestrator && bun test` and `cd agent && bun test`
-
-**Step 10: Commit**
-
-```bash
-git add orchestrator/src/orchestrator.ts orchestrator/src/decision-engine.ts orchestrator/src/github.ts \
-  .claude/skills/product-engineer/SKILL.md agent/src/prompt.ts orchestrator/src/decision-engine.test.ts
-git commit -m "feat: orchestrator-gated merge with LLM evaluation"
-```
+4. **Is this an emergency?** "The site is down" / "Users can't log in" → Prioritize immediately, possibly interrupt a low-priority agent.
 
 ---
 
-### Task 4: Active Lifecycle Management
+### 6. Agent Status Updates (phone-home)
 
-**Files:**
-- Modify: `orchestrator/src/orchestrator.ts` (enhance alarm/supervisor tick)
-- Modify: `orchestrator/src/decision-engine.ts` (evaluateLifecycle implementation)
-- Test: `orchestrator/src/decision-engine.test.ts` (lifecycle tests)
+**Source:** Agent server → Worker → Orchestrator DO (via POST /api/status)
+**Current handling:** Update SQLite row (status, pr_url, branch_name, slack_thread_ts). If terminal status → mark inactive + notify TicketAgent DO.
+**Frequency:** ~5-20/day per active ticket
 
-**Step 1: Implement evaluateLifecycle in decision engine**
+#### Real Examples
 
-The lifecycle prompt evaluates ALL active agents in a single call:
+**Example A: Normal lifecycle progression**
+- Agent reports: `status: "in_progress"` → `status: "pr_open"` → `status: "merged"`
+- Orchestrator updates DB at each step, marks terminal on `merged`
+- **Works correctly.**
 
-System prompt:
-```
-You are monitoring software engineering agents. Each agent works on one ticket.
-Review each agent's state and decide what action to take.
+**Example B: Agent reports ****`failed`**
+- Agent hits unrecoverable error, reports `status: "failed"`
+- Orchestrator marks terminal, shuts down container
+- **But:** No one investigates WHY it failed. The failure reason is buried in container logs.
+- **What should happen?** On `failed` status, the LLM should: (1) Check the agent's last Slack messages for error context. (2) Post to Slack: "Agent failed on [ticket]. Last status before failure: [context]. Likely cause: [assessment]. Should I retry or defer?" This turns an invisible failure into an actionable notification.
 
-Guidelines:
-- Agent running <60min with recent heartbeat → healthy
-- Agent idle >30min with no PR → check if stuck (restart or shutdown)
-- Agent idle >15min with PR and unaddressed review comments → send the comments as events
-- Agent session completed but container alive → shutdown
-- Agent running >2h → check if making progress (heartbeat + message count increasing?)
-- Multiple agents for same product running simultaneously → check if one is a duplicate
+**Example C: Agent goes silent — no heartbeat for 30+ minutes**
+- Current: `checkAgentHealth()` finds stale heartbeat, logs it (report-only)
+- **What should happen?** The supervisor should diagnose: Is the container dead? (health check fails) Did the agent get stuck in a loop? (high token usage, no progress) Is it waiting for a response? (last action was `ask_question`). Then take action: restart if dead, escalate if stuck, wait if pending response.
 
-For each agent, respond with: {"ticketId": "...", "action": "...", "reasoning": "..."}
-```
+**Example D: Zombie agent — BC-118 scenario**
+- 13 agents running with `agent_active = 1` but containers dead
+- No heartbeats, no status updates, but `agent_active` flag never cleared
+- Required manual cleanup endpoint (`/cleanup-inactive`)
+- **Root cause:** Agents reached terminal state before the shutdown fix was deployed. Their `agent_active` flags were never flipped.
+- **What the LLM supervisor should do:** Every tick, check for `agent_active = 1` with no heartbeat in 30+ minutes. If health check fails → force mark inactive and shut down. This replaces the manual cleanup with automatic detection.
 
-**Step 2: Replace report-only health check with active supervisor**
+#### How Should the LLM Decide?
 
-Change the orchestrator's alarm or add a new `supervisorTick()` method:
+**For status updates:** Mostly mechanical — update DB, check for terminal state. The LLM adds value on:
 
-```typescript
-private async supervisorTick(): Promise<void> {
-  // Gather state for all active agents
-  const activeAgents = this.getActiveAgents(); // from SQLite
+1. **Failed status:** Diagnose from available context, notify human with assessment
+2. **Repeated restarts:** If an agent has been restarted 3+ times for the same ticket → escalate
+3. **Cost monitoring:** If a ticket has consumed >$5 in tokens → alert in Slack
 
-  if (activeAgents.length === 0) return;
+**For health monitoring (supervisor tick every 5 min):**
 
-  const agentContexts = await Promise.all(
-    activeAgents.map(async (agent) => {
-      const health = await this.getAgentHealth(agent.id);
-      return {
-        ticketId: agent.id,
-        product: agent.product,
-        status: agent.status,
-        minutesSinceHeartbeat: health.minutesSinceHeartbeat,
-        minutesRunning: this.minutesSince(agent.created_at),
-        prUrl: agent.pr_url,
-        sessionStatus: health.sessionStatus,
-        messageCount: health.messageCount,
-      };
-    })
-  );
-
-  const decisions = await this.decisionEngine.evaluateLifecycle(agentContexts);
-
-  for (const decision of decisions) {
-    this.logDecision(decision.ticketId, "lifecycle", decision, "haiku", ...);
-
-    switch (decision.action) {
-      case "shutdown":
-        await this.shutdownAgent(decision.ticketId);
-        break;
-      case "restart":
-        await this.restartAgent(decision.ticketId);
-        break;
-      case "notify_user":
-        await this.notifyUserAboutAgent(decision.ticketId, decision.reasoning);
-        break;
-      case "send_event":
-        // Re-deliver pending events (CI failures, review comments)
-        await this.redeliverPendingEvents(decision.ticketId);
-        break;
-    }
-  }
-}
-```
-
-**Step 3: Schedule supervisor tick**
-
-Modify the orchestrator's alarm handler to call `supervisorTick()` every 5 minutes. The Container base class already fires alarms. Add:
-
-```typescript
-// In the Orchestrator class (not TicketAgent)
-// Use setInterval or DO alarm scheduling
-private async ensureSupervisorScheduled() {
-  // Store next tick time in SQLite
-  // On alarm: run supervisor, schedule next alarm in 5 min
-}
-```
-
-Since the Orchestrator is a Container DO (always-on, no sleepAfter), we can use `setInterval` in the companion container's event loop, or schedule DO alarms. The simplest approach: use the existing DO alarm mechanism.
-
-**Step 4: Add `shutdownAgent` and `restartAgent` helpers**
-
-```typescript
-private async shutdownAgent(ticketId: string): Promise<void> {
-  this.ctx.storage.sql.exec(
-    "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-    ticketId,
-  );
-  const id = this.env.TICKET_AGENT.idFromName(ticketId);
-  const agent = this.env.TICKET_AGENT.get(id);
-  await agent.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
-}
-
-private async restartAgent(ticketId: string): Promise<void> {
-  // Re-activate and re-initialize the agent
-  this.ctx.storage.sql.exec(
-    "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
-    ticketId,
-  );
-  // The agent will auto-resume from its branch
-}
-```
-
-**Step 5: Write lifecycle tests**
-
-Test cases:
-- Active agent with fresh heartbeat → healthy
-- Agent idle 45 min, no PR → shutdown
-- Agent idle 15 min, PR with review comments → send_event
-- Agent session completed, container alive → shutdown
-- Agent running 100 min, heartbeat fresh → healthy
-- Multiple agents for same product → flag duplicate
-
-**Step 6: Run tests**
-
-Run: `cd orchestrator && bun test`
-
-**Step 7: Commit**
-
-```bash
-git add orchestrator/src/orchestrator.ts orchestrator/src/decision-engine.ts orchestrator/src/decision-engine.test.ts
-git commit -m "feat: active lifecycle management with LLM supervisor"
-```
+1. **Stale heartbeat + health check fails** → Container dead. If work in progress (branch exists, PR open) → restart container. If no work started → mark failed, notify.
+2. **Stale heartbeat + health check passes** → Agent stuck in a loop. Check token usage — if growing fast, agent is burning money without progress. Kill and escalate.
+3. **Active for >2 hours** → Approaching container TTL. Check progress. If PR is open and waiting for review → normal. If still implementing → warn user that this is a long-running task.
 
 ---
 
-### Task 5: Outcome Recording & Self-Improvement
+### 7. Deploy/Restart Events (container lifecycle)
 
-**Files:**
-- Modify: `orchestrator/src/orchestrator.ts` (record outcomes on terminal state, daily audit)
-- Modify: `orchestrator/src/decision-engine.ts` (reviewOutcomes implementation)
-- Test: `orchestrator/src/decision-engine.test.ts` (outcome review tests)
+**Source:** Container SDK alarm, auto-resume on container start
+**Current handling:** `alarm()` calls `ensureContainerRunning()` (health check + restart). Auto-resume checks for git branch and starts new session.
+**Frequency:** Every 60 seconds (alarm) + on deploy
 
-**Step 1: Record outcome on terminal state**
+#### Real Examples
 
-In `handleStatusUpdate()`, when status is terminal:
+**Example A: Normal deploy — agent working on BC-133**
+- `wrangler deploy` triggers container replacement
+- New container starts, auto-resume fires (5s delay)
+- Detects `ticket/BC-133` branch on remote
+- Builds resume prompt with git log + status + PR info
+- Agent continues where it left off
+- **Works correctly after the PR #65 fix.**
 
-```typescript
-if (TERMINAL_STATUSES.includes(status)) {
-  // Record outcome
-  const tokenUsage = this.getTokenUsage(ticketId);
-  const ticket = this.getTicket(ticketId);
-  const durationMinutes = ticket
-    ? Math.floor((Date.now() - new Date(ticket.created_at).getTime()) / 60000)
-    : 0;
+**Example B: Deploy after ticket already merged (BC-118 root cause)**
+- Deploy triggers container restart for ALL TicketAgent DOs
+- Containers that were already done (terminal status) get restarted
+- Before fix: Alarm fires, `ensureContainerRunning()` starts container, auto-resume clones branch, starts new session → zombie agent
+- After fix (PR #61): `alarm()` checks `isTerminal` flag before restarting
+- **Fixed now, but illustrates the pattern.** Every lifecycle action needs: "Is this ticket still active?"
 
-  this.ctx.storage.sql.exec(
-    `INSERT INTO outcomes (ticket_id, product, final_status, duration_minutes, cost_usd, summary)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    ticketId, ticket?.product, status, durationMinutes, tokenUsage?.totalCostUsd || 0,
-    reason || "No summary provided",
-  );
-}
-```
+**Example C: Deploy while agent waiting for review**
+- Agent created PR, posted to Slack, waiting for human review
+- Deploy happens, container replaced
+- Auto-resume starts new session, agent checks PR status... sees it's still waiting for review
+- Agent has nothing to do but can't stop because it's "active"
+- Sits idle for 30 minutes until idle timeout
+- **What should happen?** The orchestrator should recognize: "This agent is waiting for external input (review). Don't restart the container — buffer incoming events and only restart when a review arrives."
 
-**Step 2: Implement reviewOutcomes in decision engine**
+#### How Should the LLM Decide?
 
-System prompt:
-```
-You are reviewing recent agent task outcomes to identify patterns and propose improvements.
+The deploy/restart decision should be in the **supervisor tick**, not on deploy:
 
-For each observation, explain:
-1. What pattern you see (e.g., "3/5 tasks took >60 min because agents re-read the same files")
-2. What change would fix it (be specific: which skill to edit, what to change)
-3. Priority (high/medium/low)
+1. **Should this container be running?** Check: Is ticket terminal? Is agent waiting for external input? Has the agent been idle for >15 minutes? → Don't restart.
 
-Focus on actionable, specific improvements. Don't suggest vague "improvements."
-```
+2. **Should this container be restarted?** Check: Is there active work (recent commits, agent was mid-implementation)? Is there a pending event in the buffer? → Restart.
 
-**Step 3: Add daily audit trigger**
-
-In the supervisor tick, check if 24 hours have passed since last audit:
-
-```typescript
-private async maybeDailyAudit(): Promise<void> {
-  const lastAudit = this.getSetting("last_audit_at");
-  const hoursSinceAudit = lastAudit
-    ? (Date.now() - new Date(lastAudit).getTime()) / 3600000
-    : Infinity;
-
-  if (hoursSinceAudit < 24) return;
-
-  const outcomes = this.getRecentOutcomes(24); // last 24 hours
-  if (outcomes.length === 0) return;
-
-  const review = await this.decisionEngine.reviewOutcomes(outcomes);
-
-  // Post to Slack
-  const channel = this.getDefaultSlackChannel();
-  await this.postToSlack(channel, null, formatAuditReport(review));
-
-  this.setSetting("last_audit_at", new Date().toISOString());
-  this.logDecision(null, "audit", { action: "audit_complete", reasoning: review.observations.join("; "), confidence: 1 }, "sonnet", ...);
-}
-```
-
-**Step 4: Add API endpoint to view decisions and outcomes**
-
-Add to Worker routes:
-- `GET /api/decisions?ticketId=&type=&limit=` — query decision log
-- `GET /api/outcomes?product=&limit=` — query outcomes
-
-**Step 5: Write tests**
-
-Test cases:
-- Outcome recording on merged/failed/closed
-- Daily audit triggers after 24h
-- Audit skips if no outcomes
-- Review generates actionable observations
-
-**Step 6: Run tests**
-
-Run: `cd orchestrator && bun test`
-
-**Step 7: Commit**
-
-```bash
-git add orchestrator/src/orchestrator.ts orchestrator/src/decision-engine.ts orchestrator/src/decision-engine.test.ts orchestrator/src/index.ts
-git commit -m "feat: outcome recording and daily self-improvement audit"
-```
+3. **Should this container be killed?** Check: Terminal status? Agent reported failed? No activity for >1 hour with no pending events? → Kill and free resources.
 
 ---
 
-### Task 6: Slack Communication Protocol
+## The Five Decision Points (Summary)
 
-**Files:**
-- Modify: `orchestrator/src/orchestrator.ts` (orchestrator-level Slack messages)
-- Modify: `.claude/skills/product-engineer/SKILL.md` (communication conventions)
-- Modify: `agent/src/prompt.ts` (agent communication rules)
+| # | Decision | Trigger | Current Logic | LLM Adds |
+| --- | --- | --- | --- | --- |
+| **1** | Event Triage | Any incoming event | Terminal check → route | Duplicate detection, vague-request clarification, self-referential ticket escalation, system load awareness, richer model selection |
+| **2** | Merge Evaluation | CI passes on a PR | Agent decides (category-based: CSS=auto, API=review) | Orchestrator reads diff, assesses risk from content not categories, checks for test coverage, evaluates deployment impact |
+| **3** | Supervisor | Every 5 min alarm | Report-only health check | Diagnose stuck/dead agents, detect zombies, monitor costs, manage container lifecycle intelligently, re-deliver missed events |
+| **4** | Failure Triage | Agent reports `failed` or CI fails | Route to agent (CI) or mark terminal (failed) | Distinguish flaky CI from real failures, diagnose agent failures with context, retry vs escalate |
+| **5** | Self-Improvement | Weekly/daily trigger | None | Review outcomes, identify patterns, propose skill/rule changes |
 
-**Step 1: Define communication ownership**
+---
 
-Add to orchestrator Slack messages:
-- **Orchestrator sends:** System status, merge decisions, escalations, audit reports, lifecycle actions
-- **Agent sends:** Progress updates, questions, retro summaries
-- **Format:** Orchestrator messages use `🤖 Orchestrator:` prefix to distinguish from agent messages
+## Deep Dive: Merge Evaluation (the highest-value decision)
 
-**Step 2: Add orchestrator Slack helper**
+This is the decision the user explicitly called out as wrong in the current system. Currently in `SKILL.md`:
+
+```
+- **Low risk** (auto-merge): CSS, text, layout, docs, tests, config
+- **High risk** (request review): data model, auth, APIs, security, dependencies
+```
+
+**Why this is wrong:** Risk isn't about file categories. A CSS change that hides a critical error message is high risk. An API endpoint addition that only adds a read-only field is low risk. Category-based rules will always be wrong some percentage of the time.
+
+**What the LLM should evaluate instead:**
+
+### Input for merge evaluation:
+1. **The actual diff** (via GitHub API: `GET /repos/{owner}/{repo}/pulls/{number}/files`)
+2. **CI results** (all checks passing?)
+3. **Review status** (any human approvals? any changes requested?)
+4. **Ticket context** (what was asked? does the diff match?)
+5. **Test coverage** (did the agent add/modify tests for the changed code?)
+
+### Questions the LLM should answer:
+1. **Does this diff do what the ticket asked for, and nothing else?** (Scope creep detection)
+2. **Are there tests for the new/changed behavior?** (Not "are there tests" generally, but specifically for the changes)
+3. **Does this change touch authentication, authorization, or data mutation?** (Actual security-sensitive code, not just "API files")
+4. **Could this break existing functionality?** (Changed function signatures, removed exports, altered data structures)
+5. **Is this a change to a high-traffic path?** (Homepage, checkout, auth — vs admin settings page)
+
+### Decision outputs:
+- **Auto-merge:** Low scope, tests present, no auth/data/security changes, CI green, matches ticket
+- **Request review:** Any security-sensitive code, missing tests for changed behavior, scope exceeds ticket, or changes to critical paths
+- **Block and fix:** Diff doesn't match ticket, no tests at all, or obvious bugs visible in diff
+
+### Example merge evaluations:
+
+**BC-125 (Dashboard):** Added new OAuth-protected dashboard with routes, middleware, and frontend. This should have been **request review** because: new authentication flow, new middleware, new routes exposed on the worker. The current category-based system might have auto-merged this if the agent classified it as "config" — dangerous.
+
+**BC-133 (Thread fix):** Changed 1 line in `orchestrator.ts` to use `thread_ts || ts`. Should be **auto-merge** because: minimal diff, bug fix, tests could verify the behavior, no security implications. But the current system would say "request review" because it touches the "API" (orchestrator code) — overly conservative.
+
+The LLM approach gets both of these right because it evaluates WHAT changed, not WHERE the file lives.
+
+---
+
+## Deep Dive: Supervisor Tick (the biggest gap)
+
+Currently `checkAgentHealth()` is report-only (line 750 of orchestrator.ts). It finds stale heartbeats but takes no action. The user's frustration: "I'm spending 1+ hour/day managing agent overhead."
+
+### What the supervisor should check every 5 minutes:
+
+```
+For each ticket where agent_active = 1:
+  1. Heartbeat age → Is the agent responding?
+  2. Container health → Is the process alive?
+  3. Token usage trend → Is cost reasonable?
+  4. Status progression → Is work actually progressing?
+  5. Pending events → Are there undelivered events?
+
+For tickets in pr_open status:
+  6. CI status → Have checks completed?
+  7. Review status → Any reviews pending?
+  8. PR age → Has it been open too long without merge?
+
+System-wide:
+  9. Total active agents → Are we overloaded?
+  10. Total cost today → Budget check
+```
+
+### What actions the supervisor should take:
+
+| Condition | Action |
+| --- | --- |
+| Heartbeat stale >30min, health check fails | Restart container (if non-terminal), notify Slack |
+| Heartbeat stale >30min, health check passes | Agent stuck — kill and escalate to human |
+| Agent active >2h with no PR created | Likely stuck — escalate to human |
+| PR open >4h with CI passed and no review | Nudge in Slack: "PR ready for review" |
+| Agent cost >$5 on one ticket | Alert in Slack, consider killing |
+| 5+ agents active simultaneously | Defer new low-priority tickets |
+| Pending events in buffer for >10min | Re-deliver, check container health |
+| Same failure event received 3+ times | Stop routing, escalate |
+
+### Real example the supervisor would have caught:
+
+**BC-118 zombie agents:** 13 containers running with no heartbeats, no progress, burning compute. The supervisor would have detected this at the first tick: "13 agents with stale heartbeats. Health checks fail on all 13. None are in terminal state in DB, but containers are dead. Marking all 13 inactive and shutting down containers." This would have prevented the entire BC-118 investigation.
+
+---
+
+## Implementation Priority
+
+Based on the above analysis, ordered by impact on the user's daily overhead:
+
+| Priority | Decision Point | Why First | Estimated Value |
+| --- | --- | --- | --- |
+| **P0** | Supervisor tick | Eliminates zombie detection, stuck agent management, cost monitoring. This is where the 1h/day overhead comes from. | Saves ~45 min/day |
+| **P1** | Merge evaluation | Eliminates wrong merge/review decisions. Most visible quality improvement. | Saves ~10 min/day, prevents bad deploys |
+| **P2** | Event triage (vague requests) | Stops wasting agent time on unclear tasks | Saves ~5 min/day, reduces credit waste |
+| **P3** | Failure triage | Distinguishes flaky CI from real failures, provides diagnosis on agent failures | Saves ~5 min/day |
+| **P4** | Self-improvement | Only valuable once P0-P3 are stable | Long-term compound value |
+
+---
+
+## Decision Engine Design
+
+The Decision Engine is a single function that makes Anthropic API calls:
 
 ```typescript
-private async postOrchestratorSlack(
-  channel: string,
-  threadTs: string | null,
-  message: string,
-): Promise<void> {
-  await fetch("https://slack.com/api/chat.postMessage", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      channel,
-      text: `🤖 *Orchestrator:* ${message}`,
-      ...(threadTs && { thread_ts: threadTs }),
-    }),
-  });
+interface DecisionRequest {
+  type: "triage" | "merge_eval" | "supervisor" | "failure_triage";
+  context: Record<string, unknown>; // All relevant data for the decision
+}
+
+interface DecisionResponse {
+  action: string;       // Decision-specific action
+  reason: string;       // Human-readable explanation
+  confidence: number;   // 0-1, for logging
 }
 ```
 
-**Step 3: Update skill with communication conventions**
+**Key constraints:**
+- Max 30 seconds per decision (use Haiku for speed-sensitive decisions, Sonnet for merge eval)
+- Log every decision to SQLite (`decision_log` table: timestamp, type, context hash, action, reason)
+- On API failure → fall back to current rules-based behavior
+- Never block event delivery — decisions are `ctx.waitUntil()` for triage, synchronous only for merge eval
 
-Add to `product-engineer/SKILL.md`:
+**Prompt structure:**
+- System prompt: Compact system-wide context (active tickets, costs, recent decisions)
+- User prompt: Specific decision context (event data, ticket state, relevant history)
+- No chat history needed — each decision is independent
 
-```markdown
-## Communication Ownership
-
-The **orchestrator** handles:
-- Merge decisions (auto-merge notifications, review requests)
-- System status and health alerts
-- Escalations to the user
-- Daily audit reports
-
-The **agent** handles:
-- Progress updates (starting, PR created)
-- Questions for the user
-- Retro summaries
-
-You will see orchestrator messages in the thread prefixed with "🤖 Orchestrator:".
-Do NOT duplicate orchestrator messages (e.g., don't announce "PR merged" — the orchestrator does that).
-```
-
-**Step 4: Update agent prompt**
-
-In `agent/src/prompt.ts`, add to the workflow section:
-```
-**Communication split:** The orchestrator handles merge notifications and system alerts.
-You handle progress updates and questions. Don't duplicate orchestrator messages.
-```
-
-**Step 5: Commit**
-
-```bash
-git add orchestrator/src/orchestrator.ts .claude/skills/product-engineer/SKILL.md agent/src/prompt.ts
-git commit -m "feat: define Slack communication protocol between orchestrator and agent"
-```
+**Cost estimate:** ~$0.005 per decision (Haiku) to ~$0.05 per decision (Sonnet). At ~50 decisions/day = $0.25-$2.50/day. Tiny compared to agent costs (~$20-40/day for implementation).
 
 ---
 
-### Task 7: Integration Testing & Deployment
+## What Changes in the Codebase
 
-**Files:**
-- Modify: `orchestrator/src/orchestrator.test.ts` (integration tests)
-- Modify: `orchestrator/wrangler.jsonc` (if any config changes needed)
-
-**Step 1: Write integration tests**
-
-Test the full flow:
-1. Linear webhook → triage → route to agent
-2. checks_passed webhook → merge evaluation → auto-merge
-3. CI failure → triage → route to agent (restart if needed)
-4. PR review → triage → route to agent
-5. Supervisor tick → lifecycle evaluation → shutdown stale agent
-6. Terminal state → outcome recording
-7. Fallback behavior when LLM is unavailable
-
-**Step 2: Run full test suite**
-
-```bash
-cd orchestrator && bun test
-cd agent && bun test
-```
-
-**Step 3: Deploy**
-
-```bash
-cd orchestrator && wrangler deploy
-```
-
-**Step 4: Validate in production**
-
-- Create a test Linear ticket
-- Monitor Slack for orchestrator messages
-- Check decision log via API
-- Verify merge evaluation works for a real PR
-
-**Step 5: Commit any fixes**
-
-```bash
-git add -A && git commit -m "fix: integration test fixes and deployment validation"
-```
+| Component | Change |
+| --- | --- |
+| `orchestrator/src/decision-engine.ts` | **New.** Anthropic API client, prompt templates, decision logging |
+| `orchestrator/src/orchestrator.ts` | `handleEvent()` gains triage call. New `supervisorTick()` with real actions. New `evaluateMerge()` endpoint. |
+| `orchestrator/src/ticket-agent.ts` | Minimal changes — events still delivered same way |
+| `.claude/skills/product-engineer/SKILL.md` | Remove auto-merge logic from agent. Agent creates PR and stops — orchestrator handles merge. |
+| `agent/src/prompt.ts` | Remove merge instructions from agent prompt |
+| `orchestrator/src/model-selection.ts` | Delete — replaced by LLM triage |
 
 ---
 
-## Summary of Changes by File
+## Edge Case Matrix (Lifecycle Boundaries)
 
-| File | Changes |
-|------|---------|
-| `orchestrator/src/decision-engine.ts` | **NEW** — LLM decision engine with triage, merge, lifecycle, audit |
-| `orchestrator/src/decision-engine.test.ts` | **NEW** — Tests for all decision types |
-| `orchestrator/src/github.ts` | **NEW** — GitHub API helpers for PR context |
-| `orchestrator/src/orchestrator.ts` | Add decisions/outcomes tables, integrate decision engine, supervisor tick, merge evaluation, outcome recording |
-| `orchestrator/src/webhooks.ts` | Route checks_passed to merge evaluation |
-| `orchestrator/src/index.ts` | Add decisions/outcomes API endpoints |
-| `.claude/skills/product-engineer/SKILL.md` | Remove auto-merge, add communication ownership |
-| `agent/src/prompt.ts` | Remove merge instructions, add communication split |
-| `agent/src/tools.ts` | No changes (agent keeps existing tools) |
+Per workflow convention: explicit enumeration of lifecycle edge cases.
 
-## Risk Mitigation
-
-1. **Every LLM call has a fallback.** If the API fails, the system falls back to current rules-based behavior. The system never gets WORSE than today.
-2. **Decision logging.** Every LLM decision is recorded with context, reasoning, and latency. Bad decisions can be diagnosed from the log.
-3. **Conservative defaults.** When unsure: request review (don't auto-merge), route event (don't ignore), notify user (don't stay silent).
-4. **Gradual rollout.** Deploy with triage first. Validate for a day. Then enable merge gating. Then lifecycle management. Then self-improvement.
-5. **Kill switch.** The `/shutdown-all` endpoint and dashboard kill button remain. If the LLM orchestrator goes haywire, shut everything down instantly.
+| Scenario | What Happens | Correct Behavior |
+| --- | --- | --- |
+| Container restart for terminal ticket | Alarm fires, checks isTerminal | Skip restart (existing behavior, verified) |
+| Deploy while agent waiting for review | Auto-resume starts new session | Supervisor should NOT restart — buffer events, restart on review arrival |
+| Agent fails, then retry webhook arrives | New event for failed ticket | LLM triage: "Ticket failed. Should I retry based on this new event?" — assess and decide |
+| Two events arrive simultaneously for same ticket | Race condition on routing | Event buffer in TicketAgent DO handles this (existing behavior) |
+| Agent creates PR, then container dies before merge eval | pr_open status, no agent | Supervisor detects: "PR open, agent dead, CI passed → evaluate merge directly" |
+| Self-referential ticket (fix orchestrator) | Agent can't fix its own infrastructure | LLM triage escalates immediately |
+| Vague Slack @mention | Agent wastes time on unclear task | LLM asks clarification before spawning agent |
+| Status question in ticket thread | Agent wakes up unnecessarily | LLM answers directly from DB |
+| 5+ agents running, new low-priority ticket | Resource pressure | LLM defers: "4 agents active. Deferring low-priority ticket until one completes." |
+| Flaky CI failure | Agent tries to "fix" non-broken code | LLM recognizes flaky pattern, retries CI |
+| Same review feedback given 3 times | Agent going in circles | LLM escalates: "Agent hasn't resolved this feedback after 3 attempts" |
