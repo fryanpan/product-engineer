@@ -14,7 +14,7 @@ export function resolveAgentEnvVars(
     TICKET_ID: config.ticketId,
     REPOS: JSON.stringify(config.repos),
     SLACK_CHANNEL: config.slackChannel,
-    SLACK_THREAD_TS: "", // Populated at runtime via event.slackThreadTs
+    SLACK_THREAD_TS: config.slackThreadTs || "", // Populated from database or event
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
     LINEAR_API_KEY: env.LINEAR_API_KEY || "",
     SENTRY_DSN: env.SENTRY_DSN || "",

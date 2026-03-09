@@ -549,11 +549,18 @@ export class Orchestrator extends Container<Bindings> {
 
       console.log(`[Orchestrator] Model selection for ${event.ticketId}: ${modelSelection.model} (${modelSelection.complexity} complexity) - ${modelSelection.reason}`);
 
+      // Load slack_thread_ts from database (set by initial event or subsequent updates)
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT slack_thread_ts FROM tickets WHERE id = ?",
+        event.ticketId,
+      ).toArray()[0] as { slack_thread_ts: string | null } | undefined;
+
       const config: TicketAgentConfig = {
         ticketId: event.ticketId,
         product: event.product,
         repos: productConfig.repos,
         slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+        slackThreadTs: event.slackThreadTs || ticketRow?.slack_thread_ts || undefined,
         secrets: productConfig.secrets,
         gatewayConfig,
         model: modelSelection.model,
