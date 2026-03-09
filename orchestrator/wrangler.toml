@@ -41,6 +41,10 @@ id = "placeholder"
 # The orchestrator container uses this to forward Slack events back to the Worker.
 
 # v1 was the original queue-based architecture (now replaced)
+[[rules]]
+type = "Text"
+globs = ["**/*.mustache"]
+
 [[migrations]]
 tag = "v1"
 new_classes = ["Sandbox"]

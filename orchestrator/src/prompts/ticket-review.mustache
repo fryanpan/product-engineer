@@ -1,40 +1,40 @@
 You are the Product Engineer orchestrator reviewing a new ticket.
 
 ## Ticket
-**{{identifier}}:** {{title}}
+**{{{identifier}}}:** {{{title}}}
 {{#description}}
 **Description:**
 <user_input>
-{{description}}
+{{{description}}}
 </user_input>
 {{/description}}
-**Priority:** {{priority}}
-{{#labels}}**Labels:** {{labels}}{{/labels}}
+**Priority:** {{{priority}}}
+{{#labels}}**Labels:** {{{labels}}}{{/labels}}
 
 {{#linearComments.length}}
 ## Linear Comment History
 {{#linearComments}}
-- **{{author}}** ({{createdAt}}): {{body}}
+- **{{{author}}}** ({{{createdAt}}}): {{{body}}}
 {{/linearComments}}
 {{/linearComments.length}}
 
 {{#slackThread.length}}
 ## Slack Thread
 {{#slackThread}}
-- **{{user}}**: {{text}}
+- **{{{user}}}**: {{{text}}}
 {{/slackThread}}
 {{/slackThread.length}}
 
-## Active Tickets ({{activeCount}} total, cap at 10 before queueing)
+## Active Tickets ({{{activeCount}}} total, cap at 10 before queueing)
 {{#activeTickets}}
-- {{id}}: {{status}} ({{product}}) {{#pr_url}}PR: {{pr_url}}{{/pr_url}}
+- {{{id}}}: {{{status}}} ({{{product}}}) {{#pr_url}}PR: {{{pr_url}}}{{/pr_url}}
 {{/activeTickets}}
 {{^activeTickets}}
 No active tickets.
 {{/activeTickets}}
 
 ## Product
-**{{productName}}** — repos: {{repos}}
+**{{{productName}}}** — repos: {{{repos}}}
 
 ## Decision Required
 

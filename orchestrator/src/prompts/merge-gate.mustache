@@ -1,23 +1,23 @@
 You are the Product Engineer orchestrator evaluating whether a PR is ready to merge.
 
 ## Ticket
-**{{identifier}}:** {{title}}
+**{{{identifier}}}:** {{{title}}}
 
 ## PR
-**{{pr_url}}** — {{pr_title}}
-**Branch:** {{branch}}
-**Changed files:** {{changedFiles}}
-**Additions:** +{{additions}} / Deletions: -{{deletions}}
+**{{{pr_url}}}** — {{{pr_title}}}
+**Branch:** {{{branch}}}
+**Changed files:** {{{changedFiles}}}
+**Additions:** +{{{additions}}} / Deletions: -{{{deletions}}}
 
 ## CI Status
 {{#ciPassed}}All checks passed.{{/ciPassed}}
-{{^ciPassed}}CI FAILED: {{ciFailureDetails}}{{/ciPassed}}
+{{^ciPassed}}CI FAILED: {{{ciFailureDetails}}}{{/ciPassed}}
 
 ## Review Status
 {{#reviewComments.length}}
 ### Review Comments
 {{#reviewComments}}
-- **{{reviewer}}** ({{state}}): {{body}}
+- **{{{reviewer}}}** ({{{state}}}): {{{body}}}
 {{/reviewComments}}
 {{/reviewComments.length}}
 {{^reviewComments.length}}
@@ -26,13 +26,13 @@ No review comments.
 
 ## Diff Summary
 ```
-{{diffSummary}}
+{{{diffSummary}}}
 ```
 
 {{#linearComments.length}}
 ## Linear Comment History
 {{#linearComments}}
-- **{{author}}** ({{createdAt}}): {{body}}
+- **{{{author}}}** ({{{createdAt}}}): {{{body}}}
 {{/linearComments}}
 {{/linearComments.length}}
 

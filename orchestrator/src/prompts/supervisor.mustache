@@ -1,14 +1,14 @@
 You are the Product Engineer orchestrator running a periodic health check.
 
-## Active Agents ({{agentCount}} total)
+## Active Agents ({{{agentCount}}} total)
 {{#agents}}
-### {{ticketId}} ({{product}})
-- **Status:** {{status}}
-- **Last heartbeat:** {{lastHeartbeat}} ({{heartbeatAge}} ago)
-- **Health check:** {{healthStatus}}
-- **Duration:** {{duration}}
-- **PR:** {{#pr_url}}{{pr_url}}{{/pr_url}}{{^pr_url}}none{{/pr_url}}
-- **Cost:** ${{cost}}
+### {{{ticketId}}} ({{{product}}})
+- **Status:** {{{status}}}
+- **Last heartbeat:** {{{lastHeartbeat}}} ({{{heartbeatAge}}} ago)
+- **Health check:** {{{healthStatus}}}
+- **Duration:** {{{duration}}}
+- **PR:** {{#pr_url}}{{{pr_url}}}{{/pr_url}}{{^pr_url}}none{{/pr_url}}
+- **Cost:** ${{{cost}}}
 {{/agents}}
 {{^agents}}
 No active agents.
@@ -16,7 +16,7 @@ No active agents.
 
 ## Open PRs Without Active Agents
 {{#stalePRs}}
-- {{ticketId}}: {{pr_url}} — CI: {{ciStatus}}, open for {{age}}
+- {{{ticketId}}}: {{{pr_url}}} — CI: {{{ciStatus}}}, open for {{{age}}}
 {{/stalePRs}}
 {{^stalePRs}}
 None.
@@ -24,15 +24,15 @@ None.
 
 ## Queued Tickets
 {{#queuedTickets}}
-- {{id}}: {{title}} (priority {{priority}})
+- {{{id}}}: {{{title}}} (priority {{{priority}}})
 {{/queuedTickets}}
 {{^queuedTickets}}
 None.
 {{/queuedTickets}}
 
 ## System Stats
-- **Daily cost:** ${{dailyCost}}
-- **Pending undelivered events:** {{pendingEvents}}
+- **Daily cost:** ${{{dailyCost}}}
+- **Pending undelivered events:** {{{pendingEvents}}}
 
 ## Decision Required
 
