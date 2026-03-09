@@ -609,7 +609,7 @@ export class Orchestrator extends Container<Bindings> {
     console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
     const updates: string[] = ["updated_at = datetime('now')", "last_heartbeat = datetime('now')"];
-    const values: (string | null)[] = [];
+    const values: (string | number | null)[] = [];
 
     // Allow explicit control of agent_active flag (for dashboard kill operations)
     if (agent_active !== undefined) {

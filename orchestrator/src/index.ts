@@ -11,6 +11,7 @@ import { linearWebhook, githubWebhook } from "./webhooks";
 import { dashboardRouter } from "./dashboard";
 import type { Bindings } from "./types";
 import { authHandlers, requireAuth } from "./auth";
+// @ts-ignore - HTML file imported as string
 import dashboardHTML from "./dashboard.html";
 
 // Export DO classes for wrangler
