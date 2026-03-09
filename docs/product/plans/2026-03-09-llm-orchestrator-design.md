@@ -2,12 +2,12 @@
 
 We got the orchestrator system working about a week ago. This is the next major revision.
 
-## Goals
+## Goals for This Week (March 9-13)
 
 Move work through the system more smoothly with fewer instances of rework.
 
 - Go from 1+ hour of human oversight to manage agent coordination issues to **less than 5 minutes/day**
-- Coordination process makes the right decision at key points **over 80% of the time**:
+- Coordination process makes the right decision at key points **over 80% of the time (and improving)**:
   - What should I do with this new ticket?
   - How should I implement?
   - Does the plan need human review?
@@ -374,12 +374,13 @@ Each decision type and the ticket agents have different tool access based on wha
 | Tool / API | Ticket Review | Merge Gate | Supervisor | Notes |
 | --- | --- | --- | --- | --- |
 | **SQLite** (tickets, decisions, outcomes) | ✅ | ✅ | ✅ | All decisions read/write ticket state |
-| **Slack API** (post messages) | ✅ | ✅ | ✅ | Decisions channel + ticket threads + Linear |
-| **Linear API** (create/update/comment) | ✅ | ✅ | ✅ | Create tickets from Slack, comment decisions |
+| **Slack API** (post messages) | ✅ | ✅ | ✅ | Decisions channel + ticket threads |
+| **Linear API** (create/update/comment) | ✅ | ✅ | ✅ | Create tickets, comment decisions |
 | **GitHub API** (PR diff, checks, merge) | — | ✅ | ✅ | Merge gate reads diff + CI; supervisor checks PR state |
+| **GitHub Actions API** (re-run workflow) | — | ✅ | — | Retry flaky CI |
+| **Cloudflare API** (read-only) | — | — | ✅ | Review container state, D1/KV data, worker logs |
 | **Anthropic API** (LLM calls) | ✅ | ✅ | ✅ | Core decision-making |
 | **Container management** (spawn/kill agents) | ✅ | — | ✅ | Ticket review spawns; supervisor kills |
-| **GitHub Actions API** (re-run workflow) | — | ✅ | — | Retry flaky CI |
 
 ### Ticket Agents (Claude Code Agent SDK)
 
@@ -405,7 +406,7 @@ Each decision type and the ticket agents have different tool access based on wha
 
 Every decision is logged to **four places** for maximum visibility:
 
-1. **SQLite ****`decision_log`**** table** — permanent record with full context, for analysis and self-improvement
+1. **SQLite \****`decision_log`**\*\* table** — permanent record with full context, for analysis and self-improvement
 2. #product**-engineer-decisions Slack channel** — real-time visibility for the human
 3. **Linear comment on the ticket** — decision history attached to the ticket
 4. **Ticket's Slack thread** — so anyone following the thread sees what happened
@@ -450,10 +451,52 @@ interface DecisionResponse {
 ```
 
 - **Max 30 seconds** per decision
-- **Log every decision** to SQLite + Slack + Linear + ticket thread
-- **No fallback to rules-based system** — LLM decisions are the only path. If the API is down, queue the event and retry when it's back.
+- **Log every decision** to SQLite + Slack (#product-engineer-decisions) + Linear comment + ticket thread
+- **No fallback to rules-based system** — if Anthropic API is down, queue events and retry
 - **Model per decision:** Haiku for triage (speed), Sonnet for merge evaluation (quality)
 - **Cost:** ~$0.005-0.05 per decision, ~50 decisions/day = $0.25-2.50/day
+
+### Prompt Templates (Mustache)
+
+All LLM prompts live in separate `.mustache` files, not inline strings. Using [Mustache](https://github.com/janl/mustache.js) — zero dependencies, no `eval()`, Cloudflare Workers compatible, used by LangChain.
+
+```
+orchestrator/src/prompts/
+  ticket-review.mustache      # Ticket triage decision
+  merge-gate.mustache          # PR merge evaluation
+  supervisor.mustache           # System health check
+  thread-classify.mustache     # Classify Slack thread messages
+agent/src/prompts/
+  task-initial.mustache         # Initial task prompt for agent
+  task-event.mustache           # Continuation prompt for events
+  task-resume.mustache          # Resume after container restart
+```
+
+Example (`ticket-review.mustache`):
+```mustache
+You are the Product Engineer orchestrator reviewing a new ticket.
+
+## Ticket
+**{{identifier}}:** {{title}}
+{{#description}}
+**Description:**
+<user_input>
+{{description}}
+</user_input>
+{{/description}}
+**Priority:** {{priority}}
+{{#labels}}**Labels:** {{labels}}{{/labels}}
+
+## Active Tickets ({{activeCount}} total)
+{{#activeTickets}}
+- {{id}}: {{status}} ({{product}})
+{{/activeTickets}}
+
+## Decision Required
+Respond with JSON: { "action": "start_agent" | "ask_questions" | "mark_duplicate" | "queue", "model": "haiku" | "sonnet" | "opus", "reason": "..." }
+```
+
+Data preparation happens in TypeScript (`context-assembler.ts`). Templates do assembly only.
 
 ---
 
@@ -469,35 +512,62 @@ interface DecisionResponse {
 
 ---
 
-## What Changes in the Codebase
+## Codebase Changes
 
-| Component | Change |
+### New files
+| File | Purpose |
 | --- | --- |
-| `orchestrator/src/decision-engine.ts` | **New.** Anthropic API client, prompt templates, decision logging |
-| `orchestrator/src/context-assembler.ts` | **New.** Structured context packets (GitHub diff, CI, reviews, ticket history) |
-| `orchestrator/src/orchestrator.ts` | Ticket review in `handleEvent()`. Merge gate endpoint. Actionable supervisor tick. Direct handling of `pr_merged`, status questions, post-merge events. |
+| `orchestrator/src/decision-engine.ts` | Anthropic API client, Mustache rendering, decision logging |
+| `orchestrator/src/context-assembler.ts` | Structured context packets from GitHub/Slack/Linear/SQLite |
+| `orchestrator/src/prompts/*.mustache` | All orchestrator LLM prompt templates |
+| `agent/src/prompts/*.mustache` | All agent prompt templates (replacing inline strings in `prompt.ts`) |
+
+### Modified files
+| File | Change |
+| --- | --- |
+| `orchestrator/src/orchestrator.ts` | Add ticket review, merge gate, actionable supervisor tick. Handle `pr_merged` directly. |
 | `orchestrator/src/ticket-agent.ts` | 5-min exit after logical completion. Reduced `sleepAfter`. |
-| `.claude/skills/product-engineer/SKILL.md` | Remove merge logic. Agent creates PR and stops. Orchestrator handles merge. |
-| `agent/src/prompt.ts` | Remove merge instructions. Add structured JSON progress updates. |
-| `agent/src/server.ts` | Reduce idle timeout to 5min. Exit immediately after session completion. |
-| `orchestrator/src/model-selection.ts` | Delete — replaced by LLM ticket review. |
-| SQLite schema | Add `decision_log`, `outcomes` tables. `ticket_state` JSON column. |
+| `.claude/skills/product-engineer/SKILL.md` | Remove merge logic. Agent creates PR and stops. |
+| `agent/src/prompt.ts` | Replace inline strings with Mustache template rendering. |
+| `agent/src/server.ts` | Reduce idle timeout to 5min. Exit on session completion. |
+| SQLite schema | Add `decision_log`, `outcomes` tables. |
+
+### Delete (superseded by LLM orchestrator)
+| File | Why |
+| --- | --- |
+| `orchestrator/src/model-selection.ts` | Replaced by LLM ticket review |
+| `orchestrator/src/model-selection.test.ts` | Tests for deleted code |
+
+### Old plan docs to archive
+These plans are fully implemented or superseded. Move to `docs/product/plans/archive/`:
+
+| File | Status |
+| --- | --- |
+| `consolidate-single-worker-plan.md` | Implemented |
+| `BC-118-plan.md` | Resolved |
+| `2026-03-05-fix-agent-lifecycle.md` | Implemented |
+| `2026-03-01-unified-persistent-agent-plan.md` | Implemented (current system) |
+| `autonomous-agent-landscape-research.md` | Superseded by `2026-03-09-agent-systems-research.md` |
+
+Keep as active reference:
+- `2026-03-01-unified-persistent-agent-design.md` — original architecture (still the base)
+- `2026-03-01-composio-tool-integration-platforms.md` — decision doc (still relevant)
+- `2026-03-09-agent-systems-research.md` — current research
+- `2026-03-09-llm-orchestrator-design.md` — this document
 
 ---
 
-## Edge Case Matrix
+## Edge Cases
 
-| Scenario | Correct Behavior |
+| Scenario | Behavior |
 | --- | --- |
-| Container restart for terminal ticket | Skip restart (existing, verified) |
-| Deploy while agent waiting for review | Don't restart — buffer events, restart on review arrival |
-| Agent fails, then new event arrives | LLM re-evaluates: "Should I retry based on this event?" |
-| Two events for same ticket simultaneously | Event buffer in TicketAgent DO (existing) |
-| PR open, agent dead, CI passed | Supervisor triggers merge evaluation directly |
-| Vague Slack @mention | Creates Linear ticket → ticket review asks clarifying questions |
-| Status question in ticket thread | Orchestrator answers directly from DB |
-| 10+ agents running, new ticket | Queue — scheduling system triggers when capacity frees |
-| Flaky CI failure | Retry CI (max 3), not agent |
-| Same review feedback 3 times | Escalate: "Agent can't resolve this" |
-| CI fails after merge on main | Create new ticket to fix main, assign to agent |
-| Post-merge comment on PR | Acknowledge, create followup ticket if actionable |
+| Container restart for terminal ticket | Skip (existing) |
+| Deploy while agent waiting for review | Don't restart — buffer events |
+| Agent fails, then new event arrives | LLM re-evaluates: retry or not? |
+| PR open, agent dead, CI passed | Supervisor triggers merge gate |
+| Vague Slack @mention | Create ticket → ticket review asks questions |
+| Status question in thread | Orchestrator answers from DB |
+| 10+ agents, new ticket | Queue for later |
+| Flaky CI | Retry CI (max 3) |
+| Same feedback 3 times | Escalate |
+| CI fails after merge | Create new ticket to fix main |
