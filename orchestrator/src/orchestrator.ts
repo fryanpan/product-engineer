@@ -492,15 +492,24 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async routeToAgent(event: TicketEvent) {
-    // Check if agent is still active (not in terminal state)
+    // Check if agent is still active (not in terminal state) and load thread_ts
     const ticket = this.ctx.storage.sql.exec(
-      "SELECT agent_active, status FROM tickets WHERE id = ?",
+      "SELECT agent_active, status, slack_thread_ts, slack_channel FROM tickets WHERE id = ?",
       event.ticketId,
-    ).toArray()[0] as { agent_active: number; status: string } | undefined;
+    ).toArray()[0] as { agent_active: number; status: string; slack_thread_ts: string | null; slack_channel: string | null } | undefined;
 
     if (ticket && ticket.agent_active === 0) {
       console.log(`[Orchestrator] Skipping inactive agent for ${event.ticketId} (status: ${ticket.status})`);
       return;
+    }
+
+    // Populate thread_ts from database if not already set in the event
+    // This ensures Linear tickets (which don't have thread_ts in the webhook) can reply in-thread
+    if (ticket && ticket.slack_thread_ts && !event.slackThreadTs) {
+      event.slackThreadTs = ticket.slack_thread_ts;
+    }
+    if (ticket && ticket.slack_channel && !event.slackChannel) {
+      event.slackChannel = ticket.slack_channel;
     }
 
     const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
