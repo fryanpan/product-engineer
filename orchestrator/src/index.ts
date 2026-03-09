@@ -10,7 +10,6 @@ import { Hono } from "hono";
 import { linearWebhook, githubWebhook } from "./webhooks";
 import type { Bindings } from "./types";
 import { authHandlers, requireAuth } from "./auth";
-// @ts-ignore - HTML import handled by wrangler bundler
 import dashboardHTML from "./dashboard.html";
 
 // Export DO classes for wrangler
@@ -446,11 +445,32 @@ app.post("/api/dashboard/agents/:ticketId/kill", async (c) => {
 
   // Mark agent as inactive in orchestrator
   const orchestrator = getOrchestrator(c.env);
-  await orchestrator.fetch(new Request("http://internal/ticket/status", {
+  const statusResponse = await orchestrator.fetch(new Request("http://internal/ticket/status", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ticketId, agent_active: 0 }),
   }));
+
+  // If the orchestrator failed to mark the agent inactive, abort shutdown
+  if (!statusResponse.ok) {
+    let errorBody: string | undefined;
+    try {
+      errorBody = await statusResponse.text();
+    } catch {
+      // ignore body parsing errors
+    }
+
+    return c.json(
+      {
+        ok: false,
+        ticketId,
+        error: "Failed to mark agent inactive in orchestrator",
+        status: statusResponse.status,
+        body: errorBody,
+      },
+      502,
+    );
+  }
 
   // Request shutdown of the container
   const id = c.env.TICKET_AGENT.idFromName(ticketId);

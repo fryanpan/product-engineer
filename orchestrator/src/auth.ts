@@ -65,7 +65,12 @@ async function createSession(env: Bindings, session: Session): Promise<string> {
 async function getSession(env: Bindings, sessionId: string): Promise<Session | null> {
   const data = await env.SESSIONS.get(`session:${sessionId}`);
   if (!data) return null;
-  return JSON.parse(data);
+  try {
+    return JSON.parse(data) as Session;
+  } catch {
+    // Treat invalid/corrupted JSON as an expired or missing session
+    return null;
+  }
 }
 
 /**
@@ -80,23 +85,41 @@ async function deleteSession(env: Bindings, sessionId: string): Promise<void> {
  */
 function getSessionIdFromCookie(cookieHeader: string | null | undefined): string | null {
   if (!cookieHeader) return null;
-  const match = cookieHeader.match(/session_id=([^;]+)/);
-  return match ? match[1] : null;
+  const match = cookieHeader.match(/(?:^|;\s*)session_id=([^;]+)/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Middleware: require authentication
+ *
+ * For browser navigation routes (e.g. /dashboard), unauthenticated requests
+ * are redirected to /api/auth/login. For API routes (paths starting with
+ * /api/), unauthenticated requests receive a 401 JSON response so that
+ * frontend fetch() calls can handle navigation explicitly.
  */
 export async function requireAuth(c: Context<{ Bindings: Bindings }>): Promise<Session | Response> {
   const cookieHeader = c.req.header("Cookie");
   const sessionId = getSessionIdFromCookie(cookieHeader);
+  const path = c.req.path;
+  const isApiRoute = path.startsWith("/api/");
 
   if (!sessionId) {
+    if (isApiRoute) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
     return c.redirect("/api/auth/login");
   }
 
   const session = await getSession(c.env, sessionId);
   if (!session) {
+    if (isApiRoute) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
     return c.redirect("/api/auth/login");
   }
 
@@ -192,13 +215,20 @@ export const authHandlers = {
 
     const userInfo = await userInfoResponse.json<GoogleUserInfo>();
 
-    // Optional: check email allowlist
+    // Verify email is verified by Google
+    if (!userInfo.verified_email) {
+      return c.text("Access denied. Email address not verified by Google.", 403);
+    }
+
+    // Check email allowlist (required for security)
     const allowedEmails = c.env.ALLOWED_EMAILS;
-    if (allowedEmails) {
-      const allowed = allowedEmails.split(",").map(e => e.trim().toLowerCase());
-      if (!allowed.includes(userInfo.email.toLowerCase())) {
-        return c.text(`Access denied. Your email (${userInfo.email}) is not authorized.`, 403);
-      }
+    if (!allowedEmails) {
+      return c.text("ALLOWED_EMAILS not configured. Access denied.", 500);
+    }
+
+    const allowed = allowedEmails.split(",").map(e => e.trim().toLowerCase());
+    if (!allowed.includes(userInfo.email.toLowerCase())) {
+      return c.text(`Access denied. Your email (${userInfo.email}) is not authorized.`, 403);
     }
 
     // Create session

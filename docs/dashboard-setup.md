@@ -49,7 +49,7 @@ id = "<YOUR_NAMESPACE_ID>"
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select existing
-3. Enable "Google+ API"
+3. Configure the OAuth consent screen if prompted
 4. Go to "Credentials" → "Create Credentials" → "OAuth 2.0 Client ID"
 5. Application type: **Web application**
 6. Add authorized redirect URI:
@@ -196,19 +196,19 @@ All dashboard endpoints require authentication (session cookie).
 
 ✅ **Protected against:**
 - CSRF (state parameter + SameSite cookie)
-- XSS (HttpOnly cookies, no inline JS)
 - Session fixation (secure random IDs)
 - Token leakage (secrets never reach client)
 
 ⚠️ **Considerations:**
+- XSS: Dashboard HTML uses standard defenses (output encoding, avoiding dangerous sinks like unescaped innerHTML). HttpOnly cookies help protect session cookies from theft but do not prevent XSS.
 - Rate limiting: Relies on Cloudflare's built-in protection
-- User authorization: Currently no allowlist — any Google account can authenticate
-  - **Future enhancement**: Add `ALLOWED_USERS` env var with email allowlist
+- User authorization: Email allowlist via `ALLOWED_EMAILS` env var (if unset, authentication will fail)
 - Session hijacking: Standard HTTPS/cookie protections apply
+- KV eventual consistency: Sessions and OAuth state use Cloudflare KV, which is eventually consistent across edge locations. In rare cases, callback or dashboard requests routed to different colos may see stale data briefly.
 
 ### Future Enhancements
 
-1. **Email allowlist**: Restrict access to specific Google accounts
+1. **Authorization hardening**: Stricter management of `ALLOWED_EMAILS` and potentially per-user roles
 2. **Audit logging**: Track who killed which agents and when
 3. **Rate limiting**: Explicit limits on kill operations
 4. **Multi-factor**: Optional MFA requirement
