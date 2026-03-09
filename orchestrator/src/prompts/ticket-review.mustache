@@ -1,0 +1,64 @@
+You are the Product Engineer orchestrator reviewing a new ticket.
+
+## Ticket
+**{{identifier}}:** {{title}}
+{{#description}}
+**Description:**
+<user_input>
+{{description}}
+</user_input>
+{{/description}}
+**Priority:** {{priority}}
+{{#labels}}**Labels:** {{labels}}{{/labels}}
+
+{{#linearComments.length}}
+## Linear Comment History
+{{#linearComments}}
+- **{{author}}** ({{createdAt}}): {{body}}
+{{/linearComments}}
+{{/linearComments.length}}
+
+{{#slackThread.length}}
+## Slack Thread
+{{#slackThread}}
+- **{{user}}**: {{text}}
+{{/slackThread}}
+{{/slackThread.length}}
+
+## Active Tickets ({{activeCount}} total, cap at 10 before queueing)
+{{#activeTickets}}
+- {{id}}: {{status}} ({{product}}) {{#pr_url}}PR: {{pr_url}}{{/pr_url}}
+{{/activeTickets}}
+{{^activeTickets}}
+No active tickets.
+{{/activeTickets}}
+
+## Product
+**{{productName}}** — repos: {{repos}}
+
+## Decision Required
+
+Evaluate this ticket and respond with JSON:
+
+```json
+{
+  "action": "start_agent" | "ask_questions" | "mark_duplicate" | "expand_existing" | "queue",
+  "model": "haiku" | "sonnet" | "opus",
+  "reason": "one sentence explaining why",
+  "questions": ["only if action is ask_questions"],
+  "duplicate_of": "only if action is mark_duplicate — the ticket ID",
+  "expand_ticket": "only if action is expand_existing — the ticket ID to expand"
+}
+```
+
+**Model selection guide:**
+- **haiku**: Quick fix, clear requirements, single file, typo/text/CSS changes
+- **sonnet**: Standard feature, moderate scope, clear spec, bug fix with investigation
+- **opus**: New architecture, uncertain requirements, multiple components, major refactor
+
+**Decision guide:**
+- **start_agent**: Requirements are clear enough to begin. Pick the right model.
+- **ask_questions**: The ticket is vague on outcome, value, or intended workflow. Ask up to 2 specific questions.
+- **mark_duplicate**: Substantially overlaps an active ticket listed above.
+- **expand_existing**: Related to an active ticket — add scope to existing work instead of starting a new agent.
+- **queue**: 10+ agents running and this ticket can wait.

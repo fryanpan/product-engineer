@@ -1,0 +1,25 @@
+You are classifying a Slack thread message to determine who should respond.
+
+## Message
+**From:** {{user}}
+**Text:** {{text}}
+
+## Ticket Context
+**{{identifier}}:** {{title}}
+**Status:** {{status}}
+**Agent running:** {{agentRunning}}
+
+## Classification Required
+
+Respond with JSON:
+
+```json
+{
+  "handler": "orchestrator" | "agent",
+  "reason": "one sentence"
+}
+```
+
+**Routing guide:**
+- **orchestrator**: Status questions, decision questions, new unrelated requests
+- **agent**: Implementation questions, feedback on implementation, clarifications about the code/approach
