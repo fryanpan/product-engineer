@@ -41,6 +41,9 @@ export interface Bindings {
   // R2 buckets
   TRANSCRIPTS: R2Bucket;
 
+  // KV namespaces
+  SESSIONS: KVNamespace;
+
   // Config vars
   WORKER_URL: string;
 
@@ -57,6 +60,12 @@ export interface Bindings {
   NOTION_TOKEN: string;
   SENTRY_ACCESS_TOKEN: string;
   CONTEXT7_API_KEY: string;
+
+  // Google OAuth for dashboard
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  GOOGLE_ALLOWED_DOMAIN?: string; // Optional - restricts access to specific domain
+  ALLOWED_EMAILS: string; // Comma-separated list of allowed email addresses
 
   // Per-product GitHub tokens
   HEALTH_TOOL_GITHUB_TOKEN: string;

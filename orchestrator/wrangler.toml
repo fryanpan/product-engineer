@@ -30,6 +30,12 @@ bindings = [
 binding = "TRANSCRIPTS"
 bucket_name = "product-engineer-transcripts"
 
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "placeholder"
+# Production: create with `wrangler kv namespace create SESSIONS`
+# Then update this ID with the actual namespace ID
+
 # WORKER_URL must be set via `wrangler secret put WORKER_URL` before deploying.
 # Value: the deployed Worker URL (e.g., "https://product-engineer.your-subdomain.workers.dev")
 # The orchestrator container uses this to forward Slack events back to the Worker.
