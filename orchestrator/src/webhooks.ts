@@ -339,6 +339,12 @@ githubWebhook.post("/", async (c) => {
   if (event === "deployment_status") {
     return handleDeploymentStatus(rawBody, c.env);
   }
+  if (event === "code_scanning_alert") {
+    return handleCodeScanningAlert(rawBody, c.env);
+  }
+  if (event === "dependabot_alert") {
+    return handleDependabotAlert(rawBody, c.env);
+  }
 
   return c.json({ ok: true, ignored: true });
 });
@@ -772,6 +778,119 @@ async function handleDeploymentStatus(rawBody: string, env: Bindings) {
       target_url: payload.deployment_status.target_url,
     },
   });
+}
+
+async function handleCodeScanningAlert(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    alert: {
+      number: number;
+      state: string;
+      rule: { id: string; severity: string; description: string };
+      most_recent_instance: {
+        ref: string;
+        location: { path: string; start_line: number; end_line: number };
+        message: { text: string };
+      } | null;
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  // Handle new, reopened, and branch-reappearance alerts
+  if (payload.action !== "created" && payload.action !== "reopened" && payload.action !== "appeared_in_branch") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const ref = payload.alert.most_recent_instance?.ref;
+  // Only route alerts on branch refs — ignore tags, PR refs, etc.
+  const branch = ref?.startsWith("refs/heads/") ? ref.replace("refs/heads/", "") : undefined;
+
+  return routeWebhookEvent(env, branch, payload.repository.full_name, {
+    type: "code_scanning_alert",
+    payload: {
+      alert_number: payload.alert.number,
+      state: payload.alert.state,
+      rule_id: payload.alert.rule.id,
+      severity: payload.alert.rule.severity,
+      description: payload.alert.rule.description,
+      file_path: payload.alert.most_recent_instance?.location?.path,
+      start_line: payload.alert.most_recent_instance?.location?.start_line,
+      end_line: payload.alert.most_recent_instance?.location?.end_line,
+      message: payload.alert.most_recent_instance?.message?.text,
+      alert_url: payload.alert.html_url,
+    },
+  });
+}
+
+async function handleDependabotAlert(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    alert: {
+      number: number;
+      state: string;
+      dependency: {
+        package: { ecosystem: string; name: string };
+        manifest_path: string;
+      } | null;
+      security_advisory: {
+        severity: string;
+        summary: string;
+        description: string;
+        cve_id: string | null;
+      } | null;
+      security_vulnerability: {
+        vulnerable_version_range: string;
+        first_patched_version: { identifier: string } | null;
+      } | null;
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle new or reopened alerts
+  if (payload.action !== "created" && payload.action !== "reopened") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  // Dependabot alerts are repo-level, not branch-specific.
+  // Forward to orchestrator as a new event — the orchestrator can decide
+  // whether to create a ticket or wait for the Dependabot PR.
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  // Include repo in ticketId to avoid collisions across repos in the same product
+  // (alert numbers are only unique per repo). Use action suffix for reopened alerts
+  // so they get a fresh ticket instead of hitting the terminal state guard.
+  const repoShort = payload.repository.full_name.replace("/", "-");
+  const actionSuffix = payload.action === "reopened" ? `-reopen-${Date.now()}` : "";
+  const ticketId = `dependabot-${repoShort}-${payload.alert.number}${actionSuffix}`;
+
+  await forwardToOrchestrator(env, {
+    type: "dependabot_alert",
+    source: "github",
+    ticketId,
+    product: productName,
+    payload: {
+      alert_number: payload.alert.number,
+      state: payload.alert.state,
+      package_name: payload.alert.dependency?.package?.name,
+      ecosystem: payload.alert.dependency?.package?.ecosystem,
+      manifest_path: payload.alert.dependency?.manifest_path,
+      severity: payload.alert.security_advisory?.severity,
+      summary: payload.alert.security_advisory?.summary,
+      cve_id: payload.alert.security_advisory?.cve_id,
+      vulnerable_range: payload.alert.security_vulnerability?.vulnerable_version_range,
+      patched_version: payload.alert.security_vulnerability?.first_patched_version?.identifier,
+      alert_url: payload.alert.html_url,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, ticketId, alertNumber: payload.alert.number });
 }
 
 export { linearWebhook, githubWebhook };

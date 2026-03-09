@@ -47,6 +47,7 @@ DECISIONS_CHANNEL = "#product-engineer-decisions"
 [[rules]]
 type = "Text"
 globs = ["**/*.mustache"]
+fallthrough = true
 
 [[migrations]]
 tag = "v1"
@@ -56,4 +57,40 @@ new_classes = ["Sandbox"]
 tag = "v2"
 new_sqlite_classes = ["Orchestrator", "TicketAgent"]
 deleted_classes = ["Sandbox"]
+
+# ── Staging environment ──────────────────────────────────────────────
+# Deploy with: wrangler deploy --env staging
+[env.staging]
+name = "product-engineer-stg"
+
+[env.staging.vars]
+DECISIONS_CHANNEL = "#staging-pe-decisions"
+
+[[env.staging.r2_buckets]]
+binding = "TRANSCRIPTS"
+bucket_name = "product-engineer-staging-transcripts"
+
+[[env.staging.kv_namespaces]]
+binding = "SESSIONS"
+id = "52c44a6e0d144e53a51c9cb4e9bcbbe0"
+
+[env.staging.durable_objects]
+bindings = [
+  { name = "ORCHESTRATOR", class_name = "Orchestrator" },
+  { name = "TICKET_AGENT", class_name = "TicketAgent" }
+]
+
+# Orchestrator — always-on, Slack Socket Mode, event routing
+[[env.staging.containers]]
+class_name = "Orchestrator"
+image = "../containers/orchestrator/Dockerfile"
+instance_type = "lite"
+max_instances = 1
+
+# Per-ticket agents — one per active ticket, runs Claude Agent SDK
+[[env.staging.containers]]
+class_name = "TicketAgent"
+image = "../agent/Dockerfile"
+instance_type = "basic"
+max_instances = 5
 
