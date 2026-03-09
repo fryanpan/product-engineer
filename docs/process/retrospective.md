@@ -1,4 +1,4 @@
-## 2026-03-09 - BC-133: Fix agent replies going to main channel instead of thread (PR #69)
+## 2026-03-09 - BC-133: Fix agent replies going to main channel instead of thread (PR #69) - MERGED
 
 **Context:** User reported that when replying in ticket threads, the agent responded in the main channel instead of the thread. This was confusing and broke conversation context.
 
@@ -20,11 +20,18 @@
 - Git history analysis revealed recent threading-related changes and their intent
 - Writing out hypothetical scenarios helped identify the edge case (mention inside existing thread)
 - All 68 orchestrator tests + 37 agent tests continued to pass
+- Clear retrospective documentation helped when resuming after container restart
 
 **What didn't:**
 - Initially went down rabbit holes investigating Slack API behavior and race conditions before finding the simpler root cause
 - Took multiple iterations to understand that there were TWO separate issues (DB enrichment + thread_ts selection)
 - Could have more quickly identified the issue by manually testing the exact scenario the user described
+
+**Merge session (session 3):**
+- Container restarted after merge approval
+- Resume flow worked smoothly: git state, PR status, and retrospective all preserved
+- Tests passing, PR merged without issues
+- Brief retro captured key insights for future threading work
 
 **Technical notes:**
 - `orchestrator/src/orchestrator.ts:494-513` — DB query enrichment for Linear tickets (session 1)
@@ -33,11 +40,14 @@
 
 **Files changed:**
 - `orchestrator/src/orchestrator.ts`: Thread identifier logic and DB enrichment in routeToAgent()
+- `docs/process/retrospective.md`: Comprehensive retro documentation
+- `docs/troubleshooting/slack-thread-replies.md`: Updated troubleshooting guide
 
 **Learning:**
 - When debugging threading issues, consider all entry points: Linear webhooks (no thread), Slack mentions (new thread vs existing thread), thread replies
 - Edge cases often involve scenarios where the same feature (mentions) behaves differently in different contexts (top-level vs in-thread)
 - Git history and recent changes are valuable debugging clues - check what's been modified recently in the area of the bug
+- Defense in depth for critical routing: enrich at multiple layers (event routing + initialization)
 
 ---
 
