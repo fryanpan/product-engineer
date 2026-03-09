@@ -286,7 +286,7 @@ The LLM triage gets: event type, ticket metadata (title, description, priority, 
 - Orchestrator updates DB at each step, marks terminal on `merged`
 - **Works correctly.**
 
-**Example B: Agent reports ****`failed`**
+**Example B: Agent reports \****`failed`**
 - Agent hits unrecoverable error, reports `status: "failed"`
 - Orchestrator marks terminal, shuts down container
 - **But:** No one investigates WHY it failed. The failure reason is buried in container logs.
@@ -376,43 +376,62 @@ The deploy/restart decision should be in the **supervisor tick**, not on deploy:
 
 ## Deep Dive: Merge Evaluation (the highest-value decision)
 
-This is the decision the user explicitly called out as wrong in the current system. Currently in `SKILL.md`:
+### Philosophy: Auto-merge is the default
 
-```
-- **Low risk** (auto-merge): CSS, text, layout, docs, tests, config
-- **High risk** (request review): data model, auth, APIs, security, dependencies
-```
+The existing systems (Stripe Minions, Devin, SWE-agent) all require human review before merge. But those systems serve production businesses with billion-dollar revenues and much higher stakes. Product Engineer serves personal/hobbyist projects where:
 
-**Why this is wrong:** Risk isn't about file categories. A CSS change that hides a critical error message is high risk. An API endpoint addition that only adds a read-only field is low risk. Category-based rules will always be wrong some percentage of the time.
+- **Speed matters more than zero-defect.** If >90% of auto-merged changes are correct (or good-enough for personal use), the <10% can be caught in production and fixed quickly.
+- **The overhead of manual review is the bottleneck.** Every PR that requires human review adds 30 minutes to hours of latency and context-switching.
+- **Feature flags provide a safety net.** For risky features, flag them. Roll back if broken.
+- **Staging environments provide verification.** If the agent can deploy to staging and prove the feature works (not just that tests pass), auto-merge confidence is very high.
 
-**What the LLM should evaluate instead:**
+**The default is auto-merge.** Escalation to human review only when the LLM identifies risk to three hard gates:
+
+1. **Security / sensitive data** — authentication, authorization, encryption, API keys, PII handling
+2. **Data integrity** — database schema migrations, data deletion, backup/restore changes
+3. **Core user-facing workflows** — features that users (mostly the owner) depend on daily (e.g., symptom logging on health-tool, ride tracking on bike-tool)
+
+Everything else auto-merges after CI passes + staging verification. New features, UI changes, refactors, config changes, dependency updates (non-security) — all auto-merge.
 
 ### Input for merge evaluation:
 1. **The actual diff** (via GitHub API: `GET /repos/{owner}/{repo}/pulls/{number}/files`)
 2. **CI results** (all checks passing?)
-3. **Review status** (any human approvals? any changes requested?)
+3. **Staging verification** (deployed to staging? feature verified working?)
 4. **Ticket context** (what was asked? does the diff match?)
 5. **Test coverage** (did the agent add/modify tests for the changed code?)
 
 ### Questions the LLM should answer:
-1. **Does this diff do what the ticket asked for, and nothing else?** (Scope creep detection)
-2. **Are there tests for the new/changed behavior?** (Not "are there tests" generally, but specifically for the changes)
-3. **Does this change touch authentication, authorization, or data mutation?** (Actual security-sensitive code, not just "API files")
-4. **Could this break existing functionality?** (Changed function signatures, removed exports, altered data structures)
-5. **Is this a change to a high-traffic path?** (Homepage, checkout, auth — vs admin settings page)
+1. **Does this change touch any of the three hard gates?** (Security, data integrity, core workflows) → If yes and risk can't be demonstrated as low, escalate.
+2. **Does this diff do what the ticket asked for, and nothing else?** (Scope creep detection)
+3. **Has the agent verified the feature works on staging?** (Not just CI — actual behavior verification)
+4. **Are there tests for the new/changed behavior?**
+5. **Is the LLM confident in its assessment?** If confidence is low → escalate rather than guess.
 
 ### Decision outputs:
-- **Auto-merge:** Low scope, tests present, no auth/data/security changes, CI green, matches ticket
-- **Request review:** Any security-sensitive code, missing tests for changed behavior, scope exceeds ticket, or changes to critical paths
-- **Block and fix:** Diff doesn't match ticket, no tests at all, or obvious bugs visible in diff
+- **Auto-merge:** CI passes, staging verified, no hard-gate risk, diff matches ticket → merge immediately
+- **Escalate to human:** Touches hard gates (security/data/core workflows) AND agent can't demonstrate risk is low
+- **Block and send back:** Diff doesn't match ticket, staging verification failed, or obvious bugs → send back to agent with instructions
 
-### Example merge evaluations:
+### Example merge evaluations (revisited):
 
-**BC-125 (Dashboard):** Added new OAuth-protected dashboard with routes, middleware, and frontend. This should have been **request review** because: new authentication flow, new middleware, new routes exposed on the worker. The current category-based system might have auto-merged this if the agent classified it as "config" — dangerous.
+**BC-125 (Dashboard with OAuth):** Added new authentication flow. This touches **hard gate #1 (security)**. The LLM should check: Did the agent add tests for the auth flow? Does staging show the OAuth redirect working? Are credentials handled securely? If yes to all → auto-merge. If any uncertainty → escalate. In this specific case, the agent implemented OAuth correctly with proper scoping — an LLM reviewer reading the diff would likely auto-merge.
 
-**BC-133 (Thread fix):** Changed 1 line in `orchestrator.ts` to use `thread_ts || ts`. Should be **auto-merge** because: minimal diff, bug fix, tests could verify the behavior, no security implications. But the current system would say "request review" because it touches the "API" (orchestrator code) — overly conservative.
+**BC-133 (Thread fix):** Changed 1 line in `orchestrator.ts`. No hard gates touched. CI passes. → Auto-merge without hesitation. The current category-based system would say "request review" because it touches "API code" — unnecessarily conservative.
 
-The LLM approach gets both of these right because it evaluates WHAT changed, not WHERE the file lives.
+**Hypothetical: New symptom logging endpoint on health-tool:** Touches **hard gate #3 (core user workflow)** — symptom logging is used daily. The LLM should check: Does staging show the new endpoint working? Does the existing logging flow still work? If verified → auto-merge. If the agent can't demonstrate existing flow works → escalate.
+
+### Staging verification as the confidence multiplier
+
+The LLM's merge confidence comes primarily from **verification, not reasoning**. An LLM reading a diff can miss subtle bugs. An LLM reading "staging deployment succeeded, feature smoke test passed, existing tests pass" has much higher confidence.
+
+Each product should have a staging environment. The merge evaluation flow becomes:
+
+```
+CI passes → Deploy to staging → Agent verifies feature on staging → LLM evaluates merge
+```
+
+If staging verification passes: auto-merge almost everything (except hard-gate escalations where risk demonstration fails).
+If staging verification fails or is unavailable: apply more conservative heuristics (test coverage, diff size, hard-gate proximity).
 
 ---
 
@@ -459,17 +478,57 @@ System-wide:
 
 ---
 
+## Architectural Principle: Ephemeral Agents, Persistent Orchestrator
+
+Every similar system (Aperant, Anthropic Quickstart, Stripe Minions) creates a fresh SDK client per session. No system maintains a long-running agent. Product Engineer should be even more aggressive:
+
+**Agent containers spin down within 5 minutes of completing a logical unit of work:**
+- PR created → agent reports status, does retro, exits within 5 min
+- Review feedback addressed → agent pushes fix, exits within 5 min
+- Merge done → agent does retro, exits immediately
+- Agent asked a question via Slack → agent exits, orchestrator will spin up new session when reply arrives
+
+**The orchestrator is always on.** It receives all events, evaluates them, and decides:
+- Handle directly (status questions, terminal events, simple CI retries)
+- Spin up a new agent session (new work, review feedback, CI failure needing code changes)
+- Buffer for later (events for tickets waiting on external input)
+
+**Why this is better than keeping agents alive:**
+- Eliminates zombie agents entirely — nothing stays alive to become a zombie
+- Fresh context window every session — no degradation from accumulated noise
+- Lower cost — no idle containers burning compute
+- Simpler lifecycle — the only states are "not running" and "briefly running"
+- Orchestrator can choose the right model per session (Haiku for a CI fix, Opus for a complex review)
+
+**Progress persistence via JSON + git:**
+- `ticket-state.json` in the orchestrator's SQLite tracks structured progress per ticket
+- Git branches + commits are the source of truth for code state
+- New sessions resume from: ticket-state.json (what to do) + git branch (where the code is)
+
+### Retry budgets
+
+Hard caps on every retry loop. Agents that loop indefinitely are the #1 cause of wasted credits.
+
+| Scenario | Max Retries | On Exhaustion |
+| --- | --- | --- |
+| CI fix attempt | 3 | Escalate to human |
+| PR review feedback cycle | 3 rounds | Escalate: "Agent can't resolve feedback" |
+| Agent session restart (crash/error) | 2 | Mark failed, notify |
+| Vague task clarification | 2 questions | Escalate: "Need clearer requirements" |
+
+---
+
 ## Implementation Priority
 
 Based on the above analysis, ordered by impact on the user's daily overhead:
 
 | Priority | Decision Point | Why First | Estimated Value |
 | --- | --- | --- | --- |
-| **P0** | Supervisor tick | Eliminates zombie detection, stuck agent management, cost monitoring. This is where the 1h/day overhead comes from. | Saves ~45 min/day |
-| **P1** | Merge evaluation | Eliminates wrong merge/review decisions. Most visible quality improvement. | Saves ~10 min/day, prevents bad deploys |
+| **P0** | Supervisor tick + ephemeral agents | Eliminates zombie detection, stuck agent management, cost monitoring. This is where the 1h/day overhead comes from. | Saves ~45 min/day |
+| **P1** | Merge evaluation + staging | Enables auto-merge for almost everything. Most visible quality improvement. | Saves ~10 min/day, eliminates review bottleneck |
 | **P2** | Event triage (vague requests) | Stops wasting agent time on unclear tasks | Saves ~5 min/day, reduces credit waste |
-| **P3** | Failure triage | Distinguishes flaky CI from real failures, provides diagnosis on agent failures | Saves ~5 min/day |
-| **P4** | Self-improvement | Only valuable once P0-P3 are stable | Long-term compound value |
+| **P3** | Failure triage + retry budgets | Distinguishes flaky CI from real failures, prevents infinite loops | Saves ~5 min/day |
+| **P4** | Self-improvement (outcome logging) | Only valuable once P0-P3 are stable | Long-term compound value |
 
 ---
 
@@ -510,11 +569,14 @@ interface DecisionResponse {
 | Component | Change |
 | --- | --- |
 | `orchestrator/src/decision-engine.ts` | **New.** Anthropic API client, prompt templates, decision logging |
-| `orchestrator/src/orchestrator.ts` | `handleEvent()` gains triage call. New `supervisorTick()` with real actions. New `evaluateMerge()` endpoint. |
-| `orchestrator/src/ticket-agent.ts` | Minimal changes — events still delivered same way |
-| `.claude/skills/product-engineer/SKILL.md` | Remove auto-merge logic from agent. Agent creates PR and stops — orchestrator handles merge. |
-| `agent/src/prompt.ts` | Remove merge instructions from agent prompt |
+| `orchestrator/src/context-assembler.ts` | **New.** Assembles structured context packets (GitHub diff, CI status, PR reviews, ticket history) before any LLM call |
+| `orchestrator/src/orchestrator.ts` | `handleEvent()` gains triage call. New `supervisorTick()` with real actions. New `evaluateMerge()` endpoint. Handles `pr_merged` directly (terminal transitions without agent). |
+| `orchestrator/src/ticket-agent.ts` | Aggressive teardown: 5-min exit after logical completion. Reduced `sleepAfter`. Agent exits on PR creation, review addressed, merge done, or question asked. |
+| `.claude/skills/product-engineer/SKILL.md` | Remove auto-merge logic from agent. Agent creates PR and stops — orchestrator handles merge. Add "exit after logical completion" instruction. |
+| `agent/src/prompt.ts` | Remove merge instructions. Add structured progress updates (JSON status reports). |
+| `agent/src/server.ts` | Reduce idle timeout from 30min to 5min. Exit immediately after session completion instead of waiting. |
 | `orchestrator/src/model-selection.ts` | Delete — replaced by LLM triage |
+| SQLite schema | Add `decision_log` table, `outcomes` table, `ticket_state` JSON column on tickets |
 
 ---
 
