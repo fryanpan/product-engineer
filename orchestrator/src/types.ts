@@ -71,6 +71,7 @@ export interface Bindings {
 
   // Config vars
   WORKER_URL: string;
+  DECISIONS_CHANNEL: string;
 
   // Secrets
   API_KEY: string;
