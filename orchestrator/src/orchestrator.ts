@@ -1,7 +1,8 @@
 import { Container } from "@cloudflare/containers";
 import { TERMINAL_STATUSES, type TicketEvent, type TicketAgentConfig, type Bindings } from "./types";
 import type { ProductConfig } from "./registry";
-import { selectModelForTicket } from "./model-selection";
+import { DecisionEngine } from "./decision-engine";
+import { ContextAssembler } from "./context-assembler";
 
 function sanitizeTicketId(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -44,6 +45,8 @@ export class Orchestrator extends Container<Bindings> {
 
   private dbInitialized = false;
   private containerStarted = false;
+  private _decisionEngine: DecisionEngine | null = null;
+  private _contextAssembler: ContextAssembler | null = null;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     // @ts-expect-error — DurableObjectState generic mismatch between Container SDK and Workers types
@@ -110,6 +113,52 @@ export class Orchestrator extends Container<Bindings> {
       console.error("[Orchestrator] Container start failed:", err);
       throw err;
     }
+  }
+
+  private getDecisionEngine(): DecisionEngine {
+    if (!this._decisionEngine) {
+      this._decisionEngine = new DecisionEngine({
+        anthropicApiKey: (this.env.ANTHROPIC_API_KEY as string) || "",
+        slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
+        decisionsChannel: (this.env as any).DECISIONS_CHANNEL || "#product-engineer-decisions",
+        linearApiKey: (this.env.LINEAR_API_KEY as string) || "",
+      });
+    }
+    return this._decisionEngine;
+  }
+
+  private getContextAssembler(): ContextAssembler {
+    if (!this._contextAssembler) {
+      this._contextAssembler = new ContextAssembler({
+        sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+        slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
+        linearApiKey: (this.env.LINEAR_API_KEY as string) || "",
+        githubTokens: this.getGithubTokens(),
+      });
+    }
+    return this._contextAssembler;
+  }
+
+  private getGithubTokens(): Record<string, string> {
+    // Build product→token map from per-product token bindings in env
+    const tokens: Record<string, string> = {};
+    // Load product configs to map slug → secret binding name
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT slug, config FROM products",
+    ).toArray() as Array<{ slug: string; config: string }>;
+
+    for (const row of productRows) {
+      try {
+        const config = JSON.parse(row.config) as ProductConfig;
+        const tokenBinding = config.secrets?.GITHUB_TOKEN;
+        if (tokenBinding && (this.env as Record<string, unknown>)[tokenBinding]) {
+          tokens[row.slug] = (this.env as Record<string, unknown>)[tokenBinding] as string;
+        }
+      } catch {
+        // Skip malformed configs
+      }
+    }
+    return tokens;
   }
 
   private initDb() {
@@ -511,13 +560,35 @@ export class Orchestrator extends Container<Bindings> {
       event.slackChannel || null,
     );
 
-    // Route to TicketAgent
+    // For new tickets, use LLM ticket review instead of direct routing
+    if (event.type === "ticket_created") {
+      await this.handleTicketReview(event);
+      return Response.json({ ok: true, ticketId: event.ticketId });
+    }
+
+    // For Linear comments, route to running agent or re-evaluate via ticket review
+    if (event.type === "linear_comment") {
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT agent_active FROM tickets WHERE id = ?", event.ticketId,
+      ).toArray()[0] as { agent_active: number } | undefined;
+
+      if (ticketRow?.agent_active) {
+        // Forward to running agent like a Slack reply
+        await this.sendEventToAgent(event);
+      } else {
+        // No agent running — re-evaluate via ticket review
+        await this.handleTicketReview(event);
+      }
+      return Response.json({ ok: true, ticketId: event.ticketId });
+    }
+
+    // Route to TicketAgent for all other event types
     await this.routeToAgent(event);
 
     return Response.json({ ok: true, ticketId: event.ticketId });
   }
 
-  private async routeToAgent(event: TicketEvent) {
+  private async routeToAgent(event: TicketEvent, model: string = "sonnet") {
     // Check if agent is still active (not in terminal state) and load thread_ts
     const ticket = this.ctx.storage.sql.exec(
       "SELECT agent_active, status, slack_thread_ts, slack_channel FROM tickets WHERE id = ?",
@@ -564,16 +635,7 @@ export class Orchestrator extends Container<Bindings> {
       ).toArray() as Array<{ value: string }>;
       const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
 
-      // Analyze ticket complexity and select appropriate model
-      const payload = event.payload as any;
-      const modelSelection = selectModelForTicket({
-        priority: payload.priority,
-        title: payload.title,
-        description: payload.description,
-        labels: payload.labels,
-      });
-
-      console.log(`[Orchestrator] Model selection for ${event.ticketId}: ${modelSelection.model} (${modelSelection.complexity} complexity) - ${modelSelection.reason}`);
+      console.log(`[Orchestrator] Routing ${event.ticketId} to agent with model=${model}`);
 
       // Load slack_thread_ts from database (set by initial event or subsequent updates)
       const ticketRow = this.ctx.storage.sql.exec(
@@ -589,7 +651,7 @@ export class Orchestrator extends Container<Bindings> {
         slackThreadTs: event.slackThreadTs || ticketRow?.slack_thread_ts || undefined,
         secrets: productConfig.secrets,
         gatewayConfig,
-        model: modelSelection.model,
+        model,
       };
 
       const initRes = await agent.fetch(new Request("http://internal/initialize", {
@@ -634,6 +696,153 @@ export class Orchestrator extends Container<Bindings> {
       "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
       event.ticketId,
     );
+  }
+
+  /**
+   * Send an event to a running TicketAgent container without re-initializing it.
+   * Used for forwarding linear_comment events and other supplementary events
+   * to agents that are already configured and running.
+   */
+  private async sendEventToAgent(event: TicketEvent): Promise<void> {
+    const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
+    const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
+
+    // Retry event delivery with backoff for cold starts
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const eventRes = await agent.fetch(new Request("http://internal/event", {
+        method: "POST",
+        body: JSON.stringify(event),
+      }));
+      lastStatus = eventRes.status;
+
+      if (eventRes.ok) return;
+      if (eventRes.status !== 503) {
+        console.error(`[Orchestrator] Agent event delivery failed for ${event.ticketId}: ${eventRes.status}`);
+        return;
+      }
+
+      // Container not ready, wait and retry
+      console.warn(`[Orchestrator] Agent container not ready for ${event.ticketId}, retrying (${attempt + 1}/3)...`);
+      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+
+    console.error(`[Orchestrator] Agent event delivery failed after retries for ${event.ticketId}: ${lastStatus}`);
+  }
+
+  /**
+   * Use LLM decision engine to review a new ticket and decide what to do:
+   * start_agent, ask_questions, mark_duplicate, queue, or expand_existing.
+   */
+  private async handleTicketReview(event: TicketEvent): Promise<void> {
+    const engine = this.getDecisionEngine();
+    const assembler = this.getContextAssembler();
+
+    const payload = event.payload as Record<string, unknown>;
+
+    // Load product config from database
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      event.product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) {
+      console.error(`[Orchestrator] No product config for ${event.product}`);
+      return;
+    }
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+
+    // Get ticket record for slack info
+    const ticketRow = this.ctx.storage.sql.exec(
+      "SELECT * FROM tickets WHERE id = ?", event.ticketId,
+    ).toArray()[0] as Record<string, unknown> | undefined;
+
+    const context = await assembler.forTicketReview({
+      ticketId: event.ticketId,
+      identifier: (payload.identifier as string) || null,
+      title: (payload.title as string) || "",
+      description: (payload.description as string) || "",
+      priority: (payload.priority as number) || 3,
+      labels: (payload.labels as string[]) || [],
+      product: event.product,
+      repos: productConfig.repos,
+      slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || null,
+      slackChannel: event.slackChannel || (ticketRow?.slack_channel as string) || null,
+    });
+
+    let decision;
+    try {
+      decision = await engine.makeDecision("ticket-review", context);
+    } catch (err) {
+      console.error("[Orchestrator] LLM ticket review failed, defaulting to start_agent with sonnet:", err);
+      decision = { action: "start_agent", model: "sonnet", reason: "LLM review failed, using default", confidence: 0 };
+    }
+
+    // Log the decision
+    await engine.logDecision({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      type: "ticket_review",
+      ticket_id: event.ticketId,
+      context_summary: `${payload.identifier || event.ticketId}: ${((payload.title as string) || "").slice(0, 100)}`,
+      action: decision.action,
+      reason: decision.reason,
+      confidence: decision.confidence || 0,
+    }, {
+      sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+      slackChannel: event.slackChannel || (ticketRow?.slack_channel as string) || undefined,
+      slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined,
+      linearIssueId: event.ticketId,
+    });
+
+    // Act on decision
+    switch (decision.action) {
+      case "start_agent": {
+        const model = decision.model || "sonnet";
+        await this.routeToAgent(event, model);
+        break;
+      }
+      case "ask_questions": {
+        // Update status to needs_info
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET status = 'needs_info', updated_at = datetime('now') WHERE id = ?",
+          event.ticketId,
+        );
+        break;
+      }
+      case "mark_duplicate": {
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET status = 'closed', updated_at = datetime('now') WHERE id = ?",
+          event.ticketId,
+        );
+        break;
+      }
+      case "queue": {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO ticket_queue (id, ticket_id, product, priority, payload)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO NOTHING`,
+          crypto.randomUUID(), event.ticketId, event.product,
+          (payload.priority as number) || 3, JSON.stringify(event),
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET status = 'queued', updated_at = datetime('now') WHERE id = ?",
+          event.ticketId,
+        );
+        break;
+      }
+      case "expand_existing": {
+        // Route the event to the existing ticket's agent
+        // decision.expand_ticket contains the ticket ID to expand
+        const expandTicketId = (decision as unknown as Record<string, unknown>).expand_ticket as string | undefined;
+        if (expandTicketId) {
+          const expandedEvent = { ...event, ticketId: expandTicketId };
+          await this.sendEventToAgent(expandedEvent);
+        }
+        break;
+      }
+    }
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
