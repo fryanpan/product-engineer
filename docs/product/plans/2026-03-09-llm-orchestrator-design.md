@@ -104,6 +104,10 @@ flowchart TD
 
     TYPE -->|"Linear ticket\ncreated/assigned"| TICKET_REVIEW["→ Ticket Review"]
 
+    TYPE -->|"Linear comment\non tracked ticket"| CHECK_AGENT_LC{Agent running?}
+    CHECK_AGENT_LC -->|Yes| MESSAGE_LC[Send comment\nto running agent]
+    CHECK_AGENT_LC -->|No| TICKET_REVIEW
+
     TYPE -->|"PR review/comment\nCI pass/fail"| FIND_TICKET[Find ticket from\nbranch name]
     FIND_TICKET --> TERMINAL{Terminal?}
     TERMINAL -->|Yes| HANDLE_TERMINAL["Handle directly:\npost-merge comment → create followup\nCI fail after merge → create new ticket"]
@@ -123,6 +127,7 @@ flowchart TD
 
 **Key routing rules:**
 - Slack @mentions at top level → create a Linear ticket, then normal ticket review flow (no special handling)
+- Linear comments on tracked tickets → route to running agent (like Slack replies), or re-evaluate via ticket review if no agent running
 - All thread replies go to the ticket's context — no @mention needed to trigger
 - Only 0 or 1 agents active per ticket at any time
 - If an agent is already running, send it a message rather than spawning a duplicate
@@ -163,6 +168,7 @@ flowchart TD
 
 **Context assembled for this decision:**
 - Ticket details (title, description, priority, labels)
+- Linear comment history on the ticket (requirements discussion, clarifications, updates)
 - Project info and high-level product goals
 - Slack thread history (if ticket originated from Slack)
 - List of currently active tickets (for duplicate detection)
@@ -356,6 +362,7 @@ Hard caps on every retry loop:
 
 Before any LLM decision, the orchestrator assembles a structured context packet:
 - Ticket metadata + history
+- Linear comment history (all comments on the ticket)
 - PR diff, CI results, review status (from GitHub API)
 - Slack thread messages
 - Active tickets and agent status (from SQLite)
@@ -571,3 +578,5 @@ Keep as active reference:
 | Flaky CI | Retry CI (max 3) |
 | Same feedback 3 times | Escalate |
 | CI fails after merge | Create new ticket to fix main |
+| Linear comment on tracked ticket | Route to agent (like Slack reply) or re-evaluate |
+| Linear comment on untracked ticket | Ignore (ticket not assigned to us) |
