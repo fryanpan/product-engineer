@@ -492,15 +492,24 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async routeToAgent(event: TicketEvent) {
-    // Check if agent is still active (not in terminal state)
+    // Check if agent is still active (not in terminal state) and load thread_ts
     const ticket = this.ctx.storage.sql.exec(
-      "SELECT agent_active, status FROM tickets WHERE id = ?",
+      "SELECT agent_active, status, slack_thread_ts, slack_channel FROM tickets WHERE id = ?",
       event.ticketId,
-    ).toArray()[0] as { agent_active: number; status: string } | undefined;
+    ).toArray()[0] as { agent_active: number; status: string; slack_thread_ts: string | null; slack_channel: string | null } | undefined;
 
     if (ticket && ticket.agent_active === 0) {
       console.log(`[Orchestrator] Skipping inactive agent for ${event.ticketId} (status: ${ticket.status})`);
       return;
+    }
+
+    // Populate thread_ts from database if not already set in the event
+    // This ensures Linear tickets (which don't have thread_ts in the webhook) can reply in-thread
+    if (ticket && ticket.slack_thread_ts && !event.slackThreadTs) {
+      event.slackThreadTs = ticket.slack_thread_ts;
+    }
+    if (ticket && ticket.slack_channel && !event.slackChannel) {
+      event.slackChannel = ticket.slack_channel;
     }
 
     const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
@@ -540,11 +549,18 @@ export class Orchestrator extends Container<Bindings> {
 
       console.log(`[Orchestrator] Model selection for ${event.ticketId}: ${modelSelection.model} (${modelSelection.complexity} complexity) - ${modelSelection.reason}`);
 
+      // Load slack_thread_ts from database (set by initial event or subsequent updates)
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT slack_thread_ts FROM tickets WHERE id = ?",
+        event.ticketId,
+      ).toArray()[0] as { slack_thread_ts: string | null } | undefined;
+
       const config: TicketAgentConfig = {
         ticketId: event.ticketId,
         product: event.product,
         repos: productConfig.repos,
         slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+        slackThreadTs: event.slackThreadTs || ticketRow?.slack_thread_ts || undefined,
         secrets: productConfig.secrets,
         gatewayConfig,
         model: modelSelection.model,
@@ -1283,8 +1299,10 @@ export class Orchestrator extends Container<Bindings> {
 
     const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
 
-    // Always use the original message ts as thread identity (Slack threads are keyed by parent ts)
-    const slackThreadTs = slackEvent.ts;
+    // If the mention is inside an existing thread, use the thread root ts.
+    // Otherwise, use the mention message ts (which will become the thread root).
+    // Slack threads are keyed by the first message's ts.
+    const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
 
     // Best-effort: post acknowledgment in the thread
     try {
@@ -1296,7 +1314,7 @@ export class Orchestrator extends Container<Bindings> {
         },
         body: JSON.stringify({
           channel: slackEvent.channel,
-          thread_ts: slackEvent.ts,
+          thread_ts: slackThreadTs,
           text: "⏳ Working on it...",
         }),
       });

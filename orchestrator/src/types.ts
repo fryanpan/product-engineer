@@ -29,6 +29,7 @@ export interface TicketAgentConfig {
   product: string;
   repos: string[];
   slackChannel: string;
+  slackThreadTs?: string; // Thread to post replies to (if set from initial event)
   secrets: Record<string, string>; // logical name → binding name
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
   model?: string; // Claude model to use (e.g., "sonnet", "opus", "haiku")

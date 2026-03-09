@@ -117,6 +117,35 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.R2_SECRET_ACCESS_KEY).toBe("r2_secret");
     expect(vars.CF_ACCOUNT_ID).toBe("cf_account");
   });
+
+  test("passes slackThreadTs when provided in config", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      slackThreadTs: "1234567890.123456",
+      secrets: {},
+    };
+    const env = {} as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.SLACK_THREAD_TS).toBe("1234567890.123456");
+  });
+
+  test("sets empty string for slackThreadTs when not provided", () => {
+    const config = {
+      ticketId: "LIN-123",
+      product: "health-tool",
+      repos: ["fryanpan/health-tool"],
+      slackChannel: "#health-tool",
+      secrets: {},
+    };
+    const env = {} as Record<string, string>;
+
+    const vars = resolveAgentEnvVars(config, env);
+    expect(vars.SLACK_THREAD_TS).toBe("");
+  });
 });
 
 describe("resolveAgentEnvVars - AI Gateway", () => {

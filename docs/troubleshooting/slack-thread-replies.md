@@ -2,7 +2,9 @@
 
 ## Problem
 
-Agent doesn't respond to messages sent in per-ticket threads unless explicitly mentioned with `@product-engineer`.
+**Issue 1:** Agent doesn't respond to messages sent in per-ticket threads unless explicitly mentioned with `@product-engineer`.
+
+**Issue 2:** Agent replies are posted to the main channel instead of the ticket thread.
 
 ## Expected Behavior
 
@@ -119,10 +121,26 @@ After fixing configuration:
 3. Send a follow-up message in the thread: `hello, can you hear me?` (NO @mention)
 4. Agent should respond within 1-2 minutes
 
+## Known Issues and Fixes
+
+### Agent Replies Going to Main Channel (Fixed in BC-133)
+
+**Symptom:** Agent posts replies to the main channel instead of in the ticket thread.
+
+**Root cause:** The `slack_thread_ts` was not being passed from the orchestrator to the agent container on initialization. The agent would only learn the thread_ts when receiving subsequent events, but by then it had already posted its first message to the main channel.
+
+**Fix:** The orchestrator now loads `slack_thread_ts` from the database when initializing the agent and passes it in the `TicketAgentConfig`. This ensures the agent knows the correct thread from the start.
+
+**Related changes:**
+- `orchestrator/src/types.ts`: Added `slackThreadTs` field to `TicketAgentConfig`
+- `orchestrator/src/orchestrator.ts`: Load `slack_thread_ts` from DB when building agent config
+- `orchestrator/src/ticket-agent.ts`: Use `config.slackThreadTs` when resolving env vars
+
 ## Related Files
 
 - `containers/orchestrator/slack-socket.ts` — Socket Mode message filtering
 - `orchestrator/src/orchestrator.ts` — Ticket lookup and routing
 - `agent/src/prompt.ts` — Event prompt formatting
+- `agent/src/tools.ts` — Slack posting logic (uses config.slackThreadTs)
 - `scripts/slack-app-manifest.yaml` — Reference Slack app configuration
 - `docs/deploy.md` — Deployment instructions with Slack setup
