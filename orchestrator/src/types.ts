@@ -64,6 +64,11 @@ export interface Bindings {
   GOOGLE_CLIENT_SECRET: string;
   ALLOWED_EMAILS?: string; // Comma-separated list of allowed email addresses
 
+  // Google OAuth for dashboard
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  GOOGLE_ALLOWED_DOMAIN: string;
+
   // Per-product GitHub tokens
   HEALTH_TOOL_GITHUB_TOKEN: string;
   BIKE_TOOL_GITHUB_TOKEN: string;

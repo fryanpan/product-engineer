@@ -8,6 +8,7 @@
 import * as Sentry from "@sentry/cloudflare";
 import { Hono } from "hono";
 import { linearWebhook, githubWebhook } from "./webhooks";
+import { dashboardRouter } from "./dashboard";
 import type { Bindings } from "./types";
 import { authHandlers, requireAuth } from "./auth";
 import dashboardHTML from "./dashboard.html";
@@ -44,6 +45,7 @@ app.get("/health", async (c) => {
   return c.json({ ok: true, service: "product-engineer-worker", orchestrator: doStatus });
 });
 
+app.route("/dashboard", dashboardRouter);
 app.route("/api/webhooks/linear", linearWebhook);
 app.route("/api/webhooks/github", githubWebhook);
 
