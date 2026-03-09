@@ -116,3 +116,30 @@ When events flow through multiple layers (webhook → orchestrator → agent), e
 - Template: When adding authentication to a Cloudflare Worker, use KV + OAuth + session cookies pattern (proven secure + simple)
 - Documentation: Always include security section in implementation docs before asking for review
 - Agent containers: Consider pre-configuring git identity to avoid commit delays
+
+## 2026-03-09 - BC-133: Additional initialization fix (commit 9b014f6)
+
+**Context:**
+The issue was fixed earlier today with commit edf0236 (orchestrator enriches events from DB). This commit adds a complementary fix: passing thread_ts during agent initialization.
+
+**What worked:**
+- Two-layer defense: orchestrator enriches events + agent initialization includes thread_ts
+- Systematic code tracing revealed the initialization gap
+- Test-driven verification: added tests to confirm thread_ts flows through TicketAgentConfig
+
+**Combined solution:**
+1. **Orchestrator enrichment (edf0236)**: Query DB in `routeToAgent()`, populate `event.slackThreadTs`
+2. **Initialization fix (9b014f6)**: Pass `slackThreadTs` in `TicketAgentConfig` during `/initialize`
+
+**Why both fixes matter:**
+- Orchestrator enrichment ensures subsequent events have thread_ts
+- Initialization fix ensures agent knows thread_ts from the FIRST message (before any events arrive)
+- Together they provide defense in depth: agent always has correct thread context
+
+**Technical details:**
+- Added `slackThreadTs` field to `TicketAgentConfig` interface
+- Orchestrator loads thread_ts from DB when building agent config (lines 540-545)
+- Agent receives thread_ts via env vars during container initialization
+- Added tests to verify the full flow
+
+**Key insight:** For critical routing data like thread_ts, pass it at BOTH initialization and per-event. Don't assume events will always arrive before the agent needs to post.
