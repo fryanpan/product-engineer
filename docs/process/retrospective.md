@@ -1,3 +1,36 @@
+## 2026-03-09 - BC-133: Fix agent replies going to main channel instead of thread (PR #69)
+
+**Context:** User reported that when replying in ticket threads, the agent responded in the main channel instead of the thread. This was confusing and broke conversation context.
+
+**Root cause:**
+- Linear webhook events don't include `slack_thread_ts` (it's only set after the agent posts its first message)
+- After the agent's first post, `persistSlackThreadTs()` saves the thread_ts to the database
+- But subsequent events routed through `orchestrator.ts:routeToAgent()` weren't being enriched with the stored thread_ts from the DB
+- The agent received events with `slackThreadTs` undefined → defaulted to posting in channel
+
+**What worked:**
+- Quick diagnosis using code search (Grep for "notify_slack", "thread_ts")
+- Clear data flow tracing: webhook → orchestrator → event → agent → Slack post
+- Simple fix: query `slack_thread_ts` from tickets table in `routeToAgent()` and populate event before routing
+- All existing tests continued to pass (no breaking changes)
+
+**What didn't:**
+- Initially searched too narrowly (just agent code) before finding the orchestrator routing gap
+- Could have written a specific test case for this scenario (thread enrichment from DB)
+
+**Technical notes:**
+- `orchestrator/src/orchestrator.ts:494-513` — Added DB query for slack_thread_ts and slack_channel, populate event before routing
+- The fix handles both Linear tickets (no thread_ts in webhook) and Slack mentions (thread_ts already in event)
+- Existing code in `agent/src/server.ts:715-716` already handles event.slackThreadTs → config update
+
+**Files changed:**
+- `orchestrator/src/orchestrator.ts`: Query and populate slack_thread_ts from DB in routeToAgent()
+
+**Learning:**
+When events flow through multiple layers (webhook → orchestrator → agent), ensure enrichment happens at the orchestrator layer where you have access to persistent state (DB). Don't rely on the original webhook payload to have all the context needed for downstream processing.
+
+---
+
 ## 2026-03-08 - Add emergency shutdown-all endpoint (PR #66)
 
 **Context:** User requested "clean up all agents…there should be no work active" during a Slack session. The existing `/cleanup-inactive` endpoint only handles agents already marked inactive, not active agents.
