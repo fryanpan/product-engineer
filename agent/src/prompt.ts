@@ -101,7 +101,7 @@ ${task.repos.length > 1 ? "The repos are already cloned into /workspace/. Work a
 2. Read relevant code, implement, run tests, self-review
 3. Commit, push, create PR, update status, notify Slack — all in one turn
 4. Brief retro: save to docs/process/retrospective.md, commit and push retro to PR branch
-5. Auto-merge low-risk (CSS, text, docs) or request review for high-risk (auth, data, APIs)
+5. After creating the PR, update status to "pr_open" and exit. The orchestrator handles merge decisions.
 
 **Communication:** Use \`update_task_status\` at every state transition. Use \`notify_slack\` for updates but always combine with other work.
 
@@ -198,6 +198,8 @@ export async function buildEventPrompt(
       return `The PR has been merged. Update the task status to "merged", notify Slack, and do a brief retro.`;
     case "ci_status":
       return `CI status update:\n\n**Status:** ${payload.status}\n**Description:** ${payload.description || ""}\n\nIf CI failed, investigate and fix. If it passed, continue with the workflow.`;
+    case "linear_comment":
+      return `A comment was posted on your Linear ticket:\n\n**Author:** ${payload.author}\n**Comment:**\n<user_input>\n${payload.body || "(no comment)"}\n</user_input>\n\nProcess this information and continue your work.`;
     case "slack_reply": {
       const files = payload.files as CommandData["files"];
       let message = `The user replied via Slack:\n\n<user_input>\n${payload.text}\n</user_input>`;
@@ -250,9 +252,9 @@ ${prInfo}
 ## What To Do
 
 1. Review the git log and status above to understand where you left off
-2. If a PR exists and is approved, merge it
-3. If a PR exists with requested changes, address them
-4. If no PR exists, continue implementing and create one when ready
+2. If a PR exists with requested changes, address them
+3. If no PR exists, continue implementing and create one when ready
+4. The orchestrator handles merge decisions — you're done after PR creation
 5. Follow the product-engineer skill for the rest of the workflow
 
 **CRITICAL — Headless Execution Rules:**

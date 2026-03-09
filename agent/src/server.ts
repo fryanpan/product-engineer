@@ -266,8 +266,8 @@ const heartbeatInterval = setInterval(() => {
 
 // Session timeout watchdog: exit if session runs too long or becomes idle
 // This prevents containers from staying alive indefinitely waiting for Slack replies
-const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours wall-clock time
-const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes without messages
+const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours wall-clock (safety net)
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes without messages — ephemeral agents exit fast
 const timeoutWatchdog = setInterval(() => {
   if (!sessionActive && sessionStatus === "idle") return; // Not started yet
 

@@ -56,7 +56,7 @@ export function resolveAgentEnvVars(
 
 export class TicketAgent extends Container<Bindings> {
   defaultPort = 3000;
-  sleepAfter = "4h";
+  sleepAfter = "1h"; // Safety net — agent should exit within 5min of completion
 
   private configLoaded = false;
 
