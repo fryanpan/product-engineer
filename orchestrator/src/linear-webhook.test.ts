@@ -100,14 +100,14 @@ describe("linear webhook handler", () => {
     mockOrchestratorStub = createMockOrchestratorWithEvents(TEST_REGISTRY);
   });
 
-  it("ignores non-Issue events", async () => {
+  it("ignores non-Issue/non-Comment events", async () => {
     const app = makeApp();
     const env = makeEnv();
     const res = await postWebhook(app, {
       action: "create",
-      type: "Comment",
+      type: "Project",
       data: {
-        id: "c1",
+        id: "p1",
         title: "test",
         description: "",
         priority: 1,
@@ -119,6 +119,105 @@ describe("linear webhook handler", () => {
     const json = await res.json() as Record<string, unknown>;
     expect(json.ignored).toBe(true);
     expect(sentEvents).toHaveLength(0);
+  });
+
+  it("ignores comments from the agent itself", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "create",
+      type: "Comment",
+      data: {
+        id: "comment-1",
+        body: "Agent posted this",
+        issue: { id: "issue-100", identifier: "PE-1", title: "Test issue" },
+        user: { name: "Test Agent", email: "agent@example.com" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ignored).toBe(true);
+    expect(json.reason).toBe("our own comment");
+    expect(sentEvents).toHaveLength(0);
+  });
+
+  it("ignores comments on untracked tickets", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "create",
+      type: "Comment",
+      data: {
+        id: "comment-2",
+        body: "A user comment",
+        issue: { id: "untracked-issue", identifier: "PE-99", title: "Untracked" },
+        user: { name: "Some User", email: "user@example.com" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ignored).toBe(true);
+    expect(json.reason).toBe("ticket not tracked");
+    expect(sentEvents).toHaveLength(0);
+  });
+
+  it("forwards comments on tracked tickets", async () => {
+    // Override the mock to handle ticket-status requests
+    mockOrchestratorStub = {
+      fetch: async (req: Request) => {
+        const url = new URL(req.url);
+
+        if (url.pathname === "/event") {
+          const body = await req.json();
+          sentEvents.push(body);
+          return Response.json({ ok: true });
+        }
+
+        if (url.pathname.startsWith("/ticket-status/")) {
+          const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
+          if (ticketId === "tracked-issue") {
+            return Response.json({ status: "in_progress", product: "test-app", agent_active: 1 });
+          }
+          return Response.json({ error: "not found" }, { status: 404 });
+        }
+
+        // Delegate to base stub for registry lookups
+        const baseStub = createMockOrchestratorWithEvents(TEST_REGISTRY);
+        return baseStub.fetch(req);
+      },
+    } as unknown as DurableObjectStub;
+
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "create",
+      type: "Comment",
+      data: {
+        id: "comment-3",
+        body: "Please also fix the footer",
+        issue: { id: "tracked-issue", identifier: "PE-10", title: "Fix the header" },
+        user: { name: "Bryan", email: "bryan@example.com" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ok).toBe(true);
+    expect(json.ticketId).toBe("tracked-issue");
+
+    expect(sentEvents).toHaveLength(1);
+    const event = sentEvents[0] as Record<string, unknown>;
+    expect(event.type).toBe("linear_comment");
+    expect(event.source).toBe("linear");
+    expect(event.ticketId).toBe("tracked-issue");
+    expect(event.product).toBe("test-app");
+    const payload = event.payload as Record<string, unknown>;
+    expect(payload.comment_id).toBe("comment-3");
+    expect(payload.body).toBe("Please also fix the footer");
+    expect(payload.author).toBe("Bryan");
+    expect(payload.issue_identifier).toBe("PE-10");
   });
 
   it("ignores issues from unknown teams", async () => {

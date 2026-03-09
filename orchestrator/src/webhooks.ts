@@ -172,12 +172,55 @@ linearWebhook.post("/", async (c) => {
 
   const payload = JSON.parse(rawBody) as LinearWebhookPayload;
 
-  // Only handle issues
-  if (payload.type !== "Issue") {
+  // Only handle issues and comments
+  if (payload.type !== "Issue" && payload.type !== "Comment") {
     return c.json({ ok: true, ignored: true });
   }
 
   const orchestrator = getOrchestrator(c.env);
+
+  // Handle Linear comments on tracked tickets
+  if (payload.type === "Comment" && payload.action === "create") {
+    const commentData = payload.data as unknown as {
+      id: string;
+      body: string;
+      issue: { id: string; identifier: string; title: string };
+      user: { name: string; email?: string };
+    };
+
+    // Don't re-process our own comments (posted by the orchestrator)
+    const agent = await getAgentIdentity(orchestrator);
+    if (commentData.user.email === agent.linear_email) {
+      return c.json({ ok: true, ignored: true, reason: "our own comment" });
+    }
+
+    // Check if we're tracking this ticket
+    const statusRes = await orchestrator.fetch(
+      new Request(`http://internal/ticket-status/${encodeURIComponent(commentData.issue.id)}`)
+    );
+
+    if (!statusRes.ok) {
+      return c.json({ ok: true, ignored: true, reason: "ticket not tracked" });
+    }
+
+    const ticketStatus = await statusRes.json<{ status: string; product: string }>();
+
+    await forwardToOrchestrator(c.env, {
+      type: "linear_comment",
+      source: "linear",
+      ticketId: commentData.issue.id,
+      product: ticketStatus.product,
+      payload: {
+        comment_id: commentData.id,
+        body: commentData.body,
+        author: commentData.user.name,
+        issue_identifier: commentData.issue.identifier,
+        issue_title: commentData.issue.title,
+      },
+    });
+
+    return c.json({ ok: true, ticketId: commentData.issue.id });
+  }
 
   if (!(await isOurTeam(orchestrator, payload.data.teamId))) {
     return c.json({ ok: true, ignored: true, reason: "not our team" });

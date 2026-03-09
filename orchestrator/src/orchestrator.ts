@@ -166,6 +166,32 @@ export class Orchestrator extends Container<Bindings> {
         updated_at TEXT DEFAULT (datetime('now'))
       )
     `);
+    // Decision log table — records orchestrator decisions for observability
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS decision_log (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        type TEXT NOT NULL,
+        ticket_id TEXT,
+        context_summary TEXT,
+        action TEXT NOT NULL,
+        reason TEXT,
+        confidence REAL DEFAULT 0
+      )
+    `);
+
+    // Ticket queue table — pending tickets awaiting agent assignment
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS ticket_queue (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        product TEXT NOT NULL,
+        priority INTEGER DEFAULT 3,
+        payload TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+
     // Migration: add agent_active column for existing deployments
     try {
       this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER NOT NULL DEFAULT 1`);
@@ -431,9 +457,9 @@ export class Orchestrator extends Container<Bindings> {
         if (url.pathname.startsWith("/ticket-status/")) {
           const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
           const row = this.ctx.storage.sql.exec(
-            "SELECT agent_active, status FROM tickets WHERE id = ?",
+            "SELECT agent_active, status, product FROM tickets WHERE id = ?",
             ticketId,
-          ).toArray()[0] as { agent_active: number; status: string } | undefined;
+          ).toArray()[0] as { agent_active: number; status: string; product: string } | undefined;
           if (!row) return Response.json({ error: "not found" }, { status: 404 });
           return Response.json({
             ...row,
