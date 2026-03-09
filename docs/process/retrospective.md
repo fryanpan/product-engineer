@@ -2,32 +2,42 @@
 
 **Context:** User reported that when replying in ticket threads, the agent responded in the main channel instead of the thread. This was confusing and broke conversation context.
 
-**Root cause:**
+**Root cause (session 1):**
 - Linear webhook events don't include `slack_thread_ts` (it's only set after the agent posts its first message)
 - After the agent's first post, `persistSlackThreadTs()` saves the thread_ts to the database
 - But subsequent events routed through `orchestrator.ts:routeToAgent()` weren't being enriched with the stored thread_ts from the DB
 - The agent received events with `slackThreadTs` undefined → defaulted to posting in channel
+- **Fix:** Query and populate slack_thread_ts from DB in routeToAgent() before routing events
+
+**Root cause (session 2 - additional issue found):**
+- When users mentioned @product-engineer INSIDE an existing Slack thread, the orchestrator was using `slackEvent.ts` (the mention message timestamp) instead of `slackEvent.thread_ts` (the existing thread root)
+- This caused the agent to create NEW threads instead of replying in the existing thread where the user mentioned it
+- Example: User posts "Bug in feature X" → teammate replies "@product-engineer fix this" → agent creates new thread instead of replying in existing thread
+- **Fix:** Use `slackEvent.thread_ts || slackEvent.ts` to respect existing threads when mentions occur inside them
 
 **What worked:**
-- Quick diagnosis using code search (Grep for "notify_slack", "thread_ts")
-- Clear data flow tracing: webhook → orchestrator → event → agent → Slack post
-- Simple fix: query `slack_thread_ts` from tickets table in `routeToAgent()` and populate event before routing
-- All existing tests continued to pass (no breaking changes)
+- Systematic code tracing through the full flow: Slack event → orchestrator → agent → Slack post
+- Git history analysis revealed recent threading-related changes and their intent
+- Writing out hypothetical scenarios helped identify the edge case (mention inside existing thread)
+- All 68 orchestrator tests + 37 agent tests continued to pass
 
 **What didn't:**
-- Initially searched too narrowly (just agent code) before finding the orchestrator routing gap
-- Could have written a specific test case for this scenario (thread enrichment from DB)
+- Initially went down rabbit holes investigating Slack API behavior and race conditions before finding the simpler root cause
+- Took multiple iterations to understand that there were TWO separate issues (DB enrichment + thread_ts selection)
+- Could have more quickly identified the issue by manually testing the exact scenario the user described
 
 **Technical notes:**
-- `orchestrator/src/orchestrator.ts:494-513` — Added DB query for slack_thread_ts and slack_channel, populate event before routing
-- The fix handles both Linear tickets (no thread_ts in webhook) and Slack mentions (thread_ts already in event)
-- Existing code in `agent/src/server.ts:715-716` already handles event.slackThreadTs → config update
+- `orchestrator/src/orchestrator.ts:494-513` — DB query enrichment for Linear tickets (session 1)
+- `orchestrator/src/orchestrator.ts:1287` — Thread identifier selection logic (session 2): `slackEvent.thread_ts || slackEvent.ts`
+- The fix preserves existing behavior for top-level mentions (agent creates own thread) while fixing mentions inside existing threads
 
 **Files changed:**
-- `orchestrator/src/orchestrator.ts`: Query and populate slack_thread_ts from DB in routeToAgent()
+- `orchestrator/src/orchestrator.ts`: Thread identifier logic and DB enrichment in routeToAgent()
 
 **Learning:**
-When events flow through multiple layers (webhook → orchestrator → agent), ensure enrichment happens at the orchestrator layer where you have access to persistent state (DB). Don't rely on the original webhook payload to have all the context needed for downstream processing.
+- When debugging threading issues, consider all entry points: Linear webhooks (no thread), Slack mentions (new thread vs existing thread), thread replies
+- Edge cases often involve scenarios where the same feature (mentions) behaves differently in different contexts (top-level vs in-thread)
+- Git history and recent changes are valuable debugging clues - check what's been modified recently in the area of the bug
 
 ---
 
