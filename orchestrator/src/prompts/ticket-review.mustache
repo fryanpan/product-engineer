@@ -59,6 +59,10 @@ Evaluate this ticket and respond with JSON:
 **Decision guide:**
 - **start_agent**: Requirements are clear enough to begin. Pick the right model.
 - **ask_questions**: The ticket is vague on outcome, value, or intended workflow. Ask up to 2 specific questions.
+{{#isSlackOriginated}}
+
+**Slack requests:** This ticket originates from a Slack mention. The user has already expressed clear intent. Prefer `start_agent` unless the request is genuinely ambiguous about WHAT to do (not just lacking implementation details — the agent will figure those out). "Add X to the app" is clear enough. "Something is broken" without context is not.
+{{/isSlackOriginated}}
 - **mark_duplicate**: Substantially overlaps an active ticket listed above.
 - **expand_existing**: Related to an active ticket — add scope to existing work instead of starting a new agent.
 - **queue**: 10+ agents running and this ticket can wait.

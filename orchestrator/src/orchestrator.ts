@@ -974,6 +974,48 @@ export class Orchestrator extends Container<Bindings> {
           "UPDATE tickets SET status = 'needs_info', updated_at = datetime('now') WHERE id = ?",
           event.ticketId,
         );
+
+        // Post questions to Slack thread and Linear
+        const questions = (decision as unknown as Record<string, unknown>).questions as string[] | undefined;
+        if (questions && questions.length > 0) {
+          const numberedQuestions = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+
+          // Post to Slack thread
+          const slackChannel = event.slackChannel || (ticketRow?.slack_channel as string) || undefined;
+          const slackThreadTs = event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined;
+          if (slackChannel && slackThreadTs) {
+            const slackText = `❓ Before I start, a couple questions:\n${numberedQuestions}`;
+            await fetch("https://slack.com/api/chat.postMessage", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                channel: slackChannel,
+                text: slackText,
+                thread_ts: slackThreadTs,
+              }),
+            }).catch((err) => console.error("[Orchestrator] Failed to post questions to Slack:", err));
+          }
+
+          // Post to Linear as a comment
+          const linearToken = this.getLinearAppToken();
+          if (linearToken) {
+            const linearBody = `❓ **Before I start, a couple questions:**\n${numberedQuestions}`;
+            await fetch("https://api.linear.app/graphql", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${linearToken}`,
+              },
+              body: JSON.stringify({
+                query: `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`,
+                variables: { issueId: event.ticketId, body: linearBody },
+              }),
+            }).catch((err) => console.error("[Orchestrator] Failed to post questions to Linear:", err));
+          }
+        }
         break;
       }
       case "mark_duplicate": {
@@ -1161,6 +1203,34 @@ export class Orchestrator extends Container<Bindings> {
     } else {
       const errorText = await mergeRes.text();
       console.error(`[Orchestrator] Failed to merge PR #${prNumber}: ${mergeRes.status} ${errorText}`);
+
+      // Notify via Slack if thread available
+      if (ticketRow.slack_thread_ts && ticketRow.slack_channel) {
+        await fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            channel: ticketRow.slack_channel,
+            thread_ts: ticketRow.slack_thread_ts,
+            text: `Auto-merge failed for PR #${prNumber}: ${mergeRes.status === 405 || mergeRes.status === 409 ? "merge conflict or branch not mergeable" : `API error ${mergeRes.status}`}. Sending back to agent for rebase.`,
+          }),
+        }).catch(err => console.warn("[Orchestrator] Failed to notify Slack:", err));
+      }
+
+      // Route back to agent with rebase instruction
+      const event: TicketEvent = {
+        type: "merge_conflict",
+        source: "github",
+        ticketId,
+        product,
+        payload: { error: errorText, pr_url: ticketRow.pr_url, action: "rebase_and_push" },
+        slackThreadTs: ticketRow.slack_thread_ts as string | undefined,
+        slackChannel: ticketRow.slack_channel as string | undefined,
+      };
+      await this.routeToAgent(event);
     }
   }
 

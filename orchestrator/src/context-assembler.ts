@@ -41,6 +41,9 @@ export class ContextAssembler {
         : Promise.resolve([]),
     ]);
 
+    // Detect Slack-originated tickets by description prefix
+    const isSlackOriginated = /^\*\*Slack request from <@/.test(ticket.description || "");
+
     return {
       identifier: ticket.identifier || ticket.ticketId,
       title: ticket.title,
@@ -53,6 +56,7 @@ export class ContextAssembler {
       repos: ticket.repos.join(", "),
       linearComments,
       slackThread,
+      isSlackOriginated,
     };
   }
 
@@ -83,6 +87,10 @@ export class ContextAssembler {
       ? await this.fetchCIStatus(repoPath, headSha, ghToken)
       : { passed: false, details: "No CI data" };
 
+    // GitHub REST API returns mergeable (boolean|null) and mergeable_state (string)
+    const mergeable = prDetails?.mergeable;
+    const mergeableState = prDetails?.mergeable_state as string | undefined;
+
     return {
       identifier: ticket.identifier || ticket.ticketId,
       title: ticket.title,
@@ -92,6 +100,8 @@ export class ContextAssembler {
       changedFiles: prDetails?.changed_files || 0,
       additions: prDetails?.additions || 0,
       deletions: prDetails?.deletions || 0,
+      mergeable: mergeable === true ? "MERGEABLE" : mergeable === false ? "CONFLICTING" : "UNKNOWN",
+      mergeableState: mergeableState || "",
       ciPassed: ciStatus.passed,
       ciFailureDetails: ciStatus.details,
       diffSummary: (diff as string).slice(0, 5000),
