@@ -2010,7 +2010,7 @@ export class Orchestrator extends Container<Bindings> {
     const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
     const teamId = settingsMap.linear_team_id;
     const appUserId = settingsMap.linear_app_user_id;
-    const linearToken = (this.env as Record<string, unknown>).LINEAR_APP_TOKEN as string;
+    const linearToken = this.getLinearAppToken();
 
     if (!teamId || !linearToken) {
       await this.postSlackError(
@@ -2049,15 +2049,22 @@ export class Orchestrator extends Container<Bindings> {
     let projectId: string | null = null;
     if (projectRes.ok) {
       const projectData = await projectRes.json() as {
-        data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } }
+        data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } };
+        errors?: Array<{ message: string }>;
       };
+      if (projectData.errors) {
+        console.error(`[Orchestrator] Linear project lookup errors:`, JSON.stringify(projectData.errors));
+      }
       const normalizedName = projectName.toLowerCase();
-      projectId = projectData.data?.team?.projects?.nodes?.find(
-        p => p.name.toLowerCase() === normalizedName,
-      )?.id || null;
+      const projects = projectData.data?.team?.projects?.nodes || [];
+      projectId = projects.find(p => p.name.toLowerCase() === normalizedName)?.id || null;
+      console.log(`[Orchestrator] Project lookup: name="${projectName}" found=${!!projectId} (${projects.length} projects in team)`);
+    } else {
+      console.error(`[Orchestrator] Linear project lookup failed: ${projectRes.status} ${await projectRes.text().catch(() => "")}`);
     }
 
     // Create the Linear issue
+    console.log(`[Orchestrator] Creating Linear issue: team=${teamId} project=${projectId} assignee=${appUserId} title="${title}"`);
     const createRes = await fetch("https://api.linear.app/graphql", {
       method: "POST",
       headers: {
