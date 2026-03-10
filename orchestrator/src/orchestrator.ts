@@ -688,8 +688,8 @@ export class Orchestrator extends Container<Bindings> {
         event.ticketId,
       ).toArray()[0] as { slack_thread_ts: string; slack_channel: string } | undefined;
       if (threadMap) {
-        event.slackThreadTs = threadMap.slack_thread_ts;
-        event.slackChannel = threadMap.slack_channel;
+        event.slackThreadTs = threadMap.slack_thread_ts || undefined;
+        event.slackChannel = threadMap.slack_channel || undefined;
         console.log(`[Orchestrator] Linked Linear issue ${event.ticketId} to Slack thread ${threadMap.slack_thread_ts}`);
         // Clean up — one-time mapping
         this.ctx.storage.sql.exec("DELETE FROM slack_thread_map WHERE linear_issue_id = ?", event.ticketId);
@@ -2223,7 +2223,7 @@ export class Orchestrator extends Container<Bindings> {
        ON CONFLICT(linear_issue_id) DO UPDATE SET
          slack_thread_ts = excluded.slack_thread_ts,
          slack_channel = excluded.slack_channel`,
-      issue.id, slackThreadTs || "", slackEvent.channel || "",
+      issue.id, slackThreadTs || null, slackEvent.channel || null,
     );
 
     return Response.json({ ok: true, linearIssue: issue.identifier });
