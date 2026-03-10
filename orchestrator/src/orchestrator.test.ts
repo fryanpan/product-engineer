@@ -27,21 +27,21 @@ describe("buildTicketEvent", () => {
     expect(event.source).toBe("github");
   });
 
-  test("creates event from Slack mention", () => {
-    const event = buildTicketEvent("slack", "slack_mention", {
+  test("creates event from Slack reply", () => {
+    const event = buildTicketEvent("slack", "slack_reply", {
       product: "test-app",
       text: "fix the login bug",
       user: "U12345",
       channel: "C12345",
       threadTs: "1234567890.123456",
     });
-    expect(event.type).toBe("slack_mention");
+    expect(event.type).toBe("slack_reply");
     expect(event.slackThreadTs).toBe("1234567890.123456");
     expect(event.slackChannel).toBe("C12345");
   });
 
   test("includes channel in Slack event", () => {
-    const event = buildTicketEvent("slack", "slack_mention", {
+    const event = buildTicketEvent("slack", "slack_reply", {
       product: "test-app",
       text: "deploy to prod",
       channel: "C000000APP1",

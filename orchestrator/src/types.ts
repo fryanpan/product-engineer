@@ -3,7 +3,7 @@ export const TERMINAL_STATUSES = ["merged", "closed", "deferred", "failed"] as c
 export type TerminalStatus = typeof TERMINAL_STATUSES[number];
 
 export interface TicketEvent {
-  type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_mention", "slack_reply", "linear_comment"
+  type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_reply", "linear_comment"
   source: string;     // "linear", "github", "slack", "api"
   ticketId: string;
   product: string;

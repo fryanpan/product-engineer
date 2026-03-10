@@ -339,6 +339,15 @@ export class Orchestrator extends Container<Bindings> {
       )
     `);
 
+    // Slack thread → Linear issue mapping (for linking Slack-originated tickets)
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS slack_thread_map (
+        linear_issue_id TEXT PRIMARY KEY,
+        slack_thread_ts TEXT NOT NULL,
+        slack_channel TEXT NOT NULL
+      )
+    `);
+
     // Ticket queue table — pending tickets awaiting agent assignment
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS ticket_queue (
@@ -670,6 +679,21 @@ export class Orchestrator extends Container<Bindings> {
     if (existing && (TERMINAL_STATUSES as readonly string[]).includes(existing.status)) {
       console.log(`[Orchestrator] Ignoring event for terminal ticket ${event.ticketId} (status: ${existing.status})`);
       return Response.json({ ok: true, ticketId: event.ticketId, ignored: true, reason: "terminal ticket" });
+    }
+
+    // For Linear events, look up Slack thread from slack_thread_map (Slack-originated tickets)
+    if (event.source === "linear" && !event.slackThreadTs) {
+      const threadMap = this.ctx.storage.sql.exec(
+        "SELECT slack_thread_ts, slack_channel FROM slack_thread_map WHERE linear_issue_id = ?",
+        event.ticketId,
+      ).toArray()[0] as { slack_thread_ts: string; slack_channel: string } | undefined;
+      if (threadMap) {
+        event.slackThreadTs = threadMap.slack_thread_ts;
+        event.slackChannel = threadMap.slack_channel;
+        console.log(`[Orchestrator] Linked Linear issue ${event.ticketId} to Slack thread ${threadMap.slack_thread_ts}`);
+        // Clean up — one-time mapping
+        this.ctx.storage.sql.exec("DELETE FROM slack_thread_map WHERE linear_issue_id = ?", event.ticketId);
+      }
     }
 
     // Upsert ticket — only re-activate non-terminal tickets
@@ -1937,58 +1961,153 @@ export class Orchestrator extends Container<Bindings> {
       return Response.json({ error: "no product for channel" }, { status: 404 });
     }
 
-    const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
-
-    // If the mention is inside an existing thread, use the thread root ts.
-    // Otherwise, use the mention message ts (which will become the thread root).
-    // Slack threads are keyed by the first message's ts.
     const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
 
-    // Best-effort: post acknowledgment in the thread
-    try {
-      const slackRes = await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: slackEvent.channel,
-          thread_ts: slackThreadTs,
-          text: "⏳ Working on it...",
-        }),
-      });
-
-      if (slackRes.ok) {
-        const slackData = await slackRes.json() as { ok: boolean; ts?: string; error?: string };
-        if (slackData.ok) {
-          console.log(`[Orchestrator] Posted acknowledgment, thread_ts=${slackThreadTs}`);
-        } else {
-          console.warn(`[Orchestrator] Slack API returned error: ${slackData.error}`);
-        }
-      } else {
-        console.warn(`[Orchestrator] Slack post failed: ${slackRes.status}`);
-      }
-    } catch (err) {
-      console.warn("[Orchestrator] Failed to post acknowledgment to Slack:", err);
+    // Create a Linear ticket instead of spawning an agent directly.
+    // The Linear webhook will handle ticket creation → agent spawning.
+    const productConfig = products[product];
+    const projectName = productConfig.triggers?.linear?.project_name;
+    if (!projectName) {
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ No Linear project configured for this product. Cannot create ticket.`,
+      );
+      return Response.json({ error: "no linear project for product" }, { status: 400 });
     }
 
-    const event: TicketEvent = {
-      type: "slack_mention",
-      source: "slack",
-      ticketId,
-      product,
-      payload: slackEvent,
-      slackThreadTs, // Always set from slackEvent.ts — ack post is best-effort UI
-      slackChannel: slackEvent.channel,
-    };
+    // Load settings for Linear API
+    const settings = this.ctx.storage.sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
+    const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    const teamId = settingsMap.linear_team_id;
+    const appUserId = settingsMap.linear_app_user_id;
+    const linearToken = (this.env as Record<string, unknown>).LINEAR_APP_TOKEN as string;
 
-    // Use handleEvent which does upsert + route
-    return this.handleEvent(new Request("http://internal/event", {
+    if (!teamId || !linearToken) {
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ Linear integration not configured (missing team ID or token).`,
+      );
+      return Response.json({ error: "linear not configured" }, { status: 500 });
+    }
+
+    // Strip the @mention from the text to get the raw request
+    const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+
+    // Generate a concise title from the request (first sentence or first 80 chars)
+    const title = rawText.length <= 80
+      ? rawText
+      : rawText.split(/[.!?\n]/)[0].slice(0, 80).trim() || rawText.slice(0, 80).trim();
+
+    // Look up the Linear project ID by name
+    const projectRes = await fetch("https://api.linear.app/graphql", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-    }));
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${linearToken}`,
+      },
+      body: JSON.stringify({
+        query: `query($teamId: String!) {
+          team(id: $teamId) {
+            projects { nodes { id name } }
+          }
+        }`,
+        variables: { teamId },
+      }),
+    });
+
+    let projectId: string | null = null;
+    if (projectRes.ok) {
+      const projectData = await projectRes.json() as {
+        data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } }
+      };
+      const normalizedName = projectName.toLowerCase();
+      projectId = projectData.data?.team?.projects?.nodes?.find(
+        p => p.name.toLowerCase() === normalizedName,
+      )?.id || null;
+    }
+
+    // Create the Linear issue
+    const createRes = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${linearToken}`,
+      },
+      body: JSON.stringify({
+        query: `mutation($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue { id identifier url }
+          }
+        }`,
+        variables: {
+          input: {
+            teamId,
+            title,
+            description: `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`,
+            ...(projectId && { projectId }),
+            ...(appUserId && { assigneeId: appUserId }),
+          },
+        },
+      }),
+    });
+
+    if (!createRes.ok) {
+      const errText = await createRes.text();
+      console.error(`[Orchestrator] Failed to create Linear issue: ${createRes.status} ${errText}`);
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+      );
+      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+    }
+
+    const createData = await createRes.json() as {
+      data?: { issueCreate?: { success: boolean; issue?: { id: string; identifier: string; url: string } } }
+    };
+    const issue = createData.data?.issueCreate?.issue;
+
+    if (!issue) {
+      console.error("[Orchestrator] Linear issueCreate returned no issue:", JSON.stringify(createData));
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+      );
+      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+    }
+
+    console.log(`[Orchestrator] Created Linear issue ${issue.identifier} (${issue.id}) from Slack mention`);
+
+    // Post acknowledgment with Linear ticket link
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${(this.env as Record<string, unknown>).SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: slackEvent.channel,
+        thread_ts: slackThreadTs,
+        text: `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
+      }),
+    }).catch(err => console.warn("[Orchestrator] Failed to post ack:", err));
+
+    // Store the Slack thread association so the Linear webhook handler can link them.
+    // The webhook will arrive shortly and create the ticket entry via handleEvent.
+    this.ctx.storage.sql.exec(
+      `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
+       VALUES (?, ?, ?)
+       ON CONFLICT(linear_issue_id) DO UPDATE SET
+         slack_thread_ts = excluded.slack_thread_ts,
+         slack_channel = excluded.slack_channel`,
+      issue.id, slackThreadTs || "", slackEvent.channel || "",
+    );
+
+    return Response.json({ ok: true, linearIssue: issue.identifier });
   }
 
 }
