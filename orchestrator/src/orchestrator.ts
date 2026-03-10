@@ -1355,6 +1355,22 @@ export class Orchestrator extends Container<Bindings> {
       ...values,
     );
 
+    // When a PR URL is first reported, check if CI already passed and trigger merge gate.
+    // This closes the race condition where check_suite webhook arrives before the agent
+    // reports the PR URL, causing the merge gate to be skipped.
+    if (pr_url && status === "pr_open") {
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT product FROM tickets WHERE id = ?", ticketId
+      ).toArray()[0] as { product: string } | undefined;
+      if (ticketRow) {
+        console.log(`[Orchestrator] PR URL reported for ${ticketId}, checking CI status for merge gate...`);
+        // Run async — don't block the status update response
+        this.evaluateMergeGate(ticketId, ticketRow.product).catch(err =>
+          console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
+        );
+      }
+    }
+
     return Response.json({ ok: true });
   }
 
