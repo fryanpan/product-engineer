@@ -1,6 +1,6 @@
 # Linear Agent Upgrade: Official OAuth App Identity
 
-**Status: Implemented** (2026-03-09) — Code changes complete. Pending: create Linear Application and run OAuth flow (Task 7).
+**Status: Complete** (2026-03-10) — All code changes deployed, OAuth flow completed, end-to-end verified on staging.
 
 ## Context
 
@@ -43,9 +43,9 @@ Created at `https://linear.app/settings/api/applications/new`. The app's name an
 **New registry setting:**
 - `linear_app_user_id` — The app's Linear user ID (from `viewer { id }` query at setup time). Used for identity checks in webhook handler.
 
-> **Q1: Should we keep ****`linear_team_id`**** as a registry setting, or move it to a wrangler secret?** It's currently in SQLite settings, set via seed. I'd keep it as-is since it's not sensitive.
+> **Q1: Should we keep \****`linear_team_id`**\*\* as a registry setting, or move it to a wrangler secret?** It's currently in SQLite settings, set via seed. I'd keep it as-is since it's not sensitive.
 
-> **Q2: For the OAuth redirect URI during the one-time setup — should we build a small callback handler in the worker (e.g., ****`GET /api/auth/linear/callback`****), or just use a localhost redirect and do it manually?** A worker endpoint is cleaner for future re-auth but more code. Manual localhost is fine for a one-time operation.
+> **Q2: For the OAuth redirect URI during the one-time setup — should we build a small callback handler in the worker (e.g., \****`GET /api/auth/linear/callback`**\*\*), or just use a localhost redirect and do it manually?** A worker endpoint is cleaner for future re-auth but more code. Manual localhost is fine for a one-time operation.
 
 ### 3. Token Refresh
 
@@ -56,7 +56,7 @@ Access tokens expire after 24 hours. Strategy:
 - Proactive refresh: The orchestrator's periodic alarm (already runs for health checks) refreshes the token if it's older than 12 hours.
 - `LINEAR_APP_CLIENT_ID` and `LINEAR_APP_CLIENT_SECRET` remain as wrangler secrets (immutable, needed for refresh calls).
 
-> **Q3: Should the initial ****`LINEAR_APP_TOKEN`**** be set via wrangler secret (for first boot) AND stored in SQLite (for runtime refresh)? Or should we do the OAuth flow interactively and store directly in SQLite?** I lean toward wrangler secret for initial bootstrap + SQLite for runtime, with SQLite taking precedence if populated.
+> **Q3: Should the initial \****`LINEAR_APP_TOKEN`**\*\* be set via wrangler secret (for first boot) AND stored in SQLite (for runtime refresh)? Or should we do the OAuth flow interactively and store directly in SQLite?** I lean toward wrangler secret for initial bootstrap + SQLite for runtime, with SQLite taking precedence if populated.
 
 ### 4. Webhook Handler Changes (`webhooks.ts`)
 
@@ -85,7 +85,7 @@ if (commentData.user.id === registry.linear_app_user_id)
 
 **Everything else in the webhook handler stays the same**: HMAC verification, team filtering, project mapping, event routing, terminal state guards.
 
-> **Q4: The webhook payload's ****`assignee`**** object — does it include ****`id`****?** The current type definition has `{ id: string; name: string; email?: string }` so `id` is already there. But I want to confirm the Linear webhook payload actually sends the app's user ID when an app is the assignee, not some different identifier.
+> **Q4: The webhook payload's \****`assignee`***\* object — does it include \****`id`**\*\*?** The current type definition has `{ id: string; name: string; email?: string }` so `id` is already there. But I want to confirm the Linear webhook payload actually sends the app's user ID when an app is the assignee, not some different identifier.
 
 ### 5. GraphQL API Changes
 
@@ -101,11 +101,11 @@ All GraphQL calls swap `LINEAR_API_KEY` → the app's OAuth token. Affected loca
 
 The `assignTicketToAgent()` function simplifies — no need to look up user by email, we just assign using the app's known user ID.
 
-> **Q5: The agent container gets ****`LINEAR_API_KEY`**** via env vars from the orchestrator. With the new model, should we pass the current (possibly refreshed) OAuth token to the agent container at start time?** The orchestrator already passes env vars via `startAndWaitForPorts`. We'd pass the latest token from SQLite.
+> **Q5: The agent container gets \****`LINEAR_API_KEY`**\*\* via env vars from the orchestrator. With the new model, should we pass the current (possibly refreshed) OAuth token to the agent container at start time?** The orchestrator already passes env vars via `startAndWaitForPorts`. We'd pass the latest token from SQLite.
 
 ### 6. Registry Changes
 
-**Remove from ****`AgentIdentity`**** interface:**
+**Remove from \****`AgentIdentity`**\*\* interface:**
 ```typescript
 // Delete
 linear_email: string;
@@ -119,7 +119,7 @@ linear_name: string;
 **Add to registry settings:**
 - `linear_app_user_id: string`
 
-**Remove ****`getAgentIdentity()`**** function** — replaced by reading `linear_app_user_id` from settings directly.
+**Remove \****`getAgentIdentity()`**\*\* function** — replaced by reading `linear_app_user_id` from settings directly.
 
 **Product config unchanged** — `triggers.linear.project_name` mapping stays as-is.
 

@@ -89,10 +89,11 @@ Configured in Linear (Settings → API → Webhooks):
 
 Seeded via admin API with:
 - `linear_team_id`: `ea3572c2-6bb2-4113-9076-3f7ce586768d`
-- `agent_linear_name`: `Product Engineer (Staging)`
+- `linear_app_user_id`: `87b23793-da28-4b97-980c-50f8ff5c5448` (OAuth app identity)
 - Product `staging-test-app` mapped to `fryanpan/staging-test-app`
 - Slack channel: `#staging-product-engineer`
 - GitHub token binding: `STAGING_GITHUB_TOKEN`
+- Linear token binding: `LINEAR_APP_TOKEN`
 
 ## Deploying to Staging
 
