@@ -609,6 +609,10 @@ export class Orchestrator extends Container<Bindings> {
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
         return this.listSettings();
+      case "/decisions":
+        return Response.json(this.ctx.storage.sql.exec(
+          "SELECT * FROM decision_log ORDER BY timestamp DESC LIMIT 20"
+        ).toArray());
       default:
         // Handle dynamic routes
         if (url.pathname.startsWith("/ticket-status/")) {
@@ -641,6 +645,7 @@ export class Orchestrator extends Container<Bindings> {
   private async handleEvent(request: Request): Promise<Response> {
     const event = await request.json<TicketEvent>();
     event.ticketId = sanitizeTicketId(event.ticketId);
+    console.log(`[Orchestrator] handleEvent: type=${event.type} ticketId=${event.ticketId} source=${event.source}`);
 
     // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID ticket.
     // GitHub webhooks extract taskId from branch names like "ticket/PES-5",

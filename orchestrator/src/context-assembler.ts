@@ -216,15 +216,20 @@ export class ContextAssembler {
   }
 
   private async fetchPRDetails(repo: string, prNumber: string, token: string) {
-    const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
+    const url = `https://api.github.com/repos/${repo}/pulls/${prNumber}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
     });
-    return res.ok ? await res.json() as Record<string, unknown> : null;
+    if (!res.ok) {
+      console.error(`[ContextAssembler] fetchPRDetails failed: ${res.status} ${await res.text().catch(() => "")}`);
+      return null;
+    }
+    return await res.json() as Record<string, unknown>;
   }
 
   private async fetchPRReviews(repo: string, prNumber: string, token: string) {
     const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/reviews`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
     });
     if (!res.ok) return [];
     const reviews = await res.json() as Array<{ user: { login: string }; state: string; body: string }>;
@@ -233,7 +238,7 @@ export class ContextAssembler {
 
   private async fetchPRDiff(repo: string, prNumber: string, token: string): Promise<string> {
     const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3.diff" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3.diff", "User-Agent": "product-engineer-orchestrator" },
     });
     return res.ok ? await res.text() : "";
   }
@@ -241,7 +246,7 @@ export class ContextAssembler {
   private async fetchCIStatus(repo: string, sha: string | undefined, token: string) {
     if (!sha) return { passed: false, details: "No commit SHA" };
     const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/check-runs`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
     });
     if (!res.ok) return { passed: false, details: `GitHub API error: ${res.status}` };
     const data = await res.json() as { check_runs: Array<{ name: string; conclusion: string | null; status: string }> };

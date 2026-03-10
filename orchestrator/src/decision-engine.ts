@@ -22,7 +22,7 @@ const TEMPLATES: Record<string, string> = {
 // Decision model: Haiku for speed on triage/classify, Sonnet for merge quality
 const DECISION_MODELS: Record<string, string> = {
   "ticket-review": "claude-haiku-4-5-20251001",
-  "merge-gate": "claude-sonnet-4-6-20250514",
+  "merge-gate": "claude-sonnet-4-6",
   "supervisor": "claude-haiku-4-5-20251001",
   "thread-classify": "claude-haiku-4-5-20251001",
 };

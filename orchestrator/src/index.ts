@@ -374,6 +374,16 @@ app.get("/api/orchestrator/status", async (c) => {
   return orchestrator.fetch(new Request("http://internal/status"));
 });
 
+// Orchestrator: decision log
+app.get("/api/orchestrator/decisions", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/decisions"));
+});
+
 // Orchestrator: cleanup inactive agents
 app.post("/api/orchestrator/cleanup-inactive", async (c) => {
   const apiKey = c.req.header("X-API-Key");
