@@ -20,7 +20,8 @@ All components are provisioned and connected. See Testing section to verify end-
 | Product registry | Done | Seeded via `POST /api/products/seed` |
 | Linear webhook | Done | PE Staging team → staging worker |
 | GitHub webhook | Done | `fryanpan/staging-test-app` → staging worker (12 events) |
-| Slack bot invite | Done | Bot invited to both staging channels |
+| Slack app (staging) | Done | "Product Engineer (Staging)" App ID: `A0AKFUSK4R4` |
+| Slack bot invite | Done | Staging bot invited to both staging channels |
 
 ## Architecture
 
@@ -37,9 +38,11 @@ All secrets are set on the staging worker via `wrangler secret put --env staging
 | `STAGING_GITHUB_TOKEN` | GitHub API access for staging-test-app | Fine-grained PAT, scoped to `fryanpan/staging-test-app` |
 | `WORKER_URL` | Staging worker URL for Socket Mode forwarding | `https://product-engineer-stg.fryanpan.workers.dev` |
 | `API_KEY` | Admin API authentication | Same as production |
-| `SLACK_BOT_TOKEN` | Slack bot access | Shared with production (same Slack app) |
-| `SLACK_APP_TOKEN` | Slack Socket Mode | Shared with production |
-| `LINEAR_API_KEY` | Linear API access | Shared with production (same workspace) |
+| `SLACK_BOT_TOKEN` | Slack bot access | Staging-specific (separate Slack app) |
+| `SLACK_APP_TOKEN` | Slack Socket Mode | Staging-specific (separate Slack app) |
+| `LINEAR_APP_TOKEN` | Linear OAuth access token (actor=app) | Per-environment — obtained via OAuth flow |
+| `LINEAR_APP_CLIENT_ID` | Linear OAuth client ID | Per-environment — from Linear app settings |
+| `LINEAR_APP_CLIENT_SECRET` | Linear OAuth client secret | Per-environment — from Linear app settings |
 | `LINEAR_WEBHOOK_SECRET` | HMAC verification for Linear webhooks | Staging-specific secret |
 | `ANTHROPIC_API_KEY` | Claude API access | Shared with production |
 | `GITHUB_WEBHOOK_SECRET` | Signature verification for GitHub webhooks | Staging-specific secret |
@@ -100,10 +103,18 @@ npx wrangler deploy --env staging
 
 Deploy from a development branch to test changes before merging to main.
 
+## Slack App Isolation
+
+Staging uses a **separate Slack app** ("Product Engineer (Staging)", App ID: `A0AKFUSK4R4`) to prevent cross-contamination with production. Both apps connect via Socket Mode independently.
+
+- Production app: "Product Engineer" (`A0AHVF6V02W`)
+- Staging app: "Product Engineer (Staging)" (`A0AKFUSK4R4`)
+- App manifests stored in `orchestrator/slack-app-manifest.{production,staging}.json` (no secrets)
+
 ## Testing
 
 1. **Test Linear trigger**: Create an issue in PE Staging team (PES-1)
-2. **Test Slack trigger**: `@product-engineer` in `#staging-product-engineer`
+2. **Test Slack trigger**: `@product-engineer-staging` in `#staging-product-engineer`
 3. **Verify**: Agent should post status updates to `#staging-product-engineer` and decision logs to `#staging-pe-decisions`
 
 ## Future: Staging Lock/Lease
