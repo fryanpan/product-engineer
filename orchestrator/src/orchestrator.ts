@@ -922,6 +922,18 @@ export class Orchestrator extends Container<Bindings> {
       "SELECT * FROM tickets WHERE id = ?", event.ticketId,
     ).toArray()[0] as Record<string, unknown> | undefined;
 
+    // Skip ticket review if agent is already running or ticket is past initial triage.
+    // Linear sends multiple webhooks (create + update) and we don't want to re-review
+    // a ticket that already has an active agent.
+    if (ticketRow) {
+      const status = ticketRow.status as string;
+      const agentActive = ticketRow.agent_active as number;
+      if (agentActive === 1 || (status !== "created" && status !== "needs_info")) {
+        console.log(`[Orchestrator] Skipping ticket review for ${event.ticketId} — already active (status=${status}, agent_active=${agentActive})`);
+        return;
+      }
+    }
+
     const context = await assembler.forTicketReview({
       ticketId: event.ticketId,
       identifier: (payload.identifier as string) || null,
