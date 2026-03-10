@@ -943,13 +943,14 @@ export class Orchestrator extends Container<Bindings> {
       decision = { action: "start_agent", model: "sonnet", reason: "LLM review failed, using default", confidence: 0 };
     }
 
-    // Log the decision
+    // Log the decision (use human-readable identifier like PES-8, fall back to UUID)
+    const displayId = (payload.identifier as string) || event.ticketId;
     await engine.logDecision({
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       type: "ticket_review",
-      ticket_id: event.ticketId,
-      context_summary: `${payload.identifier || event.ticketId}: ${((payload.title as string) || "").slice(0, 100)}`,
+      ticket_id: displayId,
+      context_summary: `${displayId}: ${((payload.title as string) || "").slice(0, 100)}`,
       action: decision.action,
       reason: decision.reason,
       confidence: decision.confidence || 0,
