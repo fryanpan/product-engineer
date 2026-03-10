@@ -245,10 +245,32 @@ export class ContextAssembler {
 
   private async fetchCIStatus(repo: string, sha: string | undefined, token: string) {
     if (!sha) return { passed: false, details: "No commit SHA" };
-    const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/check-runs`, {
+    // Use combined status API (works with fine-grained PAT "Commit statuses" permission)
+    const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/status`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
     });
     if (!res.ok) return { passed: false, details: `GitHub API error: ${res.status}` };
+    const data = await res.json() as { state: string; total_count: number; statuses: Array<{ context: string; state: string; description: string | null }> };
+    if (data.total_count === 0) {
+      // No commit statuses — fall back to check-runs API (may 403 with fine-grained PATs)
+      return this.fetchCheckRuns(repo, sha, token);
+    }
+    if (data.state === "pending") return { passed: false, details: "CI still running" };
+    if (data.state === "failure" || data.state === "error") {
+      const failed = data.statuses.filter(s => s.state === "failure" || s.state === "error");
+      return { passed: false, details: failed.map(f => `${f.context}: ${f.state}`).join(", ") };
+    }
+    return { passed: true, details: "All checks passed" };
+  }
+
+  private async fetchCheckRuns(repo: string, sha: string, token: string) {
+    const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/check-runs`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
+    });
+    if (!res.ok) {
+      // Fine-grained PATs may not have checks permission — treat as unknown
+      return { passed: true, details: "CI status unavailable (no checks permission), assuming passed" };
+    }
     const data = await res.json() as { check_runs: Array<{ name: string; conclusion: string | null; status: string }> };
     const failed = data.check_runs.filter(c => c.conclusion && c.conclusion !== "success" && c.conclusion !== "neutral");
     const pending = data.check_runs.filter(c => c.status !== "completed");

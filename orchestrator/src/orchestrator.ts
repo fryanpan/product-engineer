@@ -1125,6 +1125,7 @@ export class Orchestrator extends Container<Bindings> {
       headers: {
         Authorization: `Bearer ${ghToken}`,
         Accept: "application/vnd.github.v3+json",
+        "User-Agent": "product-engineer-orchestrator",
       },
       body: JSON.stringify({ merge_method: "squash" }),
     });
