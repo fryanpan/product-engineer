@@ -3,7 +3,7 @@ export const TERMINAL_STATUSES = ["merged", "closed", "deferred", "failed"] as c
 export type TerminalStatus = typeof TERMINAL_STATUSES[number];
 
 export interface TicketEvent {
-  type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_mention", "slack_reply"
+  type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_reply", "linear_comment"
   source: string;     // "linear", "github", "slack", "api"
   ticketId: string;
   product: string;
@@ -35,6 +35,30 @@ export interface TicketAgentConfig {
   model?: string; // Claude model to use (e.g., "sonnet", "opus", "haiku")
 }
 
+// Decision engine types
+export interface DecisionRequest {
+  type: "ticket_review" | "merge_gate" | "supervisor";
+  context: Record<string, unknown>;
+}
+
+export interface DecisionResponse {
+  action: string;
+  reason: string;
+  confidence: number;
+  model?: string; // For ticket_review: which model to assign
+}
+
+export interface DecisionLog {
+  id: string;
+  timestamp: string;
+  type: "ticket_review" | "merge_gate" | "supervisor";
+  ticket_id: string | null;
+  context_summary: string;
+  action: string;
+  reason: string;
+  confidence: number;
+}
+
 export interface Bindings {
   ORCHESTRATOR: DurableObjectNamespace;
   TICKET_AGENT: DurableObjectNamespace;
@@ -47,13 +71,16 @@ export interface Bindings {
 
   // Config vars
   WORKER_URL: string;
+  DECISIONS_CHANNEL: string;
 
   // Secrets
   API_KEY: string;
   SLACK_BOT_TOKEN: string;
   SLACK_APP_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
-  LINEAR_API_KEY: string;
+  LINEAR_APP_TOKEN: string;          // OAuth access token (actor=app)
+  LINEAR_APP_CLIENT_ID: string;      // For token refresh
+  LINEAR_APP_CLIENT_SECRET: string;  // For token refresh
   LINEAR_WEBHOOK_SECRET: string;
   GITHUB_WEBHOOK_SECRET: string;
   ANTHROPIC_API_KEY: string;

@@ -6,7 +6,7 @@ import { TERMINAL_STATUSES, type TicketAgentConfig } from "./types";
 describe("Agent Lifecycle Integration", () => {
   describe("Thread Identity Flow", () => {
     test("buildTicketEvent preserves slackThreadTs for routing", () => {
-      const event = buildTicketEvent("slack", "slack_mention", {
+      const event = buildTicketEvent("slack", "slack_reply", {
         product: "test-app",
         text: "fix the bug",
         channel: "C12345",
@@ -17,7 +17,7 @@ describe("Agent Lifecycle Integration", () => {
     });
 
     test("buildTicketEvent preserves undefined slackThreadTs when not provided", () => {
-      const event = buildTicketEvent("slack", "slack_mention", {
+      const event = buildTicketEvent("slack", "slack_reply", {
         product: "test-app",
         text: "fix the bug",
         channel: "C12345",
@@ -66,18 +66,12 @@ describe("Agent Lifecycle Integration", () => {
 
   describe("Event Delivery Patterns", () => {
     test("TicketEvent type field distinguishes event sources correctly", () => {
-      const slackMention = buildTicketEvent("slack", "slack_mention", {
+      const slackReply = buildTicketEvent("slack", "slack_reply", {
         product: "test-app",
         text: "do something",
       });
-      expect(slackMention.type).toBe("slack_mention");
-      expect(slackMention.source).toBe("slack");
-
-      const slackReply = buildTicketEvent("slack", "slack_reply", {
-        product: "test-app",
-        text: "reply",
-      });
       expect(slackReply.type).toBe("slack_reply");
+      expect(slackReply.source).toBe("slack");
 
       const linearEvent = buildTicketEvent("linear", "ticket_created", {
         id: "PE-123",

@@ -27,7 +27,7 @@ export function buildMcpServers(): Record<string, McpServerConfig> {
   const servers: Record<string, McpServerConfig> = {};
 
   // Linear — HTTP remote with Bearer auth
-  const linearKey = process.env.LINEAR_API_KEY;
+  const linearKey = process.env.LINEAR_APP_TOKEN;
   if (linearKey) {
     servers.linear = {
       type: "http",

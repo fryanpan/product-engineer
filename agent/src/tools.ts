@@ -197,14 +197,14 @@ export function createTools(config: AgentConfig) {
       const linearState = linearStateMap[status] || "In Progress";
 
       // Update Linear ticket if we have the ticket ID and API key
-      if (linear_ticket_id && config.linearApiKey) {
+      if (linear_ticket_id && config.linearAppToken) {
         try {
           // First, look up the workflow state ID by name from the issue's team
           const stateRes = await fetch("https://api.linear.app/graphql", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: config.linearApiKey,
+              Authorization: config.linearAppToken,
             },
             body: JSON.stringify({
               query: `query($issueId: String!) {
@@ -228,7 +228,7 @@ export function createTools(config: AgentConfig) {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: config.linearApiKey,
+                Authorization: config.linearAppToken,
               },
               body: JSON.stringify({
                 query: `mutation($issueId: String!, $stateId: String!) {

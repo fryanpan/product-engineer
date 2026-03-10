@@ -1,7 +1,8 @@
 import { Container } from "@cloudflare/containers";
 import { TERMINAL_STATUSES, type TicketEvent, type TicketAgentConfig, type Bindings } from "./types";
 import type { ProductConfig } from "./registry";
-import { selectModelForTicket } from "./model-selection";
+import { DecisionEngine } from "./decision-engine";
+import { ContextAssembler } from "./context-assembler";
 
 function sanitizeTicketId(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -44,6 +45,8 @@ export class Orchestrator extends Container<Bindings> {
 
   private dbInitialized = false;
   private containerStarted = false;
+  private _decisionEngine: DecisionEngine | null = null;
+  private _contextAssembler: ContextAssembler | null = null;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     // @ts-expect-error — DurableObjectState generic mismatch between Container SDK and Workers types
@@ -72,8 +75,43 @@ export class Orchestrator extends Container<Bindings> {
   // Always-on: when the SDK's alarm loop fires and the container is dead,
   // restart it before handing control to the base class. This ensures the
   // Slack Socket Mode container self-heals after crashes or deployments.
+  // Also runs the LLM supervisor tick every 5 minutes.
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
+    this.initDb();
     await this.ensureContainerRunning();
+
+    // Schedule next alarm (5 minutes) for supervisor tick
+    this.ctx.storage.setAlarm(Date.now() + 300_000);
+
+    // Run LLM supervisor tick — checks agent health, stale PRs, queued tickets
+    try {
+      await this.runSupervisorTick();
+    } catch (err) {
+      console.error("[Orchestrator] Supervisor tick failed:", err);
+      // Don't let supervisor failures break the alarm loop
+    }
+
+    // Refresh Linear OAuth token every 12h (alarm fires every 5min, so check timestamp)
+    try {
+      const lastRefreshRow = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'linear_token_refreshed_at'"
+      ).toArray()[0] as { value: string } | undefined;
+      const lastRefresh = lastRefreshRow ? parseInt(lastRefreshRow.value, 10) : 0;
+      const twelveHours = 12 * 60 * 60 * 1000;
+      if (Date.now() - lastRefresh > twelveHours) {
+        const refreshed = await this.refreshLinearToken();
+        if (refreshed) {
+          this.ctx.storage.sql.exec(
+            `INSERT INTO settings (key, value) VALUES ('linear_token_refreshed_at', ?)
+             ON CONFLICT(key) DO UPDATE SET value = ?`,
+            String(Date.now()), String(Date.now()),
+          );
+        }
+      }
+    } catch (err) {
+      console.error("[Orchestrator] Linear token refresh check failed:", err);
+    }
+
     return super.alarm(alarmProps);
   }
 
@@ -109,6 +147,127 @@ export class Orchestrator extends Container<Bindings> {
     } catch (err) {
       console.error("[Orchestrator] Container start failed:", err);
       throw err;
+    }
+  }
+
+  private getDecisionEngine(): DecisionEngine {
+    if (!this._decisionEngine) {
+      this._decisionEngine = new DecisionEngine({
+        anthropicApiKey: (this.env.ANTHROPIC_API_KEY as string) || "",
+        slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
+        decisionsChannel: (this.env as any).DECISIONS_CHANNEL || "#product-engineer-decisions",
+        linearAppToken: this.getLinearAppToken(),
+      });
+    }
+    return this._decisionEngine;
+  }
+
+  private getContextAssembler(): ContextAssembler {
+    if (!this._contextAssembler) {
+      this._contextAssembler = new ContextAssembler({
+        sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+        slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
+        linearAppToken: this.getLinearAppToken(),
+        githubTokens: this.getGithubTokens(),
+      });
+    }
+    return this._contextAssembler;
+  }
+
+  private getGithubTokens(): Record<string, string> {
+    // Build product→token map from per-product token bindings in env
+    const tokens: Record<string, string> = {};
+    // Load product configs to map slug → secret binding name
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT slug, config FROM products",
+    ).toArray() as Array<{ slug: string; config: string }>;
+
+    for (const row of productRows) {
+      try {
+        const config = JSON.parse(row.config) as ProductConfig;
+        const tokenBinding = config.secrets?.GITHUB_TOKEN;
+        if (tokenBinding && (this.env as Record<string, unknown>)[tokenBinding]) {
+          tokens[row.slug] = (this.env as Record<string, unknown>)[tokenBinding] as string;
+        }
+      } catch {
+        // Skip malformed configs
+      }
+    }
+    return tokens;
+  }
+
+  /** Get the Linear OAuth app token — checks SQLite settings for a stored token, falls back to env binding. */
+  private getLinearAppToken(): string {
+    try {
+      const row = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'linear_app_token'"
+      ).toArray()[0] as { value: string } | undefined;
+      if (row?.value) return row.value;
+    } catch {
+      // Settings table may not exist yet during early init
+    }
+    return (this.env.LINEAR_APP_TOKEN as string) || "";
+  }
+
+  /** Refresh the Linear OAuth token using the stored refresh token. */
+  private async refreshLinearToken(): Promise<boolean> {
+    try {
+      const refreshRow = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'linear_refresh_token'"
+      ).toArray()[0] as { value: string } | undefined;
+
+      if (!refreshRow?.value) {
+        console.log("[Orchestrator] No Linear refresh token stored, skipping refresh");
+        return false;
+      }
+
+      const clientId = (this.env.LINEAR_APP_CLIENT_ID as string) || "";
+      const clientSecret = (this.env.LINEAR_APP_CLIENT_SECRET as string) || "";
+      if (!clientId || !clientSecret) {
+        console.warn("[Orchestrator] LINEAR_APP_CLIENT_ID or LINEAR_APP_CLIENT_SECRET not set, cannot refresh");
+        return false;
+      }
+
+      const res = await fetch("https://api.linear.app/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: refreshRow.value,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error(`[Orchestrator] Linear token refresh failed: ${res.status}`);
+        return false;
+      }
+
+      const data = await res.json() as { access_token: string; refresh_token?: string };
+      this.ctx.storage.sql.exec(
+        `INSERT INTO settings (key, value) VALUES ('linear_app_token', ?)
+         ON CONFLICT(key) DO UPDATE SET value = ?`,
+        data.access_token, data.access_token,
+      );
+
+      if (data.refresh_token) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO settings (key, value) VALUES ('linear_refresh_token', ?)
+           ON CONFLICT(key) DO UPDATE SET value = ?`,
+          data.refresh_token, data.refresh_token,
+        );
+      }
+
+      // Invalidate cached engine/assembler so they pick up the new token
+      this._decisionEngine = null;
+      this._contextAssembler = null;
+
+      console.log("[Orchestrator] Linear token refreshed successfully");
+      return true;
+    } catch (err) {
+      console.error("[Orchestrator] Linear token refresh error:", err);
+      return false;
     }
   }
 
@@ -166,6 +325,41 @@ export class Orchestrator extends Container<Bindings> {
         updated_at TEXT DEFAULT (datetime('now'))
       )
     `);
+    // Decision log table — records orchestrator decisions for observability
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS decision_log (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        type TEXT NOT NULL,
+        ticket_id TEXT,
+        context_summary TEXT,
+        action TEXT NOT NULL,
+        reason TEXT,
+        confidence REAL DEFAULT 0
+      )
+    `);
+
+    // Slack thread → Linear issue mapping (for linking Slack-originated tickets)
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS slack_thread_map (
+        linear_issue_id TEXT PRIMARY KEY,
+        slack_thread_ts TEXT NOT NULL,
+        slack_channel TEXT NOT NULL
+      )
+    `);
+
+    // Ticket queue table — pending tickets awaiting agent assignment
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS ticket_queue (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        product TEXT NOT NULL,
+        priority INTEGER DEFAULT 3,
+        payload TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+
     // Migration: add agent_active column for existing deployments
     try {
       this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER NOT NULL DEFAULT 1`);
@@ -343,8 +537,7 @@ export class Orchestrator extends Container<Bindings> {
   private async seedProducts(request: Request): Promise<Response> {
     const registry = await request.json<{
       linear_team_id?: string;
-      agent_linear_email?: string;
-      agent_linear_name?: string;
+      linear_app_user_id?: string;
       cloudflare_ai_gateway?: { account_id: string; gateway_id: string };
       products: Record<string, unknown>;
     }>();
@@ -356,8 +549,7 @@ export class Orchestrator extends Container<Bindings> {
     // Insert global settings
     const settingsToUpsert: [string, string][] = [];
     if (registry.linear_team_id) settingsToUpsert.push(["linear_team_id", registry.linear_team_id]);
-    if (registry.agent_linear_email) settingsToUpsert.push(["agent_linear_email", registry.agent_linear_email]);
-    if (registry.agent_linear_name) settingsToUpsert.push(["agent_linear_name", registry.agent_linear_name]);
+    if (registry.linear_app_user_id) settingsToUpsert.push(["linear_app_user_id", registry.linear_app_user_id]);
     if (registry.cloudflare_ai_gateway) settingsToUpsert.push(["cloudflare_ai_gateway", JSON.stringify(registry.cloudflare_ai_gateway)]);
 
     for (const [key, value] of settingsToUpsert) {
@@ -426,14 +618,18 @@ export class Orchestrator extends Container<Bindings> {
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
         return this.listSettings();
+      case "/decisions":
+        return Response.json(this.ctx.storage.sql.exec(
+          "SELECT * FROM decision_log ORDER BY timestamp DESC LIMIT 20"
+        ).toArray());
       default:
         // Handle dynamic routes
         if (url.pathname.startsWith("/ticket-status/")) {
           const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
           const row = this.ctx.storage.sql.exec(
-            "SELECT agent_active, status FROM tickets WHERE id = ?",
+            "SELECT agent_active, status, product FROM tickets WHERE id = ?",
             ticketId,
-          ).toArray()[0] as { agent_active: number; status: string } | undefined;
+          ).toArray()[0] as { agent_active: number; status: string; product: string } | undefined;
           if (!row) return Response.json({ error: "not found" }, { status: 404 });
           return Response.json({
             ...row,
@@ -458,6 +654,21 @@ export class Orchestrator extends Container<Bindings> {
   private async handleEvent(request: Request): Promise<Response> {
     const event = await request.json<TicketEvent>();
     event.ticketId = sanitizeTicketId(event.ticketId);
+    console.log(`[Orchestrator] handleEvent: type=${event.type} ticketId=${event.ticketId} source=${event.source}`);
+
+    // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID ticket.
+    // GitHub webhooks extract taskId from branch names like "ticket/PES-5",
+    // but the canonical ticket is stored under the Linear UUID. Look up by branch_name.
+    if (event.source === "github") {
+      const byBranch = this.ctx.storage.sql.exec(
+        "SELECT id FROM tickets WHERE branch_name = ? OR branch_name = ?",
+        `ticket/${event.ticketId}`, `feedback/${event.ticketId}`,
+      ).toArray()[0] as { id: string } | undefined;
+      if (byBranch) {
+        console.log(`[Orchestrator] Resolved branch task ID ${event.ticketId} → ${byBranch.id}`);
+        event.ticketId = byBranch.id;
+      }
+    }
 
     // Check if this ticket is already in a terminal state — don't re-activate it
     const existing = this.ctx.storage.sql.exec(
@@ -468,6 +679,21 @@ export class Orchestrator extends Container<Bindings> {
     if (existing && (TERMINAL_STATUSES as readonly string[]).includes(existing.status)) {
       console.log(`[Orchestrator] Ignoring event for terminal ticket ${event.ticketId} (status: ${existing.status})`);
       return Response.json({ ok: true, ticketId: event.ticketId, ignored: true, reason: "terminal ticket" });
+    }
+
+    // For Linear events, look up Slack thread from slack_thread_map (Slack-originated tickets)
+    if (event.source === "linear" && !event.slackThreadTs) {
+      const threadMap = this.ctx.storage.sql.exec(
+        "SELECT slack_thread_ts, slack_channel FROM slack_thread_map WHERE linear_issue_id = ?",
+        event.ticketId,
+      ).toArray()[0] as { slack_thread_ts: string; slack_channel: string } | undefined;
+      if (threadMap) {
+        event.slackThreadTs = threadMap.slack_thread_ts || undefined;
+        event.slackChannel = threadMap.slack_channel || undefined;
+        console.log(`[Orchestrator] Linked Linear issue ${event.ticketId} to Slack thread ${threadMap.slack_thread_ts}`);
+        // Clean up — one-time mapping
+        this.ctx.storage.sql.exec("DELETE FROM slack_thread_map WHERE linear_issue_id = ?", event.ticketId);
+      }
     }
 
     // Upsert ticket — only re-activate non-terminal tickets
@@ -485,13 +711,48 @@ export class Orchestrator extends Container<Bindings> {
       event.slackChannel || null,
     );
 
-    // Route to TicketAgent
+    // For new tickets, use LLM ticket review instead of direct routing
+    if (event.type === "ticket_created") {
+      await this.handleTicketReview(event);
+      return Response.json({ ok: true, ticketId: event.ticketId });
+    }
+
+    // For Linear comments, route to running agent or re-evaluate via ticket review
+    if (event.type === "linear_comment") {
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT agent_active FROM tickets WHERE id = ?", event.ticketId,
+      ).toArray()[0] as { agent_active: number } | undefined;
+
+      if (ticketRow?.agent_active) {
+        // Forward to running agent like a Slack reply
+        await this.sendEventToAgent(event);
+      } else {
+        // No agent running — re-evaluate via ticket review
+        await this.handleTicketReview(event);
+      }
+      return Response.json({ ok: true, ticketId: event.ticketId });
+    }
+
+    // CI passed + PR exists → evaluate merge gate (orchestrator decides, not agent)
+    if (event.type === "checks_passed") {
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT pr_url FROM tickets WHERE id = ?", event.ticketId
+      ).toArray()[0] as { pr_url: string | null } | undefined;
+
+      if (ticketRow?.pr_url) {
+        await this.evaluateMergeGate(event.ticketId, event.product);
+        return Response.json({ ok: true, ticketId: event.ticketId });
+      }
+      // No PR yet — route to agent normally
+    }
+
+    // Route to TicketAgent for all other event types
     await this.routeToAgent(event);
 
     return Response.json({ ok: true, ticketId: event.ticketId });
   }
 
-  private async routeToAgent(event: TicketEvent) {
+  private async routeToAgent(event: TicketEvent, model: string = "sonnet") {
     // Check if agent is still active (not in terminal state) and load thread_ts
     const ticket = this.ctx.storage.sql.exec(
       "SELECT agent_active, status, slack_thread_ts, slack_channel FROM tickets WHERE id = ?",
@@ -538,16 +799,7 @@ export class Orchestrator extends Container<Bindings> {
       ).toArray() as Array<{ value: string }>;
       const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
 
-      // Analyze ticket complexity and select appropriate model
-      const payload = event.payload as any;
-      const modelSelection = selectModelForTicket({
-        priority: payload.priority,
-        title: payload.title,
-        description: payload.description,
-        labels: payload.labels,
-      });
-
-      console.log(`[Orchestrator] Model selection for ${event.ticketId}: ${modelSelection.model} (${modelSelection.complexity} complexity) - ${modelSelection.reason}`);
+      console.log(`[Orchestrator] Routing ${event.ticketId} to agent with model=${model}`);
 
       // Load slack_thread_ts from database (set by initial event or subsequent updates)
       const ticketRow = this.ctx.storage.sql.exec(
@@ -563,7 +815,7 @@ export class Orchestrator extends Container<Bindings> {
         slackThreadTs: event.slackThreadTs || ticketRow?.slack_thread_ts || undefined,
         secrets: productConfig.secrets,
         gatewayConfig,
-        model: modelSelection.model,
+        model,
       };
 
       const initRes = await agent.fetch(new Request("http://internal/initialize", {
@@ -610,6 +862,501 @@ export class Orchestrator extends Container<Bindings> {
     );
   }
 
+  /**
+   * Send an event to a running TicketAgent container without re-initializing it.
+   * Used for forwarding linear_comment events and other supplementary events
+   * to agents that are already configured and running.
+   */
+  private async sendEventToAgent(event: TicketEvent): Promise<void> {
+    const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
+    const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
+
+    // Retry event delivery with backoff for cold starts
+    let lastStatus = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const eventRes = await agent.fetch(new Request("http://internal/event", {
+        method: "POST",
+        body: JSON.stringify(event),
+      }));
+      lastStatus = eventRes.status;
+
+      if (eventRes.ok) return;
+      if (eventRes.status !== 503) {
+        console.error(`[Orchestrator] Agent event delivery failed for ${event.ticketId}: ${eventRes.status}`);
+        return;
+      }
+
+      // Container not ready, wait and retry
+      console.warn(`[Orchestrator] Agent container not ready for ${event.ticketId}, retrying (${attempt + 1}/3)...`);
+      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+
+    console.error(`[Orchestrator] Agent event delivery failed after retries for ${event.ticketId}: ${lastStatus}`);
+  }
+
+  /**
+   * Use LLM decision engine to review a new ticket and decide what to do:
+   * start_agent, ask_questions, mark_duplicate, queue, or expand_existing.
+   */
+  private async handleTicketReview(event: TicketEvent): Promise<void> {
+    const engine = this.getDecisionEngine();
+    const assembler = this.getContextAssembler();
+
+    const payload = event.payload as Record<string, unknown>;
+
+    // Load product config from database
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      event.product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) {
+      console.error(`[Orchestrator] No product config for ${event.product}`);
+      return;
+    }
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+
+    // Get ticket record for slack info
+    const ticketRow = this.ctx.storage.sql.exec(
+      "SELECT * FROM tickets WHERE id = ?", event.ticketId,
+    ).toArray()[0] as Record<string, unknown> | undefined;
+
+    // Skip ticket review if agent is already running or ticket is past initial triage.
+    // Linear sends multiple webhooks (create + update) and we don't want to re-review
+    // a ticket that already has an active agent.
+    if (ticketRow) {
+      const status = ticketRow.status as string;
+      const agentActive = ticketRow.agent_active as number;
+      if (agentActive === 1 || (status !== "created" && status !== "needs_info")) {
+        console.log(`[Orchestrator] Skipping ticket review for ${event.ticketId} — already active (status=${status}, agent_active=${agentActive})`);
+        return;
+      }
+    }
+
+    const context = await assembler.forTicketReview({
+      ticketId: event.ticketId,
+      identifier: (payload.identifier as string) || null,
+      title: (payload.title as string) || "",
+      description: (payload.description as string) || "",
+      priority: (payload.priority as number) || 3,
+      labels: (payload.labels as string[]) || [],
+      product: event.product,
+      repos: productConfig.repos,
+      slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || null,
+      slackChannel: event.slackChannel || (ticketRow?.slack_channel as string) || null,
+    });
+
+    let decision;
+    try {
+      decision = await engine.makeDecision("ticket-review", context);
+    } catch (err) {
+      console.error("[Orchestrator] LLM ticket review failed, defaulting to start_agent with sonnet:", err);
+      decision = { action: "start_agent", model: "sonnet", reason: "LLM review failed, using default", confidence: 0 };
+    }
+
+    // Log the decision (use human-readable identifier like PES-8, fall back to UUID)
+    const displayId = (payload.identifier as string) || event.ticketId;
+    await engine.logDecision({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      type: "ticket_review",
+      ticket_id: displayId,
+      context_summary: `${displayId}: ${((payload.title as string) || "").slice(0, 100)}`,
+      action: decision.action,
+      reason: decision.reason,
+      confidence: decision.confidence || 0,
+    }, {
+      sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+      slackChannel: event.slackChannel || (ticketRow?.slack_channel as string) || undefined,
+      slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined,
+      linearIssueId: event.ticketId,
+    });
+
+    // Act on decision
+    switch (decision.action) {
+      case "start_agent": {
+        const model = decision.model || "sonnet";
+        await this.routeToAgent(event, model);
+        break;
+      }
+      case "ask_questions": {
+        // Update status to needs_info
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET status = 'needs_info', updated_at = datetime('now') WHERE id = ?",
+          event.ticketId,
+        );
+
+        // Post questions to Slack thread and Linear
+        const questions = (decision as unknown as Record<string, unknown>).questions as string[] | undefined;
+        if (questions && questions.length > 0) {
+          const numberedQuestions = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+
+          // Post to Slack thread
+          const slackChannel = event.slackChannel || (ticketRow?.slack_channel as string) || undefined;
+          const slackThreadTs = event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined;
+          if (slackChannel && slackThreadTs) {
+            const slackText = `❓ Before I start, a couple questions:\n${numberedQuestions}`;
+            await fetch("https://slack.com/api/chat.postMessage", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                channel: slackChannel,
+                text: slackText,
+                thread_ts: slackThreadTs,
+              }),
+            }).catch((err) => console.error("[Orchestrator] Failed to post questions to Slack:", err));
+          }
+
+          // Post to Linear as a comment
+          const linearToken = this.getLinearAppToken();
+          if (linearToken) {
+            const linearBody = `❓ **Before I start, a couple questions:**\n${numberedQuestions}`;
+            await fetch("https://api.linear.app/graphql", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${linearToken}`,
+              },
+              body: JSON.stringify({
+                query: `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`,
+                variables: { issueId: event.ticketId, body: linearBody },
+              }),
+            }).catch((err) => console.error("[Orchestrator] Failed to post questions to Linear:", err));
+          }
+        }
+        break;
+      }
+      case "mark_duplicate": {
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET status = 'closed', updated_at = datetime('now') WHERE id = ?",
+          event.ticketId,
+        );
+        break;
+      }
+      case "queue": {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO ticket_queue (id, ticket_id, product, priority, payload)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO NOTHING`,
+          crypto.randomUUID(), event.ticketId, event.product,
+          (payload.priority as number) || 3, JSON.stringify(event),
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET status = 'queued', updated_at = datetime('now') WHERE id = ?",
+          event.ticketId,
+        );
+        break;
+      }
+      case "expand_existing": {
+        // Route the event to the existing ticket's agent
+        // decision.expand_ticket contains the ticket ID to expand
+        const expandTicketId = (decision as unknown as Record<string, unknown>).expand_ticket as string | undefined;
+        if (expandTicketId) {
+          const expandedEvent = { ...event, ticketId: expandTicketId };
+          await this.sendEventToAgent(expandedEvent);
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * LLM Merge Gate — evaluates whether a PR is ready to auto-merge.
+   * Called when CI passes and PR exists for a tracked ticket.
+   */
+  private async evaluateMergeGate(
+    ticketId: string,
+    product: string,
+  ): Promise<void> {
+    const ticketRow = this.ctx.storage.sql.exec(
+      "SELECT * FROM tickets WHERE id = ?", ticketId
+    ).toArray()[0] as Record<string, unknown> | undefined;
+
+    if (!ticketRow?.pr_url) {
+      console.log(`[Orchestrator] No PR URL for ${ticketId}, skipping merge gate`);
+      return;
+    }
+
+    // Load product config directly from SQLite (avoid loadRegistry which calls back to self)
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) {
+      console.log(`[Orchestrator] No product config for ${product}, skipping merge gate`);
+      return;
+    }
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+
+    const engine = this.getDecisionEngine();
+    const assembler = this.getContextAssembler();
+
+    const context = await assembler.forMergeGate({
+      ticketId,
+      identifier: null,
+      title: "",
+      product,
+      pr_url: ticketRow.pr_url as string,
+      branch: (ticketRow.branch_name as string) || "",
+      repo: productConfig.repos[0],
+    });
+
+    let decision;
+    try {
+      decision = await engine.makeDecision("merge-gate", context);
+    } catch (err) {
+      console.error("[Orchestrator] Merge gate LLM call failed:", err);
+      // Don't auto-merge on failure — escalate instead
+      decision = { action: "escalate", reason: "Merge gate LLM call failed", confidence: 0 };
+    }
+
+    // Log the decision
+    await engine.logDecision({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      type: "merge_gate",
+      ticket_id: ticketId,
+      context_summary: `PR: ${ticketRow.pr_url}`,
+      action: decision.action,
+      reason: decision.reason,
+      confidence: decision.confidence || 0,
+    }, {
+      sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+      slackChannel: (ticketRow.slack_channel as string) || undefined,
+      slackThreadTs: (ticketRow.slack_thread_ts as string) || undefined,
+      linearIssueId: ticketId,
+    });
+
+    switch (decision.action) {
+      case "auto_merge":
+        await this.autoMergePR(ticketId, product, ticketRow);
+        break;
+      case "escalate":
+        // Post escalation to Slack
+        if (ticketRow.slack_channel && ticketRow.slack_thread_ts) {
+          await fetch("https://slack.com/api/chat.postMessage", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              channel: ticketRow.slack_channel,
+              text: `\u26A0\uFE0F *Merge Gate \u2014 Human Review Needed*\n${ticketRow.pr_url}\n*Reason:* ${decision.reason}`,
+              thread_ts: ticketRow.slack_thread_ts,
+            }),
+          });
+        }
+        break;
+      case "send_back": {
+        // Route back to agent
+        const sendBackEvent: TicketEvent = {
+          type: "merge_feedback",
+          source: "orchestrator",
+          ticketId,
+          product,
+          payload: { feedback: decision.reason, missing: (decision as unknown as Record<string, unknown>).missing },
+        };
+        await this.sendEventToAgent(sendBackEvent);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Auto-merge a PR via GitHub API (squash merge).
+   */
+  private async autoMergePR(
+    ticketId: string,
+    product: string,
+    ticketRow: Record<string, unknown>,
+  ): Promise<void> {
+    const ghTokens = this.getGithubTokens();
+    const ghToken = ghTokens[product];
+    const prUrl = ticketRow.pr_url as string;
+    if (!ghToken || !prUrl) return;
+
+    const prMatch = prUrl.match(/\/pull\/(\d+)/);
+    if (!prMatch) return;
+
+    // Load repo from product config directly from SQLite
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) return;
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+    const repo = productConfig.repos[0];
+    const prNumber = prMatch[1];
+
+    console.log(`[Orchestrator] Auto-merging PR #${prNumber} on ${repo}`);
+
+    const mergeRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "product-engineer-orchestrator",
+      },
+      body: JSON.stringify({ merge_method: "squash" }),
+    });
+
+    if (mergeRes.ok) {
+      console.log(`[Orchestrator] PR #${prNumber} merged successfully`);
+      // The pr_merged webhook will trigger handleStatusUpdate -> terminal state
+    } else {
+      const errorText = await mergeRes.text();
+      console.error(`[Orchestrator] Failed to merge PR #${prNumber}: ${mergeRes.status} ${errorText}`);
+
+      // Notify via Slack if thread available
+      if (ticketRow.slack_thread_ts && ticketRow.slack_channel) {
+        await fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            channel: ticketRow.slack_channel,
+            thread_ts: ticketRow.slack_thread_ts,
+            text: `Auto-merge failed for PR #${prNumber}: ${mergeRes.status === 405 || mergeRes.status === 409 ? "merge conflict or branch not mergeable" : `API error ${mergeRes.status}`}. Sending back to agent for rebase.`,
+          }),
+        }).catch(err => console.warn("[Orchestrator] Failed to notify Slack:", err));
+      }
+
+      // Route back to agent with rebase instruction
+      const event: TicketEvent = {
+        type: "merge_conflict",
+        source: "github",
+        ticketId,
+        product,
+        payload: { error: errorText, pr_url: ticketRow.pr_url, action: "rebase_and_push" },
+        slackThreadTs: ticketRow.slack_thread_ts as string | undefined,
+        slackChannel: ticketRow.slack_channel as string | undefined,
+      };
+      await this.routeToAgent(event);
+    }
+  }
+
+  /**
+   * LLM Supervisor — runs on every alarm tick to check system health.
+   * Evaluates active agents, stale PRs, and queued tickets, then takes
+   * action (kill stuck agents, trigger merge evals, escalate, start queued).
+   */
+  private async runSupervisorTick(): Promise<void> {
+    const assembler = this.getContextAssembler();
+    const engine = this.getDecisionEngine();
+
+    const context = await assembler.forSupervisor();
+
+    // Skip LLM call if nothing needs attention
+    if ((context.agentCount as number) === 0 &&
+        (context.stalePRs as unknown[]).length === 0 &&
+        (context.queuedTickets as unknown[]).length === 0) {
+      return;
+    }
+
+    let actions: Array<{ target: string; action: string; reason: string }>;
+    try {
+      const response = await engine.makeDecision("supervisor", context);
+      // Supervisor template asks for a JSON array
+      // The response might be a single object or an array
+      if (Array.isArray(response)) {
+        actions = response;
+      } else {
+        actions = [response as unknown as { target: string; action: string; reason: string }];
+      }
+    } catch (err) {
+      console.error("[Orchestrator] Supervisor LLM call failed:", err);
+      return; // Don't take action on LLM failure
+    }
+
+    for (const action of actions) {
+      if (action.action === "none") continue;
+
+      // Log each action
+      await engine.logDecision({
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        type: "supervisor",
+        ticket_id: action.target !== "system" ? action.target : null,
+        context_summary: `Supervisor: ${action.action} on ${action.target}`,
+        action: action.action,
+        reason: action.reason,
+        confidence: 0,
+      }, {
+        sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
+      });
+
+      switch (action.action) {
+        case "kill": {
+          // Mark agent inactive and tell container to shut down
+          if (action.target !== "system") {
+            this.ctx.storage.sql.exec(
+              "UPDATE tickets SET agent_active = 0, status = 'failed', updated_at = datetime('now') WHERE id = ?",
+              action.target,
+            );
+            try {
+              const agentId = this.env.TICKET_AGENT.idFromName(action.target);
+              const agentStub = this.env.TICKET_AGENT.get(agentId);
+              await agentStub.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
+            } catch (err) {
+              console.warn(`[Orchestrator] Failed to kill agent for ${action.target}:`, err);
+            }
+          }
+          break;
+        }
+        case "trigger_merge_eval": {
+          if (action.target !== "system") {
+            const ticketRow = this.ctx.storage.sql.exec(
+              "SELECT product FROM tickets WHERE id = ?", action.target
+            ).toArray()[0] as { product: string } | undefined;
+            if (ticketRow) {
+              await this.evaluateMergeGate(action.target, ticketRow.product);
+            }
+          }
+          break;
+        }
+        case "escalate": {
+          // Post to decisions channel
+          await fetch("https://slack.com/api/chat.postMessage", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              channel: (this.env as Record<string, unknown>).DECISIONS_CHANNEL as string || "#product-engineer-decisions",
+              text: `\u26A0\uFE0F *Supervisor Escalation*\n*Target:* ${action.target}\n*Reason:* ${action.reason}`,
+            }),
+          });
+          break;
+        }
+        case "start_queued": {
+          // Pop the highest-priority ticket from the queue
+          const queuedRow = this.ctx.storage.sql.exec(
+            "SELECT id, ticket_id, payload FROM ticket_queue ORDER BY priority ASC, created_at ASC LIMIT 1"
+          ).toArray()[0] as { id: string; ticket_id: string; payload: string } | undefined;
+          if (queuedRow) {
+            this.ctx.storage.sql.exec("DELETE FROM ticket_queue WHERE id = ?", queuedRow.id);
+            const queuedEvent = JSON.parse(queuedRow.payload) as TicketEvent;
+            await this.handleTicketReview(queuedEvent);
+          }
+          break;
+        }
+        // "restart", "redeliver_events", "defer_new_tickets" — can be added later
+      }
+    }
+  }
+
   private async handleStatusUpdate(request: Request): Promise<Response> {
     const { ticketId, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, agent_active } = await request.json<{
       ticketId: string;
@@ -623,6 +1370,19 @@ export class Orchestrator extends Container<Bindings> {
 
     // Log phone-home payloads so they appear in wrangler tail
     console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
+
+    // Reject heartbeats/status updates for tickets already in a terminal state.
+    // This prevents agent containers from overwriting supervisor kill decisions.
+    const currentRow = this.ctx.storage.sql.exec(
+      "SELECT status FROM tickets WHERE id = ?", ticketId
+    ).toArray()[0] as { status: string } | undefined;
+    if (currentRow && (TERMINAL_STATUSES as readonly string[]).includes(currentRow.status)) {
+      // Allow explicit agent_active=0 (dashboard kill) but block heartbeats
+      if (agent_active === undefined || agent_active !== 0) {
+        console.log(`[Orchestrator] Ignoring status update for terminal ticket ${ticketId} (current: ${currentRow.status})`);
+        return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
+      }
+    }
 
     const updates: string[] = ["updated_at = datetime('now')", "last_heartbeat = datetime('now')"];
     const values: (string | number | null)[] = [];
@@ -677,6 +1437,22 @@ export class Orchestrator extends Container<Bindings> {
       `UPDATE tickets SET ${updates.join(", ")} WHERE id = ?`,
       ...values,
     );
+
+    // When a PR URL is first reported, check if CI already passed and trigger merge gate.
+    // This closes the race condition where check_suite webhook arrives before the agent
+    // reports the PR URL, causing the merge gate to be skipped.
+    if (pr_url && status === "pr_open") {
+      const ticketRow = this.ctx.storage.sql.exec(
+        "SELECT product FROM tickets WHERE id = ?", ticketId
+      ).toArray()[0] as { product: string } | undefined;
+      if (ticketRow) {
+        console.log(`[Orchestrator] PR URL reported for ${ticketId}, checking CI status for merge gate...`);
+        // Run async — don't block the status update response
+        this.evaluateMergeGate(ticketId, ticketRow.product).catch(err =>
+          console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
+        );
+      }
+    }
 
     return Response.json({ ok: true });
   }
@@ -1297,58 +2073,160 @@ export class Orchestrator extends Container<Bindings> {
       return Response.json({ error: "no product for channel" }, { status: 404 });
     }
 
-    const ticketId = sanitizeTicketId(`slack-${slackEvent.ts || Date.now()}`);
-
-    // If the mention is inside an existing thread, use the thread root ts.
-    // Otherwise, use the mention message ts (which will become the thread root).
-    // Slack threads are keyed by the first message's ts.
     const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
 
-    // Best-effort: post acknowledgment in the thread
-    try {
-      const slackRes = await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: slackEvent.channel,
-          thread_ts: slackThreadTs,
-          text: "⏳ Working on it...",
-        }),
-      });
-
-      if (slackRes.ok) {
-        const slackData = await slackRes.json() as { ok: boolean; ts?: string; error?: string };
-        if (slackData.ok) {
-          console.log(`[Orchestrator] Posted acknowledgment, thread_ts=${slackThreadTs}`);
-        } else {
-          console.warn(`[Orchestrator] Slack API returned error: ${slackData.error}`);
-        }
-      } else {
-        console.warn(`[Orchestrator] Slack post failed: ${slackRes.status}`);
-      }
-    } catch (err) {
-      console.warn("[Orchestrator] Failed to post acknowledgment to Slack:", err);
+    // Create a Linear ticket instead of spawning an agent directly.
+    // The Linear webhook will handle ticket creation → agent spawning.
+    const productConfig = products[product];
+    const projectName = productConfig.triggers?.linear?.project_name;
+    if (!projectName) {
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ No Linear project configured for this product. Cannot create ticket.`,
+      );
+      return Response.json({ error: "no linear project for product" }, { status: 400 });
     }
 
-    const event: TicketEvent = {
-      type: "slack_mention",
-      source: "slack",
-      ticketId,
-      product,
-      payload: slackEvent,
-      slackThreadTs, // Always set from slackEvent.ts — ack post is best-effort UI
-      slackChannel: slackEvent.channel,
-    };
+    // Load settings for Linear API
+    const settings = this.ctx.storage.sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
+    const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    const teamId = settingsMap.linear_team_id;
+    const appUserId = settingsMap.linear_app_user_id;
+    const linearToken = this.getLinearAppToken();
 
-    // Use handleEvent which does upsert + route
-    return this.handleEvent(new Request("http://internal/event", {
+    if (!teamId || !linearToken) {
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ Linear integration not configured (missing team ID or token).`,
+      );
+      return Response.json({ error: "linear not configured" }, { status: 500 });
+    }
+
+    // Strip the @mention from the text to get the raw request
+    const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+
+    // Generate a concise title from the request (first sentence or first 80 chars)
+    const title = rawText.length <= 80
+      ? rawText
+      : rawText.split(/[.!?\n]/)[0].slice(0, 80).trim() || rawText.slice(0, 80).trim();
+
+    // Look up the Linear project ID by name
+    const projectRes = await fetch("https://api.linear.app/graphql", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-    }));
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${linearToken}`,
+      },
+      body: JSON.stringify({
+        query: `query($teamId: String!) {
+          team(id: $teamId) {
+            projects { nodes { id name } }
+          }
+        }`,
+        variables: { teamId },
+      }),
+    });
+
+    let projectId: string | null = null;
+    if (projectRes.ok) {
+      const projectData = await projectRes.json() as {
+        data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } };
+        errors?: Array<{ message: string }>;
+      };
+      if (projectData.errors) {
+        console.error(`[Orchestrator] Linear project lookup errors:`, JSON.stringify(projectData.errors));
+      }
+      const normalizedName = projectName.toLowerCase();
+      const projects = projectData.data?.team?.projects?.nodes || [];
+      projectId = projects.find(p => p.name.toLowerCase() === normalizedName)?.id || null;
+      console.log(`[Orchestrator] Project lookup: name="${projectName}" found=${!!projectId} (${projects.length} projects in team)`);
+    } else {
+      console.error(`[Orchestrator] Linear project lookup failed: ${projectRes.status} ${await projectRes.text().catch(() => "")}`);
+    }
+
+    // Create the Linear issue
+    console.log(`[Orchestrator] Creating Linear issue: team=${teamId} project=${projectId} assignee=${appUserId} title="${title}"`);
+    const createRes = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${linearToken}`,
+      },
+      body: JSON.stringify({
+        query: `mutation($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue { id identifier url }
+          }
+        }`,
+        variables: {
+          input: {
+            teamId,
+            title,
+            description: `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`,
+            ...(projectId && { projectId }),
+            ...(appUserId && { assigneeId: appUserId }),
+          },
+        },
+      }),
+    });
+
+    if (!createRes.ok) {
+      const errText = await createRes.text();
+      console.error(`[Orchestrator] Failed to create Linear issue: ${createRes.status} ${errText}`);
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+      );
+      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+    }
+
+    const createData = await createRes.json() as {
+      data?: { issueCreate?: { success: boolean; issue?: { id: string; identifier: string; url: string } } }
+    };
+    const issue = createData.data?.issueCreate?.issue;
+
+    if (!issue) {
+      console.error("[Orchestrator] Linear issueCreate returned no issue:", JSON.stringify(createData));
+      await this.postSlackError(
+        slackEvent.channel || "",
+        slackThreadTs || "",
+        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+      );
+      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+    }
+
+    console.log(`[Orchestrator] Created Linear issue ${issue.identifier} (${issue.id}) from Slack mention`);
+
+    // Post acknowledgment with Linear ticket link
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${(this.env as Record<string, unknown>).SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: slackEvent.channel,
+        thread_ts: slackThreadTs,
+        text: `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
+      }),
+    }).catch(err => console.warn("[Orchestrator] Failed to post ack:", err));
+
+    // Store the Slack thread association so the Linear webhook handler can link them.
+    // The webhook will arrive shortly and create the ticket entry via handleEvent.
+    this.ctx.storage.sql.exec(
+      `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
+       VALUES (?, ?, ?)
+       ON CONFLICT(linear_issue_id) DO UPDATE SET
+         slack_thread_ts = excluded.slack_thread_ts,
+         slack_channel = excluded.slack_channel`,
+      issue.id, slackThreadTs || null, slackEvent.channel || null,
+    );
+
+    return Response.json({ ok: true, linearIssue: issue.identifier });
   }
 
 }

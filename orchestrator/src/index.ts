@@ -374,6 +374,16 @@ app.get("/api/orchestrator/status", async (c) => {
   return orchestrator.fetch(new Request("http://internal/status"));
 });
 
+// Orchestrator: decision log
+app.get("/api/orchestrator/decisions", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/decisions"));
+});
+
 // Orchestrator: cleanup inactive agents
 app.post("/api/orchestrator/cleanup-inactive", async (c) => {
   const apiKey = c.req.header("X-API-Key");
@@ -396,6 +406,137 @@ app.post("/api/orchestrator/shutdown-all", async (c) => {
   return orchestrator.fetch(new Request("http://internal/shutdown-all", {
     method: "POST",
   }));
+});
+
+// === Linear OAuth (one-time app setup) ===
+
+// Initiate Linear OAuth flow (admin only)
+app.get("/api/auth/linear/authorize", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const clientId = c.env.LINEAR_APP_CLIENT_ID;
+  if (!clientId) {
+    return c.json({ error: "LINEAR_APP_CLIENT_ID not configured" }, 500);
+  }
+
+  // Generate CSRF state token
+  const stateBytes = new Uint8Array(32);
+  crypto.getRandomValues(stateBytes);
+  const state = Array.from(stateBytes, b => b.toString(16).padStart(2, "0")).join("");
+
+  // Store in KV with 5-min TTL
+  await c.env.SESSIONS.put(`linear_oauth_state:${state}`, "1", {
+    expirationTtl: 300,
+  });
+
+  const redirectUri = `${c.env.WORKER_URL}/api/auth/linear/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "read,write,app:assignable,app:mentionable",
+    actor: "app",
+    state,
+  });
+
+  return c.redirect(`https://linear.app/oauth/authorize?${params}`);
+});
+
+// Linear OAuth callback — exchanges code for token, stores in DO settings
+app.get("/api/auth/linear/callback", async (c) => {
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  const error = c.req.query("error");
+
+  if (error) {
+    return c.json({ error: `Linear OAuth error: ${error}` }, 400);
+  }
+
+  if (!code || !state) {
+    return c.json({ error: "Missing code or state" }, 400);
+  }
+
+  // Verify CSRF state
+  const storedState = await c.env.SESSIONS.get(`linear_oauth_state:${state}`);
+  if (!storedState) {
+    return c.json({ error: "Invalid or expired state" }, 400);
+  }
+  await c.env.SESSIONS.delete(`linear_oauth_state:${state}`);
+
+  // Exchange code for token
+  const redirectUri = `${c.env.WORKER_URL}/api/auth/linear/callback`;
+  const tokenResponse = await fetch("https://api.linear.app/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      redirect_uri: redirectUri,
+      client_id: c.env.LINEAR_APP_CLIENT_ID,
+      client_secret: c.env.LINEAR_APP_CLIENT_SECRET,
+      grant_type: "authorization_code",
+    }),
+  });
+
+  if (!tokenResponse.ok) {
+    const errorText = await tokenResponse.text();
+    return c.json({ error: `Token exchange failed: ${errorText}` }, 502);
+  }
+
+  const tokens = await tokenResponse.json<{
+    access_token: string;
+    token_type: string;
+    expires_in?: number;
+    scope: string[];
+    refresh_token?: string;
+  }>();
+
+  // Query Linear for the app's viewer identity
+  const viewerResponse = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${tokens.access_token}`,
+    },
+    body: JSON.stringify({ query: "{ viewer { id name } }" }),
+  });
+
+  if (!viewerResponse.ok) {
+    return c.json({ error: "Failed to query Linear viewer" }, 502);
+  }
+
+  const viewerData = await viewerResponse.json<{
+    data: { viewer: { id: string; name: string } };
+  }>();
+  const viewer = viewerData.data.viewer;
+
+  // Store settings in orchestrator DO
+  const orchestrator = getOrchestrator(c.env);
+  const settingsToStore: Record<string, string> = {
+    linear_app_token: tokens.access_token,
+    linear_app_user_id: viewer.id,
+    linear_token_updated_at: new Date().toISOString(),
+  };
+  if (tokens.refresh_token) {
+    settingsToStore.linear_refresh_token = tokens.refresh_token;
+  }
+
+  for (const [key, value] of Object.entries(settingsToStore)) {
+    await orchestrator.fetch(new Request(`http://internal/settings/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    }));
+  }
+
+  return c.json({
+    ok: true,
+    app_user_id: viewer.id,
+    app_name: viewer.name,
+    scopes: tokens.scope,
+  });
 });
 
 // === Dashboard & Auth ===

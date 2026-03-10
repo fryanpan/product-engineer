@@ -5,7 +5,7 @@
  */
 
 import { Hono } from "hono";
-import { getAgentIdentity, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
+import { getLinearAppUserId, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
 
 function getOrchestrator(env: Bindings): DurableObjectStub {
@@ -108,25 +108,13 @@ async function linearGraphQL(apiKey: string, query: string, variables: Record<st
   return res.json() as Promise<Record<string, unknown>>;
 }
 
-/** Best-effort: look up agent's Linear user ID by email, then assign the issue. */
-export async function assignTicketToAgent(apiKey: string, issueId: string, agentEmail: string) {
+/** Assign a Linear issue to the app user (by known user ID). */
+export async function assignTicketToAgent(apiKey: string, issueId: string, appUserId: string) {
   try {
-    const userData = await linearGraphQL(
-      apiKey,
-      `query($email: String!) { users(filter: { email: { eq: $email } }) { nodes { id } } }`,
-      { email: agentEmail },
-    ) as { data?: { users?: { nodes?: { id: string }[] } } };
-
-    const userId = userData.data?.users?.nodes?.[0]?.id;
-    if (!userId) {
-      console.warn(`[Linear] Could not find user with email ${agentEmail}`);
-      return;
-    }
-
     await linearGraphQL(
       apiKey,
       `mutation($id: String!, $assigneeId: String!) { issueUpdate(id: $id, input: { assigneeId: $assigneeId }) { success } }`,
-      { id: issueId, assigneeId: userId },
+      { id: issueId, assigneeId: appUserId },
     );
   } catch (err) {
     console.error("[Linear] Failed to assign ticket:", err);
@@ -148,6 +136,7 @@ interface LinearWebhookPayload {
     labelIds?: string[];
     state?: { name: string };
     assignee?: { id: string; name: string; email?: string };
+    delegate?: { id: string; name: string };
     project?: { id: string; name: string };
   };
 }
@@ -172,12 +161,55 @@ linearWebhook.post("/", async (c) => {
 
   const payload = JSON.parse(rawBody) as LinearWebhookPayload;
 
-  // Only handle issues
-  if (payload.type !== "Issue") {
+  // Only handle issues and comments
+  if (payload.type !== "Issue" && payload.type !== "Comment") {
     return c.json({ ok: true, ignored: true });
   }
 
   const orchestrator = getOrchestrator(c.env);
+
+  // Handle Linear comments on tracked tickets
+  if (payload.type === "Comment" && payload.action === "create") {
+    const commentData = payload.data as unknown as {
+      id: string;
+      body: string;
+      issue: { id: string; identifier: string; title: string };
+      user: { id: string; name: string };
+    };
+
+    // Don't re-process our own comments (posted by the app)
+    const appUserId = await getLinearAppUserId(orchestrator);
+    if (commentData.user.id === appUserId) {
+      return c.json({ ok: true, ignored: true, reason: "our own comment" });
+    }
+
+    // Check if we're tracking this ticket
+    const statusRes = await orchestrator.fetch(
+      new Request(`http://internal/ticket-status/${encodeURIComponent(commentData.issue.id)}`)
+    );
+
+    if (!statusRes.ok) {
+      return c.json({ ok: true, ignored: true, reason: "ticket not tracked" });
+    }
+
+    const ticketStatus = await statusRes.json<{ status: string; product: string }>();
+
+    await forwardToOrchestrator(c.env, {
+      type: "linear_comment",
+      source: "linear",
+      ticketId: commentData.issue.id,
+      product: ticketStatus.product,
+      payload: {
+        comment_id: commentData.id,
+        body: commentData.body,
+        author: commentData.user.name,
+        issue_identifier: commentData.issue.identifier,
+        issue_title: commentData.issue.title,
+      },
+    });
+
+    return c.json({ ok: true, ticketId: commentData.issue.id });
+  }
 
   if (!(await isOurTeam(orchestrator, payload.data.teamId))) {
     return c.json({ ok: true, ignored: true, reason: "not our team" });
@@ -202,10 +234,8 @@ linearWebhook.post("/", async (c) => {
   }
 
   // Trigger conditions: only trigger on create/update when assigned to agent (but not if already in terminal state)
-  const agent = await getAgentIdentity(orchestrator);
-  const isAssignedToAgent =
-    payload.data.assignee?.email === agent.linear_email ||
-    payload.data.assignee?.name === agent.linear_name;
+  const appUserId = await getLinearAppUserId(orchestrator);
+  const isAssignedToAgent = payload.data.assignee?.id === appUserId || payload.data.delegate?.id === appUserId;
 
   // Ignore terminal states even if assigned to agent
   const terminalStates = ["Done", "Canceled", "Cancelled"];
@@ -295,6 +325,12 @@ githubWebhook.post("/", async (c) => {
   }
   if (event === "deployment_status") {
     return handleDeploymentStatus(rawBody, c.env);
+  }
+  if (event === "code_scanning_alert") {
+    return handleCodeScanningAlert(rawBody, c.env);
+  }
+  if (event === "dependabot_alert") {
+    return handleDependabotAlert(rawBody, c.env);
   }
 
   return c.json({ ok: true, ignored: true });
@@ -729,6 +765,119 @@ async function handleDeploymentStatus(rawBody: string, env: Bindings) {
       target_url: payload.deployment_status.target_url,
     },
   });
+}
+
+async function handleCodeScanningAlert(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    alert: {
+      number: number;
+      state: string;
+      rule: { id: string; severity: string; description: string };
+      most_recent_instance: {
+        ref: string;
+        location: { path: string; start_line: number; end_line: number };
+        message: { text: string };
+      } | null;
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  // Handle new, reopened, and branch-reappearance alerts
+  if (payload.action !== "created" && payload.action !== "reopened" && payload.action !== "appeared_in_branch") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  const ref = payload.alert.most_recent_instance?.ref;
+  // Only route alerts on branch refs — ignore tags, PR refs, etc.
+  const branch = ref?.startsWith("refs/heads/") ? ref.replace("refs/heads/", "") : undefined;
+
+  return routeWebhookEvent(env, branch, payload.repository.full_name, {
+    type: "code_scanning_alert",
+    payload: {
+      alert_number: payload.alert.number,
+      state: payload.alert.state,
+      rule_id: payload.alert.rule.id,
+      severity: payload.alert.rule.severity,
+      description: payload.alert.rule.description,
+      file_path: payload.alert.most_recent_instance?.location?.path,
+      start_line: payload.alert.most_recent_instance?.location?.start_line,
+      end_line: payload.alert.most_recent_instance?.location?.end_line,
+      message: payload.alert.most_recent_instance?.message?.text,
+      alert_url: payload.alert.html_url,
+    },
+  });
+}
+
+async function handleDependabotAlert(rawBody: string, env: Bindings) {
+  const payload = JSON.parse(rawBody) as {
+    action: string;
+    alert: {
+      number: number;
+      state: string;
+      dependency: {
+        package: { ecosystem: string; name: string };
+        manifest_path: string;
+      } | null;
+      security_advisory: {
+        severity: string;
+        summary: string;
+        description: string;
+        cve_id: string | null;
+      } | null;
+      security_vulnerability: {
+        vulnerable_version_range: string;
+        first_patched_version: { identifier: string } | null;
+      } | null;
+      html_url: string;
+    };
+    repository: { full_name: string };
+  };
+
+  // Only handle new or reopened alerts
+  if (payload.action !== "created" && payload.action !== "reopened") {
+    return Response.json({ ok: true, ignored: true });
+  }
+
+  // Dependabot alerts are repo-level, not branch-specific.
+  // Forward to orchestrator as a new event — the orchestrator can decide
+  // whether to create a ticket or wait for the Dependabot PR.
+  const orchestrator = getOrchestrator(env);
+  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  if (!productName) {
+    return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
+  }
+
+  // Include repo in ticketId to avoid collisions across repos in the same product
+  // (alert numbers are only unique per repo). Use action suffix for reopened alerts
+  // so they get a fresh ticket instead of hitting the terminal state guard.
+  const repoShort = payload.repository.full_name.replace("/", "-");
+  const actionSuffix = payload.action === "reopened" ? `-reopen-${Date.now()}` : "";
+  const ticketId = `dependabot-${repoShort}-${payload.alert.number}${actionSuffix}`;
+
+  await forwardToOrchestrator(env, {
+    type: "dependabot_alert",
+    source: "github",
+    ticketId,
+    product: productName,
+    payload: {
+      alert_number: payload.alert.number,
+      state: payload.alert.state,
+      package_name: payload.alert.dependency?.package?.name,
+      ecosystem: payload.alert.dependency?.package?.ecosystem,
+      manifest_path: payload.alert.dependency?.manifest_path,
+      severity: payload.alert.security_advisory?.severity,
+      summary: payload.alert.security_advisory?.summary,
+      cve_id: payload.alert.security_advisory?.cve_id,
+      vulnerable_range: payload.alert.security_vulnerability?.vulnerable_version_range,
+      patched_version: payload.alert.security_vulnerability?.first_patched_version?.identifier,
+      alert_url: payload.alert.html_url,
+      repo: payload.repository.full_name,
+    },
+  });
+
+  return Response.json({ ok: true, product: productName, ticketId, alertNumber: payload.alert.number });
 }
 
 export { linearWebhook, githubWebhook };
