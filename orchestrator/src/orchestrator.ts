@@ -1288,6 +1288,19 @@ export class Orchestrator extends Container<Bindings> {
     // Log phone-home payloads so they appear in wrangler tail
     console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
+    // Reject heartbeats/status updates for tickets already in a terminal state.
+    // This prevents agent containers from overwriting supervisor kill decisions.
+    const currentRow = this.ctx.storage.sql.exec(
+      "SELECT status FROM tickets WHERE id = ?", ticketId
+    ).toArray()[0] as { status: string } | undefined;
+    if (currentRow && (TERMINAL_STATUSES as readonly string[]).includes(currentRow.status)) {
+      // Allow explicit agent_active=0 (dashboard kill) but block heartbeats
+      if (agent_active === undefined || agent_active !== 0) {
+        console.log(`[Orchestrator] Ignoring status update for terminal ticket ${ticketId} (current: ${currentRow.status})`);
+        return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
+      }
+    }
+
     const updates: string[] = ["updated_at = datetime('now')", "last_heartbeat = datetime('now')"];
     const values: (string | number | null)[] = [];
 

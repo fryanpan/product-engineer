@@ -105,7 +105,8 @@ export class ContextAssembler {
     const activeTickets = this.config.sqlExec(
       `SELECT id, product, status, pr_url, slack_thread_ts, slack_channel,
               updated_at, created_at
-       FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed')`
+       FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed')
+       AND agent_active = 1`
     ).toArray() as Array<Record<string, unknown>>;
 
     const now = Date.now();
