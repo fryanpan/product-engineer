@@ -32,7 +32,7 @@ bucket_name = "product-engineer-transcripts"
 
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "placeholder"
+id = "5b4f4cc3f3b342c59eead588a5446ca8"
 # Production: create with `wrangler kv namespace create SESSIONS`
 # Then update this ID with the actual namespace ID
 
