@@ -642,6 +642,20 @@ export class Orchestrator extends Container<Bindings> {
     const event = await request.json<TicketEvent>();
     event.ticketId = sanitizeTicketId(event.ticketId);
 
+    // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID ticket.
+    // GitHub webhooks extract taskId from branch names like "ticket/PES-5",
+    // but the canonical ticket is stored under the Linear UUID. Look up by branch_name.
+    if (event.source === "github") {
+      const byBranch = this.ctx.storage.sql.exec(
+        "SELECT id FROM tickets WHERE branch_name = ? OR branch_name = ?",
+        `ticket/${event.ticketId}`, `feedback/${event.ticketId}`,
+      ).toArray()[0] as { id: string } | undefined;
+      if (byBranch) {
+        console.log(`[Orchestrator] Resolved branch task ID ${event.ticketId} → ${byBranch.id}`);
+        event.ticketId = byBranch.id;
+      }
+    }
+
     // Check if this ticket is already in a terminal state — don't re-activate it
     const existing = this.ctx.storage.sql.exec(
       "SELECT status FROM tickets WHERE id = ?",

@@ -181,7 +181,7 @@ export class ContextAssembler {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: this.config.linearAppToken,
+        Authorization: `Bearer ${this.config.linearAppToken}`,
       },
       body: JSON.stringify({
         query: `query($id: String!) {

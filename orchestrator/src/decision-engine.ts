@@ -187,7 +187,7 @@ export class DecisionEngine {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: this.config.linearAppToken,
+        Authorization: `Bearer ${this.config.linearAppToken}`,
       },
       body: JSON.stringify({
         query: `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`,
