@@ -136,6 +136,7 @@ interface LinearWebhookPayload {
     labelIds?: string[];
     state?: { name: string };
     assignee?: { id: string; name: string; email?: string };
+    delegate?: { id: string; name: string };
     project?: { id: string; name: string };
   };
 }
@@ -234,7 +235,7 @@ linearWebhook.post("/", async (c) => {
 
   // Trigger conditions: only trigger on create/update when assigned to agent (but not if already in terminal state)
   const appUserId = await getLinearAppUserId(orchestrator);
-  const isAssignedToAgent = payload.data.assignee?.id === appUserId;
+  const isAssignedToAgent = payload.data.assignee?.id === appUserId || payload.data.delegate?.id === appUserId;
 
   // Ignore terminal states even if assigned to agent
   const terminalStates = ["Done", "Canceled", "Cancelled"];

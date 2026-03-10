@@ -475,6 +475,31 @@ describe("linear webhook handler", () => {
     expect(sentEvents).toHaveLength(1);
   });
 
+  it("triggers when app is delegated (not assignee)", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "update",
+      type: "Issue",
+      data: {
+        id: "issue-401",
+        title: "Delegated to agent",
+        description: "",
+        priority: 1,
+        teamId: TEST_REGISTRY.linear_team_id,
+        project: { id: "p1", name: "Test App" },
+        assignee: { id: "human-user", name: "Human User" },
+        delegate: { id: "app-user-001", name: "Test Agent" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ok).toBe(true);
+    expect(json.product).toBe("test-app");
+    expect(sentEvents).toHaveLength(1);
+  });
+
   it("ignores assignment to other users", async () => {
     const app = makeApp();
     const env = makeEnv();
