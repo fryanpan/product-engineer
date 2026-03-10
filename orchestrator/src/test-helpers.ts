@@ -4,8 +4,7 @@
 
 export interface MockRegistryData {
   linear_team_id: string;
-  agent_linear_email: string;
-  agent_linear_name: string;
+  linear_app_user_id: string;
   cloudflare_ai_gateway?: { account_id: string; gateway_id: string };
   products: Record<string, any>;
 }
@@ -25,8 +24,7 @@ export function createMockOrchestratorStub(registryData: MockRegistryData): Dura
       if (url.pathname === "/settings") {
         const settings: Record<string, string> = {
           linear_team_id: registryData.linear_team_id,
-          agent_linear_email: registryData.agent_linear_email,
-          agent_linear_name: registryData.agent_linear_name,
+          linear_app_user_id: registryData.linear_app_user_id,
         };
 
         if (registryData.cloudflare_ai_gateway) {
@@ -46,8 +44,7 @@ export function createMockOrchestratorStub(registryData: MockRegistryData): Dura
  */
 export const TEST_REGISTRY: MockRegistryData = {
   linear_team_id: "00000000-0000-0000-0000-000000000001",
-  agent_linear_email: "agent@example.com",
-  agent_linear_name: "Test Agent",
+  linear_app_user_id: "app-user-001",
   products: {
     "test-app": {
       repos: ["test-org/test-app"],
@@ -60,7 +57,7 @@ export const TEST_REGISTRY: MockRegistryData = {
       secrets: {
         GITHUB_TOKEN: "TEST_GITHUB_TOKEN",
         SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
-        LINEAR_API_KEY: "LINEAR_API_KEY",
+        LINEAR_APP_TOKEN: "LINEAR_APP_TOKEN",
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
       },
     },
@@ -75,7 +72,7 @@ export const TEST_REGISTRY: MockRegistryData = {
       secrets: {
         GITHUB_TOKEN: "TEST_GITHUB_TOKEN",
         SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
-        LINEAR_API_KEY: "LINEAR_API_KEY",
+        LINEAR_APP_TOKEN: "LINEAR_APP_TOKEN",
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
       },
     },
@@ -89,7 +86,7 @@ export const TEST_REGISTRY: MockRegistryData = {
       secrets: {
         GITHUB_TOKEN: "TEST_GITHUB_TOKEN",
         SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
-        LINEAR_API_KEY: "LINEAR_API_KEY",
+        LINEAR_APP_TOKEN: "LINEAR_APP_TOKEN",
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
       },
     },

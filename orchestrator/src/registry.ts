@@ -17,11 +17,6 @@ export interface ProductConfig {
   secrets: Record<string, string>;
 }
 
-export interface AgentIdentity {
-  linear_email: string;
-  linear_name: string;
-}
-
 export interface CloudflareAIGateway {
   account_id: string;
   gateway_id: string;
@@ -29,8 +24,7 @@ export interface CloudflareAIGateway {
 
 export interface Registry {
   linear_team_id: string;
-  agent_linear_email: string;
-  agent_linear_name: string;
+  linear_app_user_id: string;
   cloudflare_ai_gateway?: CloudflareAIGateway;
   products: Record<string, ProductConfig>;
 }
@@ -62,8 +56,7 @@ export async function loadRegistry(orchestratorStub: DurableObjectStub): Promise
 
   registryCache = {
     linear_team_id: settings.linear_team_id || "",
-    agent_linear_email: settings.agent_linear_email || "",
-    agent_linear_name: settings.agent_linear_name || "",
+    linear_app_user_id: settings.linear_app_user_id || "",
     cloudflare_ai_gateway: cloudflareAiGateway,
     products,
   };
@@ -119,14 +112,11 @@ export async function isOurTeam(
   return registry.linear_team_id === teamId;
 }
 
-export async function getAgentIdentity(
+export async function getLinearAppUserId(
   orchestratorStub: DurableObjectStub,
-): Promise<AgentIdentity> {
+): Promise<string> {
   const registry = await loadRegistry(orchestratorStub);
-  return {
-    linear_email: registry.agent_linear_email,
-    linear_name: registry.agent_linear_name,
-  };
+  return registry.linear_app_user_id;
 }
 
 export async function getAIGatewayConfig(

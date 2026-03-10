@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import {
-  getAgentIdentity,
+  getLinearAppUserId,
   getAIGatewayConfig,
   getProduct,
   getProducts,
@@ -89,11 +89,10 @@ describe("Registry with DO backend", () => {
     });
   });
 
-  describe("getAgentIdentity", () => {
-    it("returns configured agent identity", async () => {
-      const identity = await getAgentIdentity(mockOrchestrator);
-      expect(identity.linear_email).toBe("agent@example.com");
-      expect(identity.linear_name).toBe("Test Agent");
+  describe("getLinearAppUserId", () => {
+    it("returns configured app user ID", async () => {
+      const appUserId = await getLinearAppUserId(mockOrchestrator);
+      expect(appUserId).toBe("app-user-001");
     });
   });
 

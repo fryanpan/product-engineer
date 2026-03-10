@@ -11,7 +11,7 @@ describe("ContextAssembler", () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
-      linearApiKey: "lin_test",
+      linearAppToken: "lin_test",
       githubTokens: {},
     });
 
@@ -45,7 +45,7 @@ describe("ContextAssembler", () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
-      linearApiKey: "lin_test",
+      linearAppToken: "lin_test",
       githubTokens: {},
     });
 
@@ -64,7 +64,7 @@ describe("ContextAssembler", () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
-      linearApiKey: "lin_test",
+      linearAppToken: "lin_test",
       githubTokens: { "health-tool": "ghp_test" },
     });
 
@@ -87,7 +87,7 @@ describe("ContextAssembler", () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
-      linearApiKey: "lin_test",
+      linearAppToken: "lin_test",
       githubTokens: {},
     });
 
@@ -102,7 +102,7 @@ describe("ContextAssembler", () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
-      linearApiKey: "lin_test",
+      linearAppToken: "lin_test",
       githubTokens: {},
     });
 
@@ -125,7 +125,7 @@ describe("ContextAssembler", () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
-      linearApiKey: "lin_test",
+      linearAppToken: "lin_test",
       githubTokens: {},
     });
 

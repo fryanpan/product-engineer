@@ -91,6 +91,27 @@ export class Orchestrator extends Container<Bindings> {
       // Don't let supervisor failures break the alarm loop
     }
 
+    // Refresh Linear OAuth token every 12h (alarm fires every 5min, so check timestamp)
+    try {
+      const lastRefreshRow = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'linear_token_refreshed_at'"
+      ).toArray()[0] as { value: string } | undefined;
+      const lastRefresh = lastRefreshRow ? parseInt(lastRefreshRow.value, 10) : 0;
+      const twelveHours = 12 * 60 * 60 * 1000;
+      if (Date.now() - lastRefresh > twelveHours) {
+        const refreshed = await this.refreshLinearToken();
+        if (refreshed) {
+          this.ctx.storage.sql.exec(
+            `INSERT INTO settings (key, value) VALUES ('linear_token_refreshed_at', ?)
+             ON CONFLICT(key) DO UPDATE SET value = ?`,
+            String(Date.now()), String(Date.now()),
+          );
+        }
+      }
+    } catch (err) {
+      console.error("[Orchestrator] Linear token refresh check failed:", err);
+    }
+
     return super.alarm(alarmProps);
   }
 
@@ -135,7 +156,7 @@ export class Orchestrator extends Container<Bindings> {
         anthropicApiKey: (this.env.ANTHROPIC_API_KEY as string) || "",
         slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
         decisionsChannel: (this.env as any).DECISIONS_CHANNEL || "#product-engineer-decisions",
-        linearApiKey: (this.env.LINEAR_API_KEY as string) || "",
+        linearAppToken: this.getLinearAppToken(),
       });
     }
     return this._decisionEngine;
@@ -146,7 +167,7 @@ export class Orchestrator extends Container<Bindings> {
       this._contextAssembler = new ContextAssembler({
         sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
         slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
-        linearApiKey: (this.env.LINEAR_API_KEY as string) || "",
+        linearAppToken: this.getLinearAppToken(),
         githubTokens: this.getGithubTokens(),
       });
     }
@@ -173,6 +194,81 @@ export class Orchestrator extends Container<Bindings> {
       }
     }
     return tokens;
+  }
+
+  /** Get the Linear OAuth app token — checks SQLite settings for a stored token, falls back to env binding. */
+  private getLinearAppToken(): string {
+    try {
+      const row = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'linear_app_token'"
+      ).toArray()[0] as { value: string } | undefined;
+      if (row?.value) return row.value;
+    } catch {
+      // Settings table may not exist yet during early init
+    }
+    return (this.env.LINEAR_APP_TOKEN as string) || "";
+  }
+
+  /** Refresh the Linear OAuth token using the stored refresh token. */
+  private async refreshLinearToken(): Promise<boolean> {
+    try {
+      const refreshRow = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'linear_refresh_token'"
+      ).toArray()[0] as { value: string } | undefined;
+
+      if (!refreshRow?.value) {
+        console.log("[Orchestrator] No Linear refresh token stored, skipping refresh");
+        return false;
+      }
+
+      const clientId = (this.env.LINEAR_APP_CLIENT_ID as string) || "";
+      const clientSecret = (this.env.LINEAR_APP_CLIENT_SECRET as string) || "";
+      if (!clientId || !clientSecret) {
+        console.warn("[Orchestrator] LINEAR_APP_CLIENT_ID or LINEAR_APP_CLIENT_SECRET not set, cannot refresh");
+        return false;
+      }
+
+      const res = await fetch("https://api.linear.app/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: clientId,
+          client_secret: clientSecret,
+          refresh_token: refreshRow.value,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error(`[Orchestrator] Linear token refresh failed: ${res.status}`);
+        return false;
+      }
+
+      const data = await res.json() as { access_token: string; refresh_token?: string };
+      this.ctx.storage.sql.exec(
+        `INSERT INTO settings (key, value) VALUES ('linear_app_token', ?)
+         ON CONFLICT(key) DO UPDATE SET value = ?`,
+        data.access_token, data.access_token,
+      );
+
+      if (data.refresh_token) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO settings (key, value) VALUES ('linear_refresh_token', ?)
+           ON CONFLICT(key) DO UPDATE SET value = ?`,
+          data.refresh_token, data.refresh_token,
+        );
+      }
+
+      // Invalidate cached engine/assembler so they pick up the new token
+      this._decisionEngine = null;
+      this._contextAssembler = null;
+
+      console.log("[Orchestrator] Linear token refreshed successfully");
+      return true;
+    } catch (err) {
+      console.error("[Orchestrator] Linear token refresh error:", err);
+      return false;
+    }
   }
 
   private initDb() {
@@ -432,8 +528,7 @@ export class Orchestrator extends Container<Bindings> {
   private async seedProducts(request: Request): Promise<Response> {
     const registry = await request.json<{
       linear_team_id?: string;
-      agent_linear_email?: string;
-      agent_linear_name?: string;
+      linear_app_user_id?: string;
       cloudflare_ai_gateway?: { account_id: string; gateway_id: string };
       products: Record<string, unknown>;
     }>();
@@ -445,8 +540,7 @@ export class Orchestrator extends Container<Bindings> {
     // Insert global settings
     const settingsToUpsert: [string, string][] = [];
     if (registry.linear_team_id) settingsToUpsert.push(["linear_team_id", registry.linear_team_id]);
-    if (registry.agent_linear_email) settingsToUpsert.push(["agent_linear_email", registry.agent_linear_email]);
-    if (registry.agent_linear_name) settingsToUpsert.push(["agent_linear_name", registry.agent_linear_name]);
+    if (registry.linear_app_user_id) settingsToUpsert.push(["linear_app_user_id", registry.linear_app_user_id]);
     if (registry.cloudflare_ai_gateway) settingsToUpsert.push(["cloudflare_ai_gateway", JSON.stringify(registry.cloudflare_ai_gateway)]);
 
     for (const [key, value] of settingsToUpsert) {

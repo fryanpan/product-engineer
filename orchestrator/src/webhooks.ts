@@ -5,7 +5,7 @@
  */
 
 import { Hono } from "hono";
-import { getAgentIdentity, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
+import { getLinearAppUserId, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
 
 function getOrchestrator(env: Bindings): DurableObjectStub {
@@ -108,25 +108,13 @@ async function linearGraphQL(apiKey: string, query: string, variables: Record<st
   return res.json() as Promise<Record<string, unknown>>;
 }
 
-/** Best-effort: look up agent's Linear user ID by email, then assign the issue. */
-export async function assignTicketToAgent(apiKey: string, issueId: string, agentEmail: string) {
+/** Assign a Linear issue to the app user (by known user ID). */
+export async function assignTicketToAgent(apiKey: string, issueId: string, appUserId: string) {
   try {
-    const userData = await linearGraphQL(
-      apiKey,
-      `query($email: String!) { users(filter: { email: { eq: $email } }) { nodes { id } } }`,
-      { email: agentEmail },
-    ) as { data?: { users?: { nodes?: { id: string }[] } } };
-
-    const userId = userData.data?.users?.nodes?.[0]?.id;
-    if (!userId) {
-      console.warn(`[Linear] Could not find user with email ${agentEmail}`);
-      return;
-    }
-
     await linearGraphQL(
       apiKey,
       `mutation($id: String!, $assigneeId: String!) { issueUpdate(id: $id, input: { assigneeId: $assigneeId }) { success } }`,
-      { id: issueId, assigneeId: userId },
+      { id: issueId, assigneeId: appUserId },
     );
   } catch (err) {
     console.error("[Linear] Failed to assign ticket:", err);
@@ -185,12 +173,12 @@ linearWebhook.post("/", async (c) => {
       id: string;
       body: string;
       issue: { id: string; identifier: string; title: string };
-      user: { name: string; email?: string };
+      user: { id: string; name: string };
     };
 
-    // Don't re-process our own comments (posted by the orchestrator)
-    const agent = await getAgentIdentity(orchestrator);
-    if (commentData.user.email === agent.linear_email) {
+    // Don't re-process our own comments (posted by the app)
+    const appUserId = await getLinearAppUserId(orchestrator);
+    if (commentData.user.id === appUserId) {
       return c.json({ ok: true, ignored: true, reason: "our own comment" });
     }
 
@@ -245,10 +233,8 @@ linearWebhook.post("/", async (c) => {
   }
 
   // Trigger conditions: only trigger on create/update when assigned to agent (but not if already in terminal state)
-  const agent = await getAgentIdentity(orchestrator);
-  const isAssignedToAgent =
-    payload.data.assignee?.email === agent.linear_email ||
-    payload.data.assignee?.name === agent.linear_name;
+  const appUserId = await getLinearAppUserId(orchestrator);
+  const isAssignedToAgent = payload.data.assignee?.id === appUserId;
 
   // Ignore terminal states even if assigned to agent
   const terminalStates = ["Done", "Canceled", "Cancelled"];

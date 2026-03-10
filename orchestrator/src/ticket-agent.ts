@@ -16,7 +16,7 @@ export function resolveAgentEnvVars(
     SLACK_CHANNEL: config.slackChannel,
     SLACK_THREAD_TS: config.slackThreadTs || "", // Populated from database or event
     SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
-    LINEAR_API_KEY: env.LINEAR_API_KEY || "",
+    LINEAR_APP_TOKEN: env.LINEAR_APP_TOKEN || "",
     SENTRY_DSN: env.SENTRY_DSN || "",
     WORKER_URL: env.WORKER_URL || (() => { console.error("[TicketAgent] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
     API_KEY: env.API_KEY || "",

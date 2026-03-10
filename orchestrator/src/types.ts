@@ -78,7 +78,9 @@ export interface Bindings {
   SLACK_BOT_TOKEN: string;
   SLACK_APP_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
-  LINEAR_API_KEY: string;
+  LINEAR_APP_TOKEN: string;          // OAuth access token (actor=app)
+  LINEAR_APP_CLIENT_ID: string;      // For token refresh
+  LINEAR_APP_CLIENT_SECRET: string;  // For token refresh
   LINEAR_WEBHOOK_SECRET: string;
   GITHUB_WEBHOOK_SECRET: string;
   ANTHROPIC_API_KEY: string;

@@ -6,7 +6,7 @@
 export interface ContextAssemblerConfig {
   sqlExec: (sql: string, ...params: unknown[]) => { toArray: () => unknown[] };
   slackBotToken: string;
-  linearApiKey: string;
+  linearAppToken: string;
   githubTokens: Record<string, string>; // product → GitHub token
 }
 
@@ -181,7 +181,7 @@ export class ContextAssembler {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: this.config.linearApiKey,
+        Authorization: this.config.linearAppToken,
       },
       body: JSON.stringify({
         query: `query($id: String!) {

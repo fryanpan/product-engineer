@@ -7,7 +7,7 @@ describe("buildMcpServers", () => {
   beforeEach(() => {
     savedEnv = { ...process.env };
     // Clear all MCP-relevant env vars
-    delete process.env.LINEAR_API_KEY;
+    delete process.env.LINEAR_APP_TOKEN;
     delete process.env.CONTEXT7_API_KEY;
     delete process.env.NOTION_TOKEN;
     delete process.env.SENTRY_ACCESS_TOKEN;
@@ -28,8 +28,8 @@ describe("buildMcpServers", () => {
     });
   });
 
-  it("includes linear when LINEAR_API_KEY is set", () => {
-    process.env.LINEAR_API_KEY = "lin_test_key";
+  it("includes linear when LINEAR_APP_TOKEN is set", () => {
+    process.env.LINEAR_APP_TOKEN = "lin_test_key";
 
     const servers = buildMcpServers();
 
@@ -61,7 +61,7 @@ describe("buildMcpServers", () => {
   it.skip("includes sentry without ANTHROPIC_API_KEY in env", () => {});
 
   it("includes all HTTP servers when all env vars are set", () => {
-    process.env.LINEAR_API_KEY = "lin_key";
+    process.env.LINEAR_APP_TOKEN = "lin_key";
     process.env.CONTEXT7_API_KEY = "c7_key";
 
     const servers = buildMcpServers();
@@ -73,7 +73,7 @@ describe("buildMcpServers", () => {
   });
 
   it("produces correct types for http configs", () => {
-    process.env.LINEAR_API_KEY = "lin_key";
+    process.env.LINEAR_APP_TOKEN = "lin_key";
 
     const servers = buildMcpServers();
 

@@ -96,7 +96,7 @@ export interface AgentConfig {
   slackBotToken: string;
   slackChannel: string;
   slackThreadTs: string;
-  linearApiKey: string;
+  linearAppToken: string;
   workerUrl: string;
   apiKey: string;
   ticketIdentifier?: string;  // e.g., "BC-84"
@@ -120,7 +120,7 @@ export function loadConfig(): AgentConfig {
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackChannel: process.env.SLACK_CHANNEL || "#general",
     slackThreadTs: process.env.SLACK_THREAD_TS || "",
-    linearApiKey: process.env.LINEAR_API_KEY || "",
+    linearAppToken: process.env.LINEAR_APP_TOKEN || "",
     workerUrl: required("WORKER_URL"),
     apiKey: process.env.API_KEY || "",
     ticketIdentifier: process.env.TICKET_IDENTIFIER || undefined,

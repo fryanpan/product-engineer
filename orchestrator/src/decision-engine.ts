@@ -32,7 +32,7 @@ export interface DecisionEngineConfig {
   anthropicBaseUrl?: string; // For AI Gateway
   slackBotToken: string;
   decisionsChannel: string;
-  linearApiKey: string;
+  linearAppToken: string;
 }
 
 export class DecisionEngine {
@@ -157,7 +157,7 @@ export class DecisionEngine {
     }
 
     // 4. Linear comment
-    if (opts.linearIssueId && this.config.linearApiKey) {
+    if (opts.linearIssueId && this.config.linearAppToken) {
       await this.postLinearComment(
         opts.linearIssueId,
         `${emoji} **${typeLabel}**\n**Action:** ${log.action}\n**Reason:** ${log.reason}`,
@@ -187,7 +187,7 @@ export class DecisionEngine {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: this.config.linearApiKey,
+        Authorization: this.config.linearAppToken,
       },
       body: JSON.stringify({
         query: `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`,

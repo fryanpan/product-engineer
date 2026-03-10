@@ -18,7 +18,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     slackBotToken: "xoxb-test",
     slackChannel: "#test",
     slackThreadTs: "",
-    linearApiKey: "lin-test",
+    linearAppToken: "lin-test",
     workerUrl: "https://worker.example.com",
     apiKey: "api-key-test",
     ...overrides,

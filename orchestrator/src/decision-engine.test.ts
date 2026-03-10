@@ -10,7 +10,7 @@ describe("DecisionEngine", () => {
       anthropicBaseUrl: undefined,
       slackBotToken: "xoxb-test",
       decisionsChannel: "#product-engineer-decisions",
-      linearApiKey: "lin_test",
+      linearAppToken: "lin_test",
     });
   });
 

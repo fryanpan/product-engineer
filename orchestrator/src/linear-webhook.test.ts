@@ -51,7 +51,7 @@ function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
     SLACK_BOT_TOKEN: "test",
     SLACK_APP_TOKEN: "test",
     SLACK_SIGNING_SECRET: "test",
-    LINEAR_API_KEY: "test",
+    LINEAR_APP_TOKEN: "test",
     LINEAR_WEBHOOK_SECRET: TEST_WEBHOOK_SECRET,
     GITHUB_WEBHOOK_SECRET: "test",
     ANTHROPIC_API_KEY: "test",
@@ -131,7 +131,7 @@ describe("linear webhook handler", () => {
         id: "comment-1",
         body: "Agent posted this",
         issue: { id: "issue-100", identifier: "PE-1", title: "Test issue" },
-        user: { name: "Test Agent", email: "agent@example.com" },
+        user: { id: "app-user-001", name: "Test Agent" },
       },
     }, env);
 
@@ -307,7 +307,7 @@ describe("linear webhook handler", () => {
         teamId: TEST_REGISTRY.linear_team_id,
         labelIds: [],
         project: { id: "p1", name: "Test App" },
-        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
       },
     }, env);
 
@@ -340,7 +340,7 @@ describe("linear webhook handler", () => {
         teamId: TEST_REGISTRY.linear_team_id,
         labelIds: [],
         project: { id: "p1", name: "Test App" },
-        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
       },
     }, env);
 
@@ -374,7 +374,7 @@ describe("linear webhook handler", () => {
         priority: 1,
         teamId: TEST_REGISTRY.linear_team_id,
         project: { id: "p1", name: "Test App" },
-        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
       },
     }, env);
 
@@ -464,31 +464,7 @@ describe("linear webhook handler", () => {
         priority: 1,
         teamId: TEST_REGISTRY.linear_team_id,
         project: { id: "p1", name: "Test App" },
-        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
-      },
-    }, env);
-
-    expect(res.status).toBe(200);
-    const json = await res.json() as Record<string, unknown>;
-    expect(json.ok).toBe(true);
-    expect(json.product).toBe("test-app");
-    expect(sentEvents).toHaveLength(1);
-  });
-
-  it("triggers when assigned to agent by name (no email in payload)", async () => {
-    const app = makeApp();
-    const env = makeEnv();
-    const res = await postWebhook(app, {
-      action: "update",
-      type: "Issue",
-      data: {
-        id: "issue-401",
-        title: "Assigned by name",
-        description: "",
-        priority: 1,
-        teamId: TEST_REGISTRY.linear_team_id,
-        project: { id: "p1", name: "Test App" },
-        assignee: { id: "user-1", name: "Test Agent" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
       },
     }, env);
 
@@ -539,7 +515,7 @@ describe("linear webhook handler", () => {
         teamId: TEST_REGISTRY.linear_team_id,
         project: { id: "p1", name: "Test App" },
         state: { name: "Done" },
-        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
       },
     }, env);
 
@@ -561,7 +537,7 @@ describe("linear webhook handler", () => {
         teamId: TEST_REGISTRY.linear_team_id,
         project: { id: "p1", name: "Test App" },
         state: { name: "Canceled" },
-        assignee: { id: "user-1", name: "Test Agent", email: "agent@example.com" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
       },
     }, env);
 
