@@ -43,7 +43,7 @@ const POLL_INTERVAL_MS = 5_000; // 5 seconds
 const AGENT_START_TIMEOUT_MS = 120_000; // 2 minutes for agent to start
 const AGENT_WORK_TIMEOUT_MS = 600_000; // 10 minutes for agent to finish
 const CI_FIX_TIMEOUT_MS = 300_000; // 5 minutes for CI fix
-const MERGE_TIMEOUT_MS = 120_000; // 2 minutes for merge
+const MERGE_TIMEOUT_MS = 300_000; // 5 minutes for merge (after CI passes)
 
 // --- Interfaces ---
 
@@ -85,11 +85,6 @@ function log(step: string, message: string) {
   console.log(`[${elapsed}s] [${step}] ${message}`);
 }
 
-function logError(step: string, message: string) {
-  const elapsed = ((Date.now() - globalStartTime) / 1000).toFixed(1);
-  console.error(`[${elapsed}s] [${step}] ❌ ${message}`);
-}
-
 function logSuccess(step: string, message: string) {
   const elapsed = ((Date.now() - globalStartTime) / 1000).toFixed(1);
   console.log(`[${elapsed}s] [${step}] ✅ ${message}`);
@@ -97,17 +92,6 @@ function logSuccess(step: string, message: string) {
 
 async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  name: string
-): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`${name} timed out after ${ms}ms`)), ms)
-  );
-  return Promise.race([promise, timeout]);
 }
 
 // --- API Clients ---
@@ -203,7 +187,12 @@ async function createLinearIssue(
     throw new Error(`Linear API failed: ${data.errors.map((e) => e.message).join(", ")}`);
   }
 
-  return data.data!.issueCreate.issue;
+  // Direct Linear issue creation path has been removed from the E2E test.
+  // The test now exercises the orchestrator exclusively via the Slack-triggered
+  // flow to reduce maintenance surface and focus on the primary integration.
+  throw new Error(
+    "createLinearIssue is no longer supported in this script; use the Slack-triggered flow instead."
+  );
 }
 
 async function getLinearIssue(
@@ -328,7 +317,7 @@ Add a function called \`greetE2E_${ctx.testId.replace(/-/g, "_")}\` to src/index
 1. Takes a name parameter
 2. Returns "Hello, {name}! (E2E test ${ctx.testId})"
 
-IMPORTANT: The initial implementation should have a syntax error (missing semicolon) to test CI failure handling. After CI fails, fix the syntax error.`;
+IMPORTANT: The initial implementation should intentionally not compile (for example, by including an unmatched bracket in the new function body) so CI deterministically fails. After CI fails, fix the syntax error and push the correction.`;
 
   const message = `@product-engineer-staging ${taskDescription}`;
 
@@ -351,23 +340,20 @@ async function step2_verifyLinearTicketCreated(ctx: TestContext): Promise<void> 
     try {
       const status = await apiCall<StatusResponse>("/api/orchestrator/status");
 
-      // Look for an agent with our slack thread
-      for (const agent of status.activeAgents) {
-        // Query the full ticket info
-        const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-        const ticket = tickets.tickets.find(
-          (t) => t.slack_thread_ts === ctx.slackThreadTs
-        );
+      // Query the full ticket info once per poll iteration
+      const ticketsResponse = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
+      const ticket = ticketsResponse.tickets.find(
+        (t) => t.slack_thread_ts === ctx.slackThreadTs
+      );
 
-        if (ticket) {
-          ctx.linearIssueId = ticket.id;
-          log("step2", `Found ticket linked to thread: ${ticket.id}`);
+      if (ticket) {
+        ctx.linearIssueId = ticket.id;
+        log("step2", `Found ticket linked to thread: ${ticket.id}`);
 
-          // Get Linear identifier
-          const issue = await getLinearIssue(ticket.id);
-          logSuccess("step2", `Linear ticket created: ${ticket.id} (state: ${issue.state.name})`);
-          return;
-        }
+        // Get Linear identifier
+        const issue = await getLinearIssue(ticket.id);
+        logSuccess("step2", `Linear ticket created: ${ticket.id} (state: ${issue.state.name})`);
+        return;
       }
     } catch (err) {
       log("step2", `Polling error (will retry): ${err}`);
@@ -501,6 +487,47 @@ async function step6_verifyCIFailure(ctx: TestContext): Promise<void> {
   log("step6", "No CI failure detected — implementation may be correct");
 }
 
+async function step6b_waitForCISuccess(ctx: TestContext): Promise<void> {
+  log("step6b", "Waiting for CI to pass after fix...");
+
+  if (!ctx.prUrl) {
+    throw new Error("No PR URL to check CI status");
+  }
+
+  const prNumber = parseInt(ctx.prUrl.split("/").pop()!, 10);
+  const deadline = Date.now() + CI_FAILURE_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    try {
+      const checks = await fetchGitHubChecks(STAGING_REPO, prNumber);
+
+      const allCompleted = checks.every((c) => c.status === "completed");
+      const allPassed = checks.every((c) => c.conclusion === "success" || c.conclusion === "skipped");
+
+      if (allCompleted && allPassed) {
+        logSuccess("step6b", "All CI checks passed!");
+        return;
+      }
+
+      const failedChecks = checks.filter((c) => c.conclusion === "failure");
+      if (failedChecks.length > 0) {
+        log("step6b", `Some checks still failing: ${failedChecks.map((c) => c.name).join(", ")}`);
+      }
+
+      const pendingChecks = checks.filter((c) => c.status !== "completed");
+      if (pendingChecks.length > 0) {
+        log("step6b", `Waiting for checks: ${pendingChecks.map((c) => c.name).join(", ")}`);
+      }
+    } catch (err) {
+      log("step6b", `Polling error (will retry): ${err}`);
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  throw new Error("CI checks did not pass within timeout");
+}
+
 async function step7_waitForMerge(ctx: TestContext): Promise<void> {
   log("step7", "Waiting for merge gate evaluation and auto-merge...");
 
@@ -628,6 +655,7 @@ async function runE2ETest(): Promise<void> {
     await step4_sendSlackMessage(ctx);
     await step5_waitForPR(ctx);
     await step6_verifyCIFailure(ctx);
+    await step6b_waitForCISuccess(ctx);
     await step7_waitForMerge(ctx);
     await step8_verifyAgentTerminated(ctx);
     await step9_cleanup(ctx);

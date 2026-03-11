@@ -293,11 +293,9 @@ Options:
 
 Required Environment Variables:
   API_KEY           Orchestrator API key
-
-Optional Environment Variables (for full coverage):
-  SLACK_BOT_TOKEN   Slack bot token
-  LINEAR_API_KEY    Linear API key
-  GITHUB_TOKEN      GitHub token
+  SLACK_BOT_TOKEN   Slack bot token (required for Slack connectivity test)
+  LINEAR_API_KEY    Linear API key (required for Linear connectivity test)
+  GITHUB_TOKEN      GitHub token (required for GitHub connectivity test)
   `);
   process.exit(0);
 }
