@@ -55,6 +55,14 @@ Technical discoveries that should persist across sessions.
 - The E2E test posts via bot for visibility, then sends the event directly to the internal endpoint as a workaround. This is the same code path Socket Mode uses.
 - `scripts/setup.sh` supports `--env staging` for provisioning staging secrets.
 
+## AgentManager Pattern
+- Agent lifecycle management was diffused across 15+ direct DB manipulation points in `orchestrator.ts`. Consolidating into `AgentManager` class eliminated 4 bug classes at once (silent failures, state inconsistencies, duplicate agent spawns, deploy state loss).
+- AgentManager must have zero in-memory state — all state in SQLite. This makes deploy re-hydration automatic: `new AgentManager(sql, env)` just works.
+- `spawnAgent` must be re-entrant: safe to call for tickets already in `spawning`/`active` state (deploy recovery path). Don't throw — re-initialize the container.
+- `stopAgent` must be idempotent: the same ticket might be stopped from supervisor, terminal status, and cleanup paths in the same deploy cycle.
+- State machine validation catches invalid transitions early, but supervisor kill needs a raw SQL fallback since the ticket might be in any state.
+- The `reactivate()` method is needed for thread replies — `sendEvent` checks `agent_active` and skips if 0, so the agent must be re-activated before sending.
+
 ## Slack Thread Routing
 - The Orchestrator looks up existing tickets by `slack_thread_ts` (exact string match). Re-triggers must use the original top-level message `ts`, not a reply `ts` — otherwise a new ticket is created instead of routing to the existing one.
 - For new `app_mention` events, `slackEvent.ts` (not `thread_ts`) becomes the canonical `thread_ts` stored in the DB. Subsequent replies arrive with `thread_ts` matching that original `ts`. The asymmetry is intentional — Slack uses the first message's `ts` as the thread identifier.
