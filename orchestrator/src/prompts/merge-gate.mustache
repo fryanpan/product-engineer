@@ -30,6 +30,11 @@ No review comments.
 
 ## Copilot Review
 {{#copilotReviewComplete}}
+Copilot has reviewed this PR.
+{{/copilotReviewComplete}}
+{{^copilotReviewComplete}}
+Copilot review not yet available (proceeding after timeout).
+{{/copilotReviewComplete}}
 {{#copilotComments.length}}
 ### Copilot Suggestions
 {{#copilotComments}}
@@ -39,12 +44,8 @@ No review comments.
 Consider whether these suggestions identify real bugs vs style nits. Real bugs (auth issues, logic errors, XSS, data loss) should trigger "send_back". Style suggestions and minor refactoring nits can be ignored.
 {{/copilotComments.length}}
 {{^copilotComments.length}}
-Copilot review completed with no comments.
+No Copilot comments.
 {{/copilotComments.length}}
-{{/copilotReviewComplete}}
-{{^copilotReviewComplete}}
-Copilot review not yet available (proceeding after timeout).
-{{/copilotReviewComplete}}
 
 ## Diff Summary
 ```

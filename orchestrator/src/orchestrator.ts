@@ -80,9 +80,6 @@ export class Orchestrator extends Container<Bindings> {
     this.initDb();
     await this.ensureContainerRunning();
 
-    // Schedule next alarm (5 minutes) for supervisor tick
-    this.ctx.storage.setAlarm(Date.now() + 300_000);
-
     // Run LLM supervisor tick — checks agent health, stale PRs, queued tickets
     try {
       await this.runSupervisorTick();
@@ -91,26 +88,39 @@ export class Orchestrator extends Container<Bindings> {
       // Don't let supervisor failures break the alarm loop
     }
 
-    // Process pending merge gate retries (tickets waiting for Copilot review)
-    if (this.mergeGateRetries.size > 0) {
-      for (const [ticketId, { product }] of this.mergeGateRetries) {
-        // Verify ticket is still eligible (pr_open, not terminal)
-        const row = this.ctx.storage.sql.exec(
-          "SELECT status, pr_url FROM tickets WHERE id = ?", ticketId
-        ).toArray()[0] as { status: string; pr_url: string | null } | undefined;
+    // Process pending merge gate retries (persisted in SQLite, survives DO restarts)
+    const pendingRetries = this.ctx.storage.sql.exec(
+      "SELECT ticket_id, product, retry_count FROM merge_gate_retries WHERE next_retry_at <= datetime('now')"
+    ).toArray() as Array<{ ticket_id: string; product: string; retry_count: number }>;
 
-        if (!row?.pr_url || row.status !== "pr_open") {
-          console.log(`[Orchestrator] Merge gate retry skipped for ${ticketId} (status=${row?.status})`);
-          this.mergeGateRetries.delete(ticketId);
-          continue;
-        }
+    for (const retry of pendingRetries) {
+      // Verify ticket is still eligible (pr_open, not terminal)
+      const row = this.ctx.storage.sql.exec(
+        "SELECT status, pr_url FROM tickets WHERE id = ?", retry.ticket_id
+      ).toArray()[0] as { status: string; pr_url: string | null } | undefined;
 
-        console.log(`[Orchestrator] Retrying merge gate for ${ticketId} (Copilot review pending)`);
-        this.evaluateMergeGate(ticketId, product).catch(err =>
-          console.error(`[Orchestrator] Merge gate retry failed for ${ticketId}:`, err)
-        );
+      if (!row?.pr_url || row.status !== "pr_open") {
+        console.log(`[Orchestrator] Merge gate retry skipped for ${retry.ticket_id} (status=${row?.status})`);
+        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", retry.ticket_id);
+        continue;
       }
+
+      console.log(`[Orchestrator] Retrying merge gate for ${retry.ticket_id} (Copilot review pending, attempt ${retry.retry_count})`);
+      this.evaluateMergeGate(retry.ticket_id, retry.product).catch(err =>
+        console.error(`[Orchestrator] Merge gate retry failed for ${retry.ticket_id}:`, err)
+      );
     }
+
+    // Schedule next alarm — pick the earliest of: supervisor (5 min) or next pending retry
+    const nextRetryRow = this.ctx.storage.sql.exec(
+      "SELECT MIN(next_retry_at) as next_at FROM merge_gate_retries"
+    ).toArray()[0] as { next_at: string | null } | undefined;
+    let nextAlarmMs = Date.now() + 300_000; // default: 5 min supervisor tick
+    if (nextRetryRow?.next_at) {
+      const retryMs = new Date(nextRetryRow.next_at + "Z").getTime();
+      nextAlarmMs = Math.min(nextAlarmMs, retryMs);
+    }
+    this.ctx.storage.setAlarm(nextAlarmMs);
 
     // Refresh Linear OAuth token every 12h (alarm fires every 5min, so check timestamp)
     try {
@@ -141,9 +151,7 @@ export class Orchestrator extends Container<Bindings> {
   // reliable across deploys (the flag survives but the container gets replaced).
   private lastHealthCheck = 0;
 
-  // Merge gate retry tracking — tickets waiting for Copilot review
-  // Maps ticketId → { retryCount, product }
-  private mergeGateRetries = new Map<string, { retryCount: number; product: string }>();
+  // Merge gate retry constants — state is persisted in SQLite (merge_gate_retries table)
   private static MAX_MERGE_GATE_RETRIES = 5;
   private static MERGE_GATE_RETRY_DELAY_MS = 90_000; // 90 seconds
   private static HEALTH_CHECK_TTL = 60_000; // 60 seconds
@@ -479,6 +487,16 @@ export class Orchestrator extends Container<Bindings> {
         throw err;
       }
     }
+    // Merge gate retry state — persisted so it survives DO restarts/deploys
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS merge_gate_retries (
+        ticket_id TEXT PRIMARY KEY,
+        product TEXT NOT NULL,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TEXT NOT NULL
+      )
+    `);
+
     this.dbInitialized = true;
   }
 
@@ -1218,21 +1236,27 @@ export class Orchestrator extends Container<Bindings> {
       repo: productConfig.repos[0],
     });
 
-    // Wait for Copilot review before proceeding
+    // Wait for Copilot review before proceeding (state persisted in SQLite)
     if (!context.copilotReviewComplete) {
-      const retry = this.mergeGateRetries.get(ticketId);
-      const retryCount = retry?.retryCount ?? 0;
+      const retryRow = this.ctx.storage.sql.exec(
+        "SELECT retry_count FROM merge_gate_retries WHERE ticket_id = ?", ticketId
+      ).toArray()[0] as { retry_count: number } | undefined;
+      const retryCount = retryRow?.retry_count ?? 0;
 
       if (retryCount < Orchestrator.MAX_MERGE_GATE_RETRIES) {
+        const nextRetryAt = new Date(Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS).toISOString().replace("T", " ").replace("Z", "");
         console.log(
           `[Orchestrator] Copilot review pending for ${ticketId}, scheduling retry ${retryCount + 1}/${Orchestrator.MAX_MERGE_GATE_RETRIES}`
         );
-        this.mergeGateRetries.set(ticketId, { retryCount: retryCount + 1, product });
-        // Schedule a DO alarm to re-check — uses the existing alarm mechanism
-        // Set alarm for 90s from now (won't interfere with the 5-min supervisor alarm;
-        // setAlarm picks the earliest scheduled time)
-        const nextRetry = Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS;
-        this.ctx.storage.setAlarm(nextRetry);
+        this.ctx.storage.sql.exec(
+          `INSERT INTO merge_gate_retries (ticket_id, product, retry_count, next_retry_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(ticket_id) DO UPDATE SET retry_count = ?, next_retry_at = ?`,
+          ticketId, product, retryCount + 1, nextRetryAt, retryCount + 1, nextRetryAt
+        );
+        // Schedule alarm for retry — uses Math.min with existing alarm in the alarm handler
+        const nextRetryMs = Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS;
+        this.ctx.storage.setAlarm(nextRetryMs);
         return;
       }
 
@@ -1240,10 +1264,10 @@ export class Orchestrator extends Container<Bindings> {
       console.log(
         `[Orchestrator] Copilot review not found after ${Orchestrator.MAX_MERGE_GATE_RETRIES} retries for ${ticketId}, proceeding without it`
       );
-      this.mergeGateRetries.delete(ticketId);
+      this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
     } else {
       // Copilot review is complete — clear any pending retries
-      this.mergeGateRetries.delete(ticketId);
+      this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
     }
 
     let decision;
