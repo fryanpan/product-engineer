@@ -27,6 +27,36 @@
 
 ---
 
+## 2026-03-11 - BC-139: Security Audit and Improvement Plan (PR #73)
+
+**Context:** Comprehensive security audit of the Product Engineer system following a 7-layer security model (trust classification, privilege separation, action classification, context hygiene, output validation, audit logging, rate limiting).
+
+**What worked:**
+- Using parallel exploration agents to research the codebase and health-tool simultaneously — faster context gathering
+- Structured layer-by-layer analysis made gaps easy to identify and prioritize
+- Referencing Anthropic's Claude Code Security documentation provided industry best practices
+- The existing security.md doc was accurate and up-to-date — reduced research time
+
+**What didn't:**
+- Initial search didn't find health-tool repo in workspace — it's only cloned by agents into isolated containers, not part of this workspace. Should have checked registry config first.
+- Web search returned some 404 pages on Anthropic docs — had to use WebFetch for the main security page
+
+**Key findings:**
+- Strong foundational security already implemented (platform isolation, HMAC verification, timing-safe auth, input delimiters, per-product secrets)
+- Remaining gaps are defense-in-depth controls, not critical vulnerabilities
+- Priority 1 recommendations: admin audit logging, secret binding validation, security documentation
+
+**Technical decisions:**
+- Recommend building simple controls (rate limiting, audit logging) internally rather than adding dependencies
+- Rely on Cloudflare Containers, AI Gateway, and Secrets Store rather than custom isolation/proxy
+
+**Action:**
+- Document security model in target repo CLAUDE.md files (propagate via /propagate skill)
+- Add admin audit logging to SQLite (simple, low effort, high value)
+- Consider per-product rate limiting for abuse prevention
+
+---
+
 ## 2026-03-09 - BC-133: Fix agent replies going to main channel instead of thread (PR #69)
 
 **Context:** User reported that when replying in ticket threads, the agent responded in the main channel instead of the thread. This was confusing and broke conversation context.
