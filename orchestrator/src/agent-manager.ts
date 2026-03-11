@@ -86,6 +86,11 @@ export class AgentManager {
     return (TERMINAL_STATUSES as readonly string[]).includes(ticket.status);
   }
 
+  /** Check if a status string is terminal (no ticket lookup needed). */
+  isTerminalStatus(status: string): boolean {
+    return (TERMINAL_STATUSES as readonly string[]).includes(status);
+  }
+
   updateStatus(ticketId: string, update: StatusUpdate): TicketRecord {
     const ticket = this.getTicket(ticketId);
     if (!ticket) throw new Error(`Ticket ${ticketId} not found`);
@@ -275,6 +280,22 @@ export class AgentManager {
       "failed",
       ticketId,
     );
+  }
+
+  /**
+   * Re-activate an agent for a ticket (e.g., user replied in thread).
+   * Only works for non-terminal tickets.
+   */
+  reactivate(ticketId: string): void {
+    if (this.isTerminal(ticketId)) {
+      console.log(`[AgentManager] Cannot reactivate terminal ticket ${ticketId}`);
+      return;
+    }
+    this.sql.exec(
+      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
+      ticketId,
+    );
+    console.log(`[AgentManager] Reactivated agent for ${ticketId}`);
   }
 
   recordHeartbeat(ticketId: string): void {

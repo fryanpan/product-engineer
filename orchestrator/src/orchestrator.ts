@@ -826,28 +826,14 @@ export class Orchestrator extends Container<Bindings> {
         identifier: identifier || undefined,
         title: title || undefined,
       });
-      // createTicket sets agent_active=0, but handleEvent expects it active
-      this.ctx.storage.sql.exec(
-        "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
-        event.ticketId,
-      );
     } else {
-      // Update metadata — COALESCE preserves existing values when new ones are null
-      this.ctx.storage.sql.exec(
-        `UPDATE tickets SET
-           slack_thread_ts = COALESCE(?, slack_thread_ts),
-           slack_channel = COALESCE(?, slack_channel),
-           identifier = COALESCE(?, identifier),
-           title = COALESCE(?, title),
-           agent_active = 1,
-           updated_at = datetime('now')
-         WHERE id = ?`,
-        event.slackThreadTs || null,
-        event.slackChannel || null,
-        identifier,
-        title,
-        event.ticketId,
-      );
+      // Update metadata — preserve existing values when new ones are null
+      const metadataUpdate: Record<string, string | undefined> = {};
+      if (event.slackThreadTs) metadataUpdate.slack_thread_ts = event.slackThreadTs;
+      if (event.slackChannel) metadataUpdate.slack_channel = event.slackChannel;
+      if (Object.keys(metadataUpdate).length > 0) {
+        this.agentManager.updateStatus(event.ticketId, metadataUpdate as any);
+      }
     }
 
     // Initialize ticket_metrics row if not exists
@@ -881,9 +867,7 @@ export class Orchestrator extends Container<Bindings> {
 
     // CI passed + PR exists → evaluate merge gate (orchestrator decides, not agent)
     if (event.type === "checks_passed") {
-      const ticketRow = this.ctx.storage.sql.exec(
-        "SELECT pr_url FROM tickets WHERE id = ?", event.ticketId
-      ).toArray()[0] as { pr_url: string | null } | undefined;
+      const ticketRow = this.agentManager.getTicket(event.ticketId);
 
       if (ticketRow?.pr_url) {
         await this.evaluateMergeGate(event.ticketId, event.product);
@@ -893,7 +877,7 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     // Route to TicketAgent for all other event types
-    await this.routeToAgent(event);
+    await this.agentManager.sendEvent(event.ticketId, event);
 
     return Response.json({ ok: true, ticketId: event.ticketId });
   }
@@ -1857,27 +1841,20 @@ export class Orchestrator extends Container<Bindings> {
     // Force shutdown of ALL agent containers, regardless of state.
     // Use case: operator wants to stop all work immediately.
 
-    // Get ALL tickets for response details
+    // Get ALL tickets for response details before stopping
     const allTickets = this.ctx.storage.sql.exec(
       `SELECT id, status, agent_active FROM tickets`
     ).toArray() as Array<{ id: string; status: string; agent_active: number }>;
 
     console.log(`[Orchestrator] Shutdown all: found ${allTickets.length} total tickets`);
 
-    // Mark all as inactive
-    this.ctx.storage.sql.exec(`UPDATE tickets SET agent_active = 0`);
-    console.log(`[Orchestrator] Marked all agents as inactive`);
+    // Stop all agents via AgentManager (sets agent_active=0 per ticket)
+    await this.agentManager.stopAllAgents("shutdown all requested");
 
-    // Stop all agent containers via AgentManager
     const results: Array<{ ticketId: string; previousStatus: string; success: boolean; error?: string }> = [];
 
     for (const ticket of allTickets) {
-      try {
-        await this.agentManager.stopAgent(ticket.id, "shutdown all requested");
-        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
-      } catch (err) {
-        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: String(err) });
-      }
+      results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
     }
 
     const successCount = results.filter(r => r.success).length;
@@ -2316,16 +2293,13 @@ export class Orchestrator extends Container<Bindings> {
         console.log(`[Orchestrator] Thread reply matched ticket=${ticket.id} product=${ticket.product}`);
 
         // Don't re-activate terminal tickets
-        if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status)) {
+        if (this.agentManager.isTerminalStatus(ticket.status)) {
           console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.id} (status=${ticket.status}) — ignoring`);
           return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
         }
 
         // Re-activate agent on thread reply — user is explicitly engaging
-        this.ctx.storage.sql.exec(
-          "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
-          ticket.id,
-        );
+        this.agentManager.reactivate(ticket.id);
         const event: TicketEvent = {
           type: "slack_reply",
           source: "slack",
