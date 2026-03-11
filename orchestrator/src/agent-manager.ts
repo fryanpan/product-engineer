@@ -76,7 +76,7 @@ export class AgentManager {
   getTicket(ticketId: string): TicketRecord | null {
     const row = this.sql.exec(
       "SELECT * FROM tickets WHERE id = ?", ticketId,
-    ).toArray()[0] as TicketRecord | undefined;
+    ).toArray()[0] as unknown as TicketRecord | undefined;
     return row || null;
   }
 
@@ -312,7 +312,7 @@ export class AgentManager {
   getActiveAgents(): TicketRecord[] {
     return this.sql.exec(
       "SELECT * FROM tickets WHERE agent_active = 1 ORDER BY updated_at DESC",
-    ).toArray() as TicketRecord[];
+    ).toArray() as unknown as TicketRecord[];
   }
 
   async stopAllAgents(reason: string): Promise<void> {
