@@ -114,6 +114,52 @@
       padding: 40px;
       color: #999;
     }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .metric-card {
+      background: #f8f9fa;
+      padding: 15px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .metric-card .value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #333;
+    }
+    .metric-card .label {
+      font-size: 12px;
+      color: #666;
+      margin-top: 5px;
+    }
+    .metric-card.success .value { color: #0f5132; }
+    .metric-card.warning .value { color: #856404; }
+    .metric-card.danger .value { color: #842029; }
+    .cost-table {
+      width: 100%;
+      margin-top: 15px;
+    }
+    .cost-table td {
+      padding: 8px 12px;
+    }
+    .cost-table tr:nth-child(even) {
+      background: #f8f9fa;
+    }
+    .feedback-buttons {
+      display: flex;
+      gap: 5px;
+    }
+    .feedback-buttons button {
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+    .feedback-buttons button.selected {
+      background: #333;
+    }
     .error {
       background: #f8d7da;
       color: #842029;
@@ -162,6 +208,20 @@
         <span class="badge success" id="activeCount">0</span>
       </h2>
       <div id="activeSection"></div>
+    </div>
+
+    <div class="section">
+      <h2>📊 Metrics Summary</h2>
+      <div id="metricsSection">
+        <div class="loading">Loading metrics...</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>🧠 Recent Decisions</h2>
+      <div id="decisionsSection">
+        <div class="loading">Loading decisions...</div>
+      </div>
     </div>
   </div>
 
@@ -435,6 +495,142 @@
       }, 1000);
     }
 
+    async function fetchMetrics() {
+      try {
+        const response = await fetch('/api/dashboard/metrics', {
+          credentials: 'include'
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        renderMetrics(data);
+      } catch (err) {
+        console.error('Failed to fetch metrics:', err);
+      }
+    }
+
+    function renderMetrics(data) {
+      const container = document.getElementById('metricsSection');
+      const s = data.summary;
+      const c = data.costs;
+      const d = data.decisions;
+
+      let html = `
+        <div class="metric-grid">
+          <div class="metric-card">
+            <div class="value">${s.totalTickets}</div>
+            <div class="label">Total Tickets</div>
+          </div>
+          <div class="metric-card success">
+            <div class="value">${s.automergeRate}</div>
+            <div class="label">Automerge Rate</div>
+          </div>
+          <div class="metric-card ${parseFloat(s.failureRate) > 10 ? 'danger' : ''}">
+            <div class="value">${s.failureRate}</div>
+            <div class="label">Failure Rate</div>
+          </div>
+          <div class="metric-card ${parseFloat(s.multiRevisionRate) > 20 ? 'warning' : ''}">
+            <div class="value">${s.multiRevisionRate}</div>
+            <div class="label">Multi-Revision Rate</div>
+          </div>
+          <div class="metric-card">
+            <div class="value">${d.accuracy}</div>
+            <div class="label">Decision Accuracy (${d.withFeedback} reviews)</div>
+          </div>
+          <div class="metric-card">
+            <div class="value">$${c.average}</div>
+            <div class="label">Avg Cost/Ticket</div>
+          </div>
+        </div>
+
+        <h3 style="font-size: 14px; margin: 15px 0 10px;">Daily Costs (Last 7 Days)</h3>
+        <table class="cost-table">
+          <tr><th>Day</th><th>Tickets</th><th>Cost</th></tr>
+      `;
+
+      for (const day of c.daily || []) {
+        html += `<tr><td>${day.day}</td><td>${day.tickets}</td><td>$${(day.cost || 0).toFixed(2)}</td></tr>`;
+      }
+
+      html += `</table>`;
+      container.innerHTML = html;
+    }
+
+    async function fetchDecisions() {
+      try {
+        const response = await fetch('/api/dashboard/decisions', {
+          credentials: 'include'
+        });
+        if (!response.ok) return;
+        const decisions = await response.json();
+        renderDecisions(decisions);
+      } catch (err) {
+        console.error('Failed to fetch decisions:', err);
+      }
+    }
+
+    function renderDecisions(decisions) {
+      const container = document.getElementById('decisionsSection');
+
+      if (!decisions || decisions.length === 0) {
+        container.innerHTML = '<div class="empty">No recent decisions</div>';
+        return;
+      }
+
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Type</th>
+              <th>Ticket</th>
+              <th>Action</th>
+              <th>Reason</th>
+              <th>Feedback</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      for (const d of decisions) {
+        html += `
+          <tr>
+            <td class="time">${formatTime(d.timestamp)}</td>
+            <td>${d.type.replace(/_/g, ' ')}</td>
+            <td>${d.ticket_id || '—'}</td>
+            <td><span class="status-badge">${d.action}</span></td>
+            <td>${escapeHtml((d.reason || '').slice(0, 60))}${(d.reason || '').length > 60 ? '...' : ''}</td>
+            <td>
+              <div class="feedback-buttons">
+                <button onclick="submitFeedback('${d.id}', 'good')">👍</button>
+                <button onclick="submitFeedback('${d.id}', 'bad')">👎</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }
+
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+    }
+
+    async function submitFeedback(decisionId, feedback) {
+      try {
+        const response = await fetch('/api/dashboard/decision-feedback', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decisionId, feedback })
+        });
+        if (response.ok) {
+          alert('Feedback submitted!');
+          fetchDecisions();
+          fetchMetrics();
+        }
+      } catch (err) {
+        alert('Failed to submit feedback: ' + err.message);
+      }
+    }
+
     // Auto-refresh every 30 seconds
     refreshInterval = setInterval(refreshData, 30000);
     startCountdown();
@@ -442,6 +638,8 @@
     // Initial load
     fetchUserInfo();
     refreshData();
+    fetchMetrics();
+    fetchDecisions();
   </script>
 </body>
 </html>

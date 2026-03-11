@@ -384,6 +384,41 @@ app.get("/api/orchestrator/decisions", async (c) => {
   return orchestrator.fetch(new Request("http://internal/decisions"));
 });
 
+// Metrics API: get all metrics
+app.get("/api/metrics", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  const url = new URL(c.req.url);
+  return orchestrator.fetch(new Request(`http://internal/metrics?${url.searchParams.toString()}`));
+});
+
+// Metrics API: get summary
+app.get("/api/metrics/summary", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/metrics/summary"));
+});
+
+// Metrics API: submit decision feedback
+app.post("/api/decision-feedback", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/decision-feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
 // Orchestrator: cleanup inactive agents
 app.post("/api/orchestrator/cleanup-inactive", async (c) => {
   const apiKey = c.req.header("X-API-Key");
@@ -634,6 +669,37 @@ app.post("/api/dashboard/agents/shutdown-all", async (c) => {
   const orchestrator = getOrchestrator(c.env);
   return orchestrator.fetch(new Request("http://internal/shutdown-all", {
     method: "POST",
+  }));
+});
+
+// Dashboard API: metrics summary
+app.get("/api/dashboard/metrics", async (c) => {
+  const authResult = await requireAuth(c);
+  if (authResult instanceof Response) return authResult;
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/metrics/summary"));
+});
+
+// Dashboard API: recent decisions
+app.get("/api/dashboard/decisions", async (c) => {
+  const authResult = await requireAuth(c);
+  if (authResult instanceof Response) return authResult;
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/decisions"));
+});
+
+// Dashboard API: submit decision feedback
+app.post("/api/dashboard/decision-feedback", async (c) => {
+  const authResult = await requireAuth(c);
+  if (authResult instanceof Response) return authResult;
+
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/decision-feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
   }));
 });
 

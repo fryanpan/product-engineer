@@ -360,6 +360,38 @@ export class Orchestrator extends Container<Bindings> {
       )
     `);
 
+    // Ticket metrics table — tracks outcome and efficiency metrics per ticket
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS ticket_metrics (
+        ticket_id TEXT PRIMARY KEY,
+        outcome TEXT,
+        pr_count INTEGER NOT NULL DEFAULT 0,
+        revision_count INTEGER NOT NULL DEFAULT 0,
+        total_agent_time_ms INTEGER NOT NULL DEFAULT 0,
+        total_cost_usd REAL NOT NULL DEFAULT 0.0,
+        hands_on_sessions INTEGER NOT NULL DEFAULT 0,
+        hands_on_notes TEXT,
+        first_response_at TEXT,
+        completed_at TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )
+    `);
+
+    // Decision feedback table — tracks human feedback on orchestrator decisions
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS decision_feedback (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL,
+        feedback TEXT NOT NULL,
+        details TEXT,
+        given_by TEXT,
+        given_at TEXT NOT NULL,
+        slack_message_ts TEXT,
+        UNIQUE(decision_id)
+      )
+    `);
+
     // Migration: add agent_active column for existing deployments
     try {
       this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER NOT NULL DEFAULT 1`);
@@ -387,6 +419,36 @@ export class Orchestrator extends Container<Bindings> {
       const message = err instanceof Error ? err.message : "";
       if (!message.includes("duplicate column") && !message.includes("already exists")) {
         console.error("[Orchestrator] Failed to add transcript_r2_key column:", err);
+        throw err;
+      }
+    }
+    // Migration: add slack_message_ts to decision_log for feedback tracking
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE decision_log ADD COLUMN slack_message_ts TEXT`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (!message.includes("duplicate column") && !message.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add slack_message_ts column:", err);
+        throw err;
+      }
+    }
+    // Migration: add identifier column to tickets for human-readable IDs like BC-137
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN identifier TEXT`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (!message.includes("duplicate column") && !message.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add identifier column:", err);
+        throw err;
+      }
+    }
+    // Migration: add title column to tickets
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN title TEXT`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (!message.includes("duplicate column") && !message.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add title column:", err);
         throw err;
       }
     }
@@ -622,6 +684,12 @@ export class Orchestrator extends Container<Bindings> {
         return Response.json(this.ctx.storage.sql.exec(
           "SELECT * FROM decision_log ORDER BY timestamp DESC LIMIT 20"
         ).toArray());
+      case "/metrics":
+        return this.getMetrics(request);
+      case "/metrics/summary":
+        return this.getMetricsSummary();
+      case "/decision-feedback":
+        return this.handleDecisionFeedback(request);
       default:
         // Handle dynamic routes
         if (url.pathname.startsWith("/ticket-status/")) {
@@ -697,18 +765,32 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     // Upsert ticket — only re-activate non-terminal tickets
+    const payload = event.payload as Record<string, unknown>;
+    const identifier = (payload.identifier as string) || null;
+    const title = (payload.title as string) || null;
     this.ctx.storage.sql.exec(
-      `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel, identifier, title)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          slack_thread_ts = COALESCE(excluded.slack_thread_ts, tickets.slack_thread_ts),
          slack_channel = COALESCE(excluded.slack_channel, tickets.slack_channel),
+         identifier = COALESCE(excluded.identifier, tickets.identifier),
+         title = COALESCE(excluded.title, tickets.title),
          agent_active = 1,
          updated_at = datetime('now')`,
       event.ticketId,
       event.product,
       event.slackThreadTs || null,
       event.slackChannel || null,
+      identifier,
+      title,
+    );
+
+    // Initialize ticket_metrics row if not exists
+    this.ctx.storage.sql.exec(
+      `INSERT INTO ticket_metrics (ticket_id) VALUES (?)
+       ON CONFLICT(ticket_id) DO NOTHING`,
+      event.ticketId,
     );
 
     // For new tickets, use LLM ticket review instead of direct routing
@@ -1155,6 +1237,12 @@ export class Orchestrator extends Container<Bindings> {
         }
         break;
       case "send_back": {
+        // Increment revision count for metrics
+        this.ctx.storage.sql.exec(
+          `UPDATE ticket_metrics SET revision_count = revision_count + 1, updated_at = datetime('now') WHERE ticket_id = ?`,
+          ticketId,
+        );
+
         // Route back to agent
         const sendBackEvent: TicketEvent = {
           type: "merge_feedback",
@@ -1415,11 +1503,27 @@ export class Orchestrator extends Container<Bindings> {
       updates.push("status = ?");
       values.push(status);
 
+      // Track first_response_at when agent starts working
+      if (status === "in_progress") {
+        this.ctx.storage.sql.exec(
+          `UPDATE ticket_metrics SET first_response_at = COALESCE(first_response_at, datetime('now')), updated_at = datetime('now') WHERE ticket_id = ?`,
+          ticketId,
+        );
+      }
+
       // Terminal states: mark agent as inactive so we don't spawn new agents
       // on deployment-triggered events
       if ((TERMINAL_STATUSES as readonly string[]).includes(status)) {
         updates.push("agent_active = 0");
         console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
+
+        // Update ticket_metrics with outcome and completion time
+        const outcome = status === "merged" ? "automerge_success" : status;
+        this.ctx.storage.sql.exec(
+          `UPDATE ticket_metrics SET outcome = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE ticket_id = ?`,
+          outcome,
+          ticketId,
+        );
 
         // Notify the TicketAgent DO so it marks itself terminal and stops
         // restarting containers on alarm
@@ -1435,6 +1539,12 @@ export class Orchestrator extends Container<Bindings> {
     if (pr_url) {
       updates.push("pr_url = ?");
       values.push(pr_url);
+
+      // Increment pr_count when a PR URL is reported
+      this.ctx.storage.sql.exec(
+        `UPDATE ticket_metrics SET pr_count = pr_count + 1, updated_at = datetime('now') WHERE ticket_id = ?`,
+        ticketId,
+      );
     }
     if (branch_name) {
       updates.push("branch_name = ?");
@@ -1524,6 +1634,13 @@ export class Orchestrator extends Container<Bindings> {
       totalCostUsd,
       turns,
       sessionMessageCount,
+    );
+
+    // Sync cost to ticket_metrics for unified reporting
+    this.ctx.storage.sql.exec(
+      `UPDATE ticket_metrics SET total_cost_usd = ?, updated_at = datetime('now') WHERE ticket_id = ?`,
+      totalCostUsd,
+      ticketId,
     );
 
     return Response.json({ ok: true });
@@ -1977,7 +2094,97 @@ export class Orchestrator extends Container<Bindings> {
       thread_ts?: string;
       ts?: string;
       slash_command?: string;
+      // Reaction event fields
+      reaction?: string;
+      item?: { ts: string; channel: string };
     }>();
+
+    // Handle reaction_added events for decision feedback
+    if (slackEvent.type === "reaction_added" && slackEvent.item?.ts) {
+      const reactionTs = slackEvent.item.ts;
+      const reaction = slackEvent.reaction;
+
+      // Check if this reaction is on a decision message
+      const decision = this.ctx.storage.sql.exec(
+        `SELECT id FROM decision_log WHERE slack_message_ts = ?`,
+        reactionTs,
+      ).toArray()[0] as { id: string } | undefined;
+
+      if (decision) {
+        let feedback: "good" | "bad" | null = null;
+        if (reaction === "+1" || reaction === "thumbsup" || reaction === "white_check_mark" || reaction === "heavy_check_mark") {
+          feedback = "good";
+        } else if (reaction === "-1" || reaction === "thumbsdown" || reaction === "x" || reaction === "no_entry_sign") {
+          feedback = "bad";
+        }
+
+        if (feedback) {
+          console.log(`[Orchestrator] Decision feedback: ${feedback} for decision ${decision.id} from user ${slackEvent.user}`);
+          this.ctx.storage.sql.exec(
+            `INSERT INTO decision_feedback (id, decision_id, feedback, given_by, given_at, slack_message_ts)
+             VALUES (?, ?, ?, ?, datetime('now'), ?)
+             ON CONFLICT(decision_id) DO UPDATE SET
+               feedback = excluded.feedback,
+               given_by = excluded.given_by,
+               given_at = datetime('now')`,
+            crypto.randomUUID(),
+            decision.id,
+            feedback,
+            slackEvent.user || null,
+            reactionTs,
+          );
+          return Response.json({ ok: true, handled: "decision_feedback", feedback });
+        }
+      }
+    }
+
+    // Handle reply to a decision message with feedback details
+    if (slackEvent.type === "message" && slackEvent.thread_ts && slackEvent.text) {
+      const decision = this.ctx.storage.sql.exec(
+        `SELECT id FROM decision_log WHERE slack_message_ts = ?`,
+        slackEvent.thread_ts,
+      ).toArray()[0] as { id: string } | undefined;
+
+      if (decision) {
+        // User is replying to a decision message with details
+        // Update or insert feedback with the details
+        const existingFeedback = this.ctx.storage.sql.exec(
+          `SELECT feedback FROM decision_feedback WHERE decision_id = ?`,
+          decision.id,
+        ).toArray()[0] as { feedback: string } | undefined;
+
+        // Infer feedback from text if not already set
+        const textLower = slackEvent.text.toLowerCase();
+        let feedback = existingFeedback?.feedback || null;
+        if (!feedback) {
+          if (textLower.includes("bad") || textLower.includes("wrong") || textLower.includes("incorrect")) {
+            feedback = "bad";
+          } else if (textLower.includes("good") || textLower.includes("correct") || textLower.includes("right")) {
+            feedback = "good";
+          }
+        }
+
+        if (feedback) {
+          console.log(`[Orchestrator] Decision feedback reply: ${feedback} for decision ${decision.id} with details`);
+          this.ctx.storage.sql.exec(
+            `INSERT INTO decision_feedback (id, decision_id, feedback, details, given_by, given_at, slack_message_ts)
+             VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
+             ON CONFLICT(decision_id) DO UPDATE SET
+               feedback = excluded.feedback,
+               details = excluded.details,
+               given_by = excluded.given_by,
+               given_at = datetime('now')`,
+            crypto.randomUUID(),
+            decision.id,
+            feedback,
+            slackEvent.text,
+            slackEvent.user || null,
+            slackEvent.thread_ts,
+          );
+          return Response.json({ ok: true, handled: "decision_feedback_reply", feedback });
+        }
+      }
+    }
 
     // Handle slash commands or /pe-status mentions
     const isStatusCommand =
@@ -2273,6 +2480,204 @@ export class Orchestrator extends Container<Bindings> {
     );
 
     return Response.json({ ok: true, linearIssue: issue.identifier });
+  }
+
+  // --- Metrics endpoints ---
+
+  private getMetrics(request: Request): Response {
+    const url = new URL(request.url);
+    const limit = parseInt(url.searchParams.get("limit") || "50", 10);
+    const days = parseInt(url.searchParams.get("days") || "30", 10);
+
+    // Get ticket metrics with joined data
+    const metrics = this.ctx.storage.sql.exec(`
+      SELECT
+        m.*,
+        t.identifier,
+        t.title,
+        t.product,
+        t.status as ticket_status,
+        t.created_at as ticket_created_at,
+        u.total_input_tokens,
+        u.total_output_tokens,
+        u.total_cache_read_tokens,
+        u.total_cache_creation_tokens,
+        u.turns,
+        u.session_message_count
+      FROM ticket_metrics m
+      LEFT JOIN tickets t ON m.ticket_id = t.id
+      LEFT JOIN token_usage u ON m.ticket_id = u.ticket_id
+      WHERE t.created_at > datetime('now', '-' || ? || ' days')
+      ORDER BY t.created_at DESC
+      LIMIT ?
+    `, days, limit).toArray();
+
+    return Response.json({ metrics });
+  }
+
+  private getMetricsSummary(): Response {
+    // Overall statistics
+    const totalTickets = this.ctx.storage.sql.exec(
+      `SELECT COUNT(*) as count FROM ticket_metrics`
+    ).toArray()[0] as { count: number };
+
+    // Outcome distribution
+    const outcomes = this.ctx.storage.sql.exec(`
+      SELECT
+        outcome,
+        COUNT(*) as count
+      FROM ticket_metrics
+      WHERE outcome IS NOT NULL
+      GROUP BY outcome
+    `).toArray() as Array<{ outcome: string; count: number }>;
+
+    // Calculate automerge rate (automerge_success / total completed)
+    const completed = outcomes.reduce((sum, o) => sum + o.count, 0);
+    const automergeSuccess = outcomes.find(o => o.outcome === "automerge_success")?.count || 0;
+    const automergeRate = completed > 0 ? (automergeSuccess / completed * 100).toFixed(1) : "N/A";
+
+    // Failure rate (failed / total)
+    const failed = outcomes.find(o => o.outcome === "failed")?.count || 0;
+    const failureRate = completed > 0 ? (failed / completed * 100).toFixed(1) : "N/A";
+
+    // Multi-PR rate (tickets needing 2+ PRs)
+    const multiPrTickets = this.ctx.storage.sql.exec(
+      `SELECT COUNT(*) as count FROM ticket_metrics WHERE pr_count >= 2`
+    ).toArray()[0] as { count: number };
+    const multiPrRate = completed > 0 ? (multiPrTickets.count / completed * 100).toFixed(1) : "N/A";
+
+    // Multi-revision rate (tickets sent back 2+ times for 3+ total attempts)
+    const multiRevisionTickets = this.ctx.storage.sql.exec(
+      `SELECT COUNT(*) as count FROM ticket_metrics WHERE revision_count >= 2`
+    ).toArray()[0] as { count: number };
+    const multiRevisionRate = completed > 0 ? (multiRevisionTickets.count / completed * 100).toFixed(1) : "N/A";
+
+    // Cost statistics
+    const costStats = this.ctx.storage.sql.exec(`
+      SELECT
+        SUM(total_cost_usd) as total_cost,
+        AVG(total_cost_usd) as avg_cost,
+        MAX(total_cost_usd) as max_cost
+      FROM ticket_metrics
+      WHERE total_cost_usd > 0
+    `).toArray()[0] as { total_cost: number; avg_cost: number; max_cost: number } | undefined;
+
+    // Daily cost (last 7 days)
+    const dailyCost = this.ctx.storage.sql.exec(`
+      SELECT
+        date(created_at) as day,
+        SUM(total_cost_usd) as cost,
+        COUNT(*) as tickets
+      FROM ticket_metrics
+      WHERE created_at > datetime('now', '-7 days')
+      GROUP BY date(created_at)
+      ORDER BY day DESC
+    `).toArray() as Array<{ day: string; cost: number; tickets: number }>;
+
+    // Decision correctness (from feedback)
+    const decisionFeedback = this.ctx.storage.sql.exec(`
+      SELECT
+        feedback,
+        COUNT(*) as count
+      FROM decision_feedback
+      GROUP BY feedback
+    `).toArray() as Array<{ feedback: string; count: number }>;
+
+    const goodDecisions = decisionFeedback.find(f => f.feedback === "good")?.count || 0;
+    const badDecisions = decisionFeedback.find(f => f.feedback === "bad")?.count || 0;
+    const totalFeedback = goodDecisions + badDecisions;
+    const decisionAccuracy = totalFeedback > 0 ? (goodDecisions / totalFeedback * 100).toFixed(1) : "N/A";
+
+    // Decisions without feedback (assumed good)
+    const totalDecisions = this.ctx.storage.sql.exec(
+      `SELECT COUNT(*) as count FROM decision_log`
+    ).toArray()[0] as { count: number };
+    const decisionsWithoutFeedback = totalDecisions.count - totalFeedback;
+
+    // Average time to completion
+    const avgCompletionTime = this.ctx.storage.sql.exec(`
+      SELECT AVG(
+        (julianday(completed_at) - julianday(created_at)) * 24 * 60
+      ) as avg_minutes
+      FROM ticket_metrics
+      WHERE completed_at IS NOT NULL
+    `).toArray()[0] as { avg_minutes: number | null };
+
+    return Response.json({
+      summary: {
+        totalTickets: totalTickets.count,
+        completed,
+        automergeRate: `${automergeRate}%`,
+        failureRate: `${failureRate}%`,
+        multiPrRate: `${multiPrRate}%`,
+        multiRevisionRate: `${multiRevisionRate}%`,
+        avgCompletionMinutes: avgCompletionTime.avg_minutes?.toFixed(1) || "N/A",
+      },
+      outcomes,
+      costs: {
+        total: costStats?.total_cost?.toFixed(2) || "0",
+        average: costStats?.avg_cost?.toFixed(2) || "0",
+        max: costStats?.max_cost?.toFixed(2) || "0",
+        daily: dailyCost,
+      },
+      decisions: {
+        total: totalDecisions.count,
+        withFeedback: totalFeedback,
+        withoutFeedback: decisionsWithoutFeedback,
+        accuracy: `${decisionAccuracy}%`,
+        goodCount: goodDecisions,
+        badCount: badDecisions,
+      },
+    });
+  }
+
+  private async handleDecisionFeedback(request: Request): Promise<Response> {
+    const { decisionId, feedback, details, givenBy, slackMessageTs } = await request.json<{
+      decisionId?: string;
+      slackMessageTs?: string;
+      feedback: "good" | "bad";
+      details?: string;
+      givenBy?: string;
+    }>();
+
+    if (!feedback || (feedback !== "good" && feedback !== "bad")) {
+      return Response.json({ error: "feedback must be 'good' or 'bad'" }, { status: 400 });
+    }
+
+    // If slackMessageTs is provided, look up the decision by slack_message_ts
+    let resolvedDecisionId = decisionId;
+    if (!resolvedDecisionId && slackMessageTs) {
+      const decision = this.ctx.storage.sql.exec(
+        `SELECT id FROM decision_log WHERE slack_message_ts = ?`,
+        slackMessageTs,
+      ).toArray()[0] as { id: string } | undefined;
+      if (decision) {
+        resolvedDecisionId = decision.id;
+      }
+    }
+
+    if (!resolvedDecisionId) {
+      return Response.json({ error: "decisionId or slackMessageTs required" }, { status: 400 });
+    }
+
+    // Insert or update feedback
+    this.ctx.storage.sql.exec(
+      `INSERT INTO decision_feedback (id, decision_id, feedback, details, given_by, given_at, slack_message_ts)
+       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
+       ON CONFLICT(decision_id) DO UPDATE SET
+         feedback = excluded.feedback,
+         details = excluded.details,
+         given_by = excluded.given_by,
+         given_at = datetime('now')`,
+      crypto.randomUUID(),
+      resolvedDecisionId,
+      feedback,
+      details || null,
+      givenBy || null,
+      slackMessageTs || null,
+    );
+
+    return Response.json({ ok: true, decisionId: resolvedDecisionId });
   }
 
 }
