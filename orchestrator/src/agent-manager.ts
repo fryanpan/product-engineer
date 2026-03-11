@@ -80,6 +80,14 @@ export class AgentManager {
     return row || null;
   }
 
+  /** Look up a ticket by its human-readable identifier (e.g., "PES-23"). */
+  getTicketByIdentifier(identifier: string): TicketRecord | null {
+    const row = this.sql.exec(
+      "SELECT * FROM tickets WHERE identifier = ?", identifier,
+    ).toArray()[0] as unknown as TicketRecord | undefined;
+    return row || null;
+  }
+
   isTerminal(ticketId: string): boolean {
     const ticket = this.getTicket(ticketId);
     if (!ticket) return false;

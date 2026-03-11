@@ -39,10 +39,17 @@ function createMockSql() {
       }
 
       // SELECT * FROM tickets WHERE id = ?
-      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE id")) {
+      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE id =")) {
         const id = params[0] as string;
         const row = tickets.get(id);
         return { toArray: () => row ? [{ ...row }] : [] };
+      }
+
+      // SELECT * FROM tickets WHERE identifier = ?
+      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE identifier")) {
+        const identifier = params[0] as string;
+        const match = [...tickets.values()].find(t => t.identifier === identifier);
+        return { toArray: () => match ? [{ ...match }] : [] };
       }
 
       // SELECT id FROM tickets WHERE agent_active = 1 AND status IN (...)
@@ -246,6 +253,26 @@ describe("AgentManager", () => {
       expect(ticket).not.toBeNull();
       expect(ticket!.id).toBe("PE-1");
       expect(ticket!.status).toBe("created");
+    });
+  });
+
+  describe("getTicketByIdentifier", () => {
+    it("returns null when no ticket has that identifier", () => {
+      expect(manager.getTicketByIdentifier("PES-99")).toBeNull();
+    });
+
+    it("finds a ticket by its identifier", () => {
+      manager.createTicket({ id: "uuid-123", product: "test", identifier: "PES-5" });
+      const ticket = manager.getTicketByIdentifier("PES-5");
+      expect(ticket).not.toBeNull();
+      expect(ticket!.id).toBe("uuid-123");
+      expect(ticket!.identifier).toBe("PES-5");
+    });
+
+    it("does not match by id when looking up by identifier", () => {
+      manager.createTicket({ id: "PES-5", product: "test" });
+      // id is "PES-5" but identifier is null
+      expect(manager.getTicketByIdentifier("PES-5")).toBeNull();
     });
   });
 

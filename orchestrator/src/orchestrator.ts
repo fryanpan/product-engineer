@@ -783,7 +783,8 @@ export class Orchestrator extends Container<Bindings> {
 
     // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID ticket.
     // GitHub webhooks extract taskId from branch names like "ticket/PES-5",
-    // but the canonical ticket is stored under the Linear UUID. Look up by branch_name.
+    // but the canonical ticket is stored under the Linear UUID. Look up by branch_name
+    // first, then fall back to identifier (e.g., "PES-5" matches tickets.identifier).
     if (event.source === "github") {
       const byBranch = this.ctx.storage.sql.exec(
         "SELECT id FROM tickets WHERE branch_name = ? OR branch_name = ?",
@@ -792,6 +793,13 @@ export class Orchestrator extends Container<Bindings> {
       if (byBranch) {
         console.log(`[Orchestrator] Resolved branch task ID ${event.ticketId} → ${byBranch.id}`);
         event.ticketId = byBranch.id;
+      } else {
+        // branch_name may not be set yet — fall back to identifier lookup
+        const byIdentifier = this.agentManager.getTicketByIdentifier(event.ticketId);
+        if (byIdentifier) {
+          console.log(`[Orchestrator] Resolved identifier ${event.ticketId} → ${byIdentifier.id}`);
+          event.ticketId = byIdentifier.id;
+        }
       }
     }
 
@@ -872,11 +880,21 @@ export class Orchestrator extends Container<Bindings> {
 
     // CI passed + PR exists → evaluate merge gate (orchestrator decides, not agent)
     if (event.type === "checks_passed") {
-      const ticketRow = this.agentManager.getTicket(event.ticketId);
+      let ticketRow = this.agentManager.getTicket(event.ticketId);
+
+      // Branch names use the human-readable identifier (e.g., ticket/PES-23),
+      // but the canonical ticket ID is the Linear UUID. Fall back to identifier lookup.
+      if (!ticketRow?.pr_url) {
+        const byIdentifier = this.agentManager.getTicketByIdentifier(event.ticketId);
+        if (byIdentifier?.pr_url) {
+          console.log(`[Orchestrator] checks_passed: resolved identifier ${event.ticketId} → ticket ${byIdentifier.id}`);
+          ticketRow = byIdentifier;
+        }
+      }
 
       if (ticketRow?.pr_url) {
-        await this.evaluateMergeGate(event.ticketId, event.product);
-        return Response.json({ ok: true, ticketId: event.ticketId });
+        await this.evaluateMergeGate(ticketRow.id, event.product);
+        return Response.json({ ok: true, ticketId: ticketRow.id });
       }
       // No PR yet — route to agent normally
     }
@@ -1095,9 +1113,20 @@ export class Orchestrator extends Container<Bindings> {
     ticketId: string,
     product: string,
   ): Promise<void> {
-    const ticketRow = this.ctx.storage.sql.exec(
+    let ticketRow = this.ctx.storage.sql.exec(
       "SELECT * FROM tickets WHERE id = ?", ticketId
     ).toArray()[0] as Record<string, unknown> | undefined;
+
+    // Fall back to identifier lookup (branch names use human-readable identifiers)
+    if (!ticketRow?.pr_url) {
+      const byIdentifier = this.ctx.storage.sql.exec(
+        "SELECT * FROM tickets WHERE identifier = ?", ticketId
+      ).toArray()[0] as Record<string, unknown> | undefined;
+      if (byIdentifier?.pr_url) {
+        console.log(`[Orchestrator] evaluateMergeGate: resolved identifier ${ticketId} → ticket ${byIdentifier.id}`);
+        ticketRow = byIdentifier;
+      }
+    }
 
     if (!ticketRow?.pr_url) {
       console.log(`[Orchestrator] No PR URL for ${ticketId}, skipping merge gate`);
