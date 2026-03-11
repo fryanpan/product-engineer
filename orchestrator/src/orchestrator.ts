@@ -2567,6 +2567,30 @@ export class Orchestrator extends Container<Bindings> {
       issue.id, threadTsToStore, slackEvent.channel || null,
     );
 
+    // Dispatch ticket review directly instead of waiting for the Linear webhook
+    // roundtrip. This is more resilient — works even if assignee can't be set (OAuth app
+    // users can't be assigned in Linear) or the webhook is delayed/fails.
+    const ticketEvent: TicketEvent = {
+      type: "ticket_created",
+      source: "slack",
+      ticketId: issue.id,
+      product,
+      payload: {
+        id: issue.id,
+        identifier: issue.identifier,
+        title,
+        description: rawText,
+        priority: 3,
+        labels: [],
+      },
+      slackThreadTs: threadTsToStore || undefined,
+      slackChannel: slackEvent.channel || undefined,
+    };
+    // Call handleTicketReview directly (not handleEvent which has an agent_active guard
+    // that would skip since we already upserted the ticket above).
+    this.handleTicketReview(ticketEvent)
+      .catch(err => console.error("[Orchestrator] Direct ticket review failed:", err));
+
     return Response.json({ ok: true, linearIssue: issue.identifier });
   }
 

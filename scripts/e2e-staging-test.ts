@@ -36,6 +36,10 @@ const API_KEY = process.env.API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+// User OAuth token (xoxp-) for posting mentions as a real user.
+// Slack doesn't fire app_mention when a bot mentions itself, so we need a user token
+// to trigger the full Socket Mode flow in E2E tests.
+const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN;
 
 // Test timeout settings
 const POLL_INTERVAL_MS = 5_000; // 5 seconds
@@ -75,6 +79,8 @@ interface TicketRow {
   pr_url: string | null;
   branch_name: string | null;
   agent_active: number;
+  title: string | null;
+  identifier: string | null;
 }
 
 // --- Helpers ---
@@ -122,10 +128,19 @@ async function postSlackMessage(
   text: string,
   threadTs?: string
 ): Promise<{ ts: string; channel: string }> {
+  return postSlackMessageWithToken(channel, text, SLACK_BOT_TOKEN!, threadTs);
+}
+
+async function postSlackMessageWithToken(
+  channel: string,
+  text: string,
+  token: string,
+  threadTs?: string
+): Promise<{ ts: string; channel: string }> {
   const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -150,7 +165,7 @@ async function getLinearIssue(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${LINEAR_API_KEY}`,
+      Authorization: LINEAR_API_KEY!,
     },
     body: JSON.stringify({
       query: `
@@ -217,6 +232,8 @@ async function verifyPrerequisites(): Promise<void> {
   if (!LINEAR_API_KEY) missing.push("LINEAR_API_KEY");
   if (!GITHUB_TOKEN) missing.push("GITHUB_TOKEN/GH_TOKEN");
 
+  if (!SLACK_USER_TOKEN) missing.push("SLACK_USER_TOKEN (xoxp- token for app_mention trigger)");
+
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
   }
@@ -267,18 +284,23 @@ Add a function called \`greetE2E_${ctx.testId.replace(/-/g, "_")}\` to src/index
 
 IMPORTANT: The initial implementation should have a syntax error (missing semicolon) to test CI failure handling. After CI fails, fix the syntax error.`;
 
-  // Use proper Slack mention format <@USER_ID> to trigger app_mention event.
-  // Plain text "@name" does NOT trigger app_mention via Socket Mode.
   const botUserId = process.env.SLACK_BOT_USER_ID || "U0AKJ2C6QUA"; // staging bot
   const message = `<@${botUserId}> ${taskDescription}`;
 
-  const result = await postSlackMessage(STAGING_SLACK_CHANNEL, message);
+  // Post the mention using a user token (xoxp-) so Slack fires app_mention via Socket Mode.
+  // Slack does NOT fire app_mention when a bot mentions itself (xoxb- token).
+  const mentionToken = SLACK_USER_TOKEN || SLACK_BOT_TOKEN;
+  if (!SLACK_USER_TOKEN) {
+    log("step1", "WARNING: No SLACK_USER_TOKEN — using bot token. Slack won't fire app_mention for self-mentions.");
+    log("step1", "Set SLACK_USER_TOKEN (xoxp-) for full end-to-end Socket Mode testing.");
+  }
+
+  const result = await postSlackMessageWithToken(STAGING_SLACK_CHANNEL, message, mentionToken!);
   ctx.slackThreadTs = result.ts;
+  logSuccess("step1", `Slack mention posted: ts=${result.ts} (as ${SLACK_USER_TOKEN ? "user" : "bot"})`);
 
-  logSuccess("step1", `Slack message posted: ts=${result.ts}`);
-
-  // Wait briefly for orchestrator to process the event
-  await sleep(2000);
+  // Wait for Socket Mode to deliver the event to the orchestrator
+  await sleep(5000);
 }
 
 async function step2_verifyLinearTicketCreated(ctx: TestContext): Promise<void> {
@@ -287,15 +309,17 @@ async function step2_verifyLinearTicketCreated(ctx: TestContext): Promise<void> 
   const deadline = Date.now() + AGENT_START_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    // Check orchestrator tickets for one linked to our thread
+    // Search by test ID in the title since the orchestrator stores the ACK message ts
+    // as slack_thread_ts (not the original mention ts).
     try {
       const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
       const ticket = tickets.tickets.find(
-        (t) => t.slack_thread_ts === ctx.slackThreadTs
+        (t) => t.title?.includes(ctx.testId)
       );
 
       if (ticket) {
         ctx.linearIssueId = ticket.id;
+        ctx.slackThreadTs = ticket.slack_thread_ts;
         log("step2", `Found ticket linked to thread: ${ticket.id}`);
 
         // Get Linear identifier
