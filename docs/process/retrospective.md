@@ -1,3 +1,32 @@
+## 2026-03-11 - BC-136: E2E Test Scripts for Orchestrator (PR #72)
+
+**Context:** Create scripted E2E tests that exercise the full orchestrator lifecycle against staging to catch bugs like those found in Mar 9-10: supervisor spam loop, merge gate race condition, duplicate webhook dedup, stale token refresh, thread routing.
+
+**What worked:**
+- Built two complementary test scripts: quick smoke test (~5s) and full lifecycle test (~15min)
+- Smoke test verifies all integrations (Worker, Orchestrator DO, Slack, Linear, GitHub, decision log, registry)
+- Full E2E test exercises complete flow: Slack mention → Linear ticket → agent spawn → PR → CI failure/fix → merge
+- Designed to intentionally trigger CI failure to test automated fix workflow
+- Both scripts have `--help` and dry-run modes
+
+**Implementation decisions:**
+- Used `parseArgs` from `util` for CLI argument parsing (standard library, no deps)
+- Polling-based verification with configurable timeouts rather than event-driven
+- Context object tracks test state across steps for debugging failed tests
+- Both staging and production environments supported via env var overrides
+
+**Files created:**
+- `scripts/e2e-smoke-test.ts` — Quick connectivity check
+- `scripts/e2e-staging-test.ts` — Full lifecycle test
+- `docs/e2e-testing.md` — Usage guide and troubleshooting
+
+**Action:**
+- Run smoke test before deploying orchestrator changes
+- Run full E2E test after risky changes (creates real artifacts in staging)
+- Consider CI integration for smoke test (doesn't require real credentials for basic checks)
+
+---
+
 ## 2026-03-09 - BC-133: Fix agent replies going to main channel instead of thread (PR #69)
 
 **Context:** User reported that when replying in ticket threads, the agent responded in the main channel instead of the thread. This was confusing and broke conversation context.
