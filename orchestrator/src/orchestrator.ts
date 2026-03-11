@@ -1211,6 +1211,23 @@ export class Orchestrator extends Container<Bindings> {
 
     if (mergeRes.ok) {
       console.log(`[Orchestrator] PR #${prNumber} merged successfully`);
+
+      // Notify Slack thread about the merge
+      if (ticketRow.slack_thread_ts && ticketRow.slack_channel) {
+        fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            channel: ticketRow.slack_channel,
+            thread_ts: ticketRow.slack_thread_ts,
+            text: `✅ PR #${prNumber} merged successfully.`,
+          }),
+        }).catch(err => console.warn("[Orchestrator] Failed to notify Slack of merge:", err));
+      }
+
       // The pr_merged webhook will trigger handleStatusUpdate -> terminal state
     } else {
       const errorText = await mergeRes.text();
@@ -2201,29 +2218,58 @@ export class Orchestrator extends Container<Bindings> {
 
     console.log(`[Orchestrator] Created Linear issue ${issue.identifier} (${issue.id}) from Slack mention`);
 
-    // Post acknowledgment with Linear ticket link
-    await fetch("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${(this.env as Record<string, unknown>).SLACK_BOT_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        channel: slackEvent.channel,
-        thread_ts: slackThreadTs,
-        text: `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
-      }),
-    }).catch(err => console.warn("[Orchestrator] Failed to post ack:", err));
+    // Post acknowledgment as a NEW top-level message (not a reply).
+    // This message becomes the ticket thread — all future updates reply here.
+    let ticketThreadTs: string | null = null;
+    try {
+      const ackRes = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${(this.env as Record<string, unknown>).SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: slackEvent.channel,
+          // No thread_ts — creates a new top-level message
+          text: `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
+        }),
+      });
+      const ackData = await ackRes.json() as { ok: boolean; ts?: string; error?: string };
+      if (ackData.ok && ackData.ts) {
+        ticketThreadTs = ackData.ts;
+      } else {
+        console.warn("[Orchestrator] Ack message failed:", ackData.error);
+      }
+    } catch (err) {
+      console.warn("[Orchestrator] Failed to post ack:", err);
+    }
+
+    // Reply briefly in the user's original thread pointing to the ticket thread
+    if (ticketThreadTs) {
+      fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${(this.env as Record<string, unknown>).SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel: slackEvent.channel,
+          thread_ts: slackThreadTs,
+          text: `👋 On it! Follow progress in the thread above.`,
+        }),
+      }).catch(err => console.warn("[Orchestrator] Failed to post thread pointer:", err));
+    }
 
     // Store the Slack thread association so the Linear webhook handler can link them.
-    // The webhook will arrive shortly and create the ticket entry via handleEvent.
+    // Use the ack message ts (ticket thread) — NOT the user's original message ts.
+    const threadTsToStore = ticketThreadTs || slackThreadTs || null;
     this.ctx.storage.sql.exec(
       `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
        VALUES (?, ?, ?)
        ON CONFLICT(linear_issue_id) DO UPDATE SET
          slack_thread_ts = excluded.slack_thread_ts,
          slack_channel = excluded.slack_channel`,
-      issue.id, slackThreadTs || null, slackEvent.channel || null,
+      issue.id, threadTsToStore, slackEvent.channel || null,
     );
 
     return Response.json({ ok: true, linearIssue: issue.identifier });
