@@ -6,12 +6,34 @@
 # webhooks, and GitHub Actions. Idempotent — safe to re-run.
 #
 # Usage:
-#   bash scripts/setup.sh
+#   bash scripts/setup.sh              # production
+#   bash scripts/setup.sh --env staging # staging
 # ══════════════════════════════════════════════════════════════
 
 set -e
 cd "$(dirname "$0")/.."
 ORCHESTRATOR_DIR="$(pwd)/orchestrator"
+
+# ─── Parse arguments ──────────────────────────────────────────
+
+WRANGLER_ENV=""
+ENV_LABEL="production"
+ENV_FLAG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env)
+      WRANGLER_ENV="$2"
+      ENV_LABEL="$2"
+      ENV_FLAG="--env $2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      echo "Usage: bash scripts/setup.sh [--env staging]"
+      exit 1
+      ;;
+  esac
+done
 
 # ─── Helpers ──────────────────────────────────────────────────
 
@@ -26,16 +48,16 @@ set_secret() {
     echo "  ⏭  Skipped $name"
     return
   fi
-  echo "$value" | (cd "$ORCHESTRATOR_DIR" && npx wrangler secret put "$name" 2>&1 | tail -1)
-  echo "  ✅ $name set"
+  echo "$value" | (cd "$ORCHESTRATOR_DIR" && npx wrangler secret put "$name" $ENV_FLAG 2>&1 | tail -1)
+  echo "  ✅ $name set ($ENV_LABEL)"
 }
 
 auto_secret() {
   local name="$1"
   local value
   value=$(openssl rand -hex 32)
-  echo "$value" | (cd "$ORCHESTRATOR_DIR" && npx wrangler secret put "$name" 2>&1 | tail -1)
-  echo "  ✅ $name auto-generated"
+  echo "$value" | (cd "$ORCHESTRATOR_DIR" && npx wrangler secret put "$name" $ENV_FLAG 2>&1 | tail -1)
+  echo "  ✅ $name auto-generated ($ENV_LABEL)"
   # Return the value so callers can use it
   eval "GENERATED_${name}='$value'"
 }
@@ -53,11 +75,13 @@ pause() {
   read -r
 }
 
-cat <<'BANNER'
+cat <<BANNER
 
   ╔══════════════════════════════════════════════════════════╗
   ║         Product Engineer — Setup                        ║
   ╠══════════════════════════════════════════════════════════╣
+  ║  Environment: $(printf '%-41s' "$ENV_LABEL")║
+  ║                                                         ║
   ║  This script walks through all external service setup   ║
   ║  and secret provisioning. Safe to re-run at any time.   ║
   ║                                                         ║
@@ -407,11 +431,11 @@ fi
 # VERIFICATION
 # ══════════════════════════════════════════════════════════════
 
-section "Verification"
+section "Verification ($ENV_LABEL)"
 echo ""
-echo "  Checking Cloudflare Workers secrets..."
+echo "  Checking Cloudflare Workers secrets ($ENV_LABEL)..."
 echo ""
-(cd "$ORCHESTRATOR_DIR" && npx wrangler secret list 2>&1) | grep '"name"' | sed 's/.*"name": "/  ✓ /' | sed 's/".*//'
+(cd "$ORCHESTRATOR_DIR" && npx wrangler secret list $ENV_FLAG 2>&1) | grep '"name"' | sed 's/.*"name": "/  ✓ /' | sed 's/".*//'
 
 echo ""
 echo "  Expected secrets (core + per-product):"
@@ -435,19 +459,26 @@ else
   echo "  (could not detect GitHub repo from git remote — check manually)"
 fi
 
-cat <<'DONE'
+DEPLOY_CMD="cd orchestrator && npx wrangler deploy"
+TAIL_CMD="cd orchestrator && npx wrangler tail"
+if [ -n "$WRANGLER_ENV" ]; then
+  DEPLOY_CMD="$DEPLOY_CMD --env $WRANGLER_ENV"
+  TAIL_CMD="$TAIL_CMD --env $WRANGLER_ENV"
+fi
+
+cat <<DONE
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Setup complete!
+  Setup complete! (${ENV_LABEL})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Next steps:
     1. Deploy:
-       cd orchestrator && npx wrangler deploy
+       ${DEPLOY_CMD}
     2. Test:
        curl https://product-engineer.<your-subdomain>.workers.dev/health
 
   Debugging:
-    cd orchestrator && npx wrangler tail
+    ${TAIL_CMD}
 
 DONE
