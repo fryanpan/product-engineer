@@ -267,7 +267,10 @@ Add a function called \`greetE2E_${ctx.testId.replace(/-/g, "_")}\` to src/index
 
 IMPORTANT: The initial implementation should have a syntax error (missing semicolon) to test CI failure handling. After CI fails, fix the syntax error.`;
 
-  const message = `@product-engineer-staging ${taskDescription}`;
+  // Use proper Slack mention format <@USER_ID> to trigger app_mention event.
+  // Plain text "@name" does NOT trigger app_mention via Socket Mode.
+  const botUserId = process.env.SLACK_BOT_USER_ID || "U0AHE1T0SMV"; // staging bot
+  const message = `<@${botUserId}> ${taskDescription}`;
 
   const result = await postSlackMessage(STAGING_SLACK_CHANNEL, message);
   ctx.slackThreadTs = result.ts;
