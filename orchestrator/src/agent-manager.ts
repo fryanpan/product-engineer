@@ -17,6 +17,16 @@ export interface StatusUpdate {
   transcript_r2_key?: string;
 }
 
+export interface SpawnConfig {
+  product: string;
+  repos: string[];
+  slackChannel: string;
+  slackThreadTs?: string;
+  secrets: Record<string, string>;
+  gatewayConfig?: { account_id: string; gateway_id: string } | null;
+  model?: string;
+}
+
 interface SqlResult {
   toArray(): Record<string, unknown>[];
 }
@@ -108,5 +118,185 @@ export class AgentManager {
     this.sql.exec(`UPDATE tickets SET ${sets.join(", ")} WHERE id = ?`, ...values);
 
     return this.getTicket(ticketId)!;
+  }
+
+  /**
+   * Spawn an agent container for a ticket.
+   * Deploy re-spawn safe: accepts tickets in spawning/active state (re-initializes container).
+   * For new spawns, transitions from reviewing/queued → spawning.
+   */
+  async spawnAgent(ticketId: string, config: SpawnConfig): Promise<void> {
+    const ticket = this.getTicket(ticketId);
+    if (!ticket) throw new Error(`Ticket ${ticketId} not found`);
+    if (this.isTerminal(ticketId)) throw new Error(`Ticket ${ticketId} is terminal`);
+
+    const isRespawn = ticket.status === "spawning" || ticket.status === "active";
+
+    if (!isRespawn) {
+      // New spawn — must be in reviewing or queued
+      if (ticket.status !== "reviewing" && ticket.status !== "queued") {
+        throw new Error(`Cannot spawn agent for ticket in ${ticket.status} state`);
+      }
+      // Transition to spawning
+      this.updateStatus(ticketId, { status: "spawning" });
+    }
+
+    // Set agent_active=1
+    this.sql.exec(
+      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
+      ticketId,
+    );
+
+    try {
+      const agentNs = this.env.TICKET_AGENT as any;
+      const id = agentNs.idFromName(ticketId);
+      const agent = agentNs.get(id);
+
+      // Initialize the agent container with config
+      const initRes = await agent.fetch(new Request("http://internal/initialize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticketId,
+          product: config.product,
+          repos: config.repos,
+          slackChannel: config.slackChannel,
+          slackThreadTs: config.slackThreadTs || ticket.slack_thread_ts || undefined,
+          secrets: config.secrets,
+          gatewayConfig: config.gatewayConfig,
+          model: config.model,
+        }),
+      }));
+
+      if (!initRes.ok) {
+        throw new Error(`Agent init failed: ${initRes.status}`);
+      }
+      console.log(`[AgentManager] Agent spawned for ${ticketId} (respawn=${isRespawn})`);
+    } catch (err) {
+      // On failure: mark agent inactive
+      this.sql.exec(
+        "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+        ticketId,
+      );
+      if (!isRespawn) {
+        // Only transition to failed for new spawns — respawns keep current state
+        // so the alarm can retry later
+        this.sql.exec(
+          "UPDATE tickets SET status = ?, agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+          "failed",
+          ticketId,
+        );
+      }
+      console.error(`[AgentManager] Failed to spawn agent for ${ticketId}:`, err);
+      throw err;
+    }
+  }
+
+  /**
+   * Stop an agent. Idempotent — safe to call on already-stopped agents.
+   */
+  async stopAgent(ticketId: string, reason: string): Promise<void> {
+    console.log(`[AgentManager] Stopping agent for ${ticketId}: ${reason}`);
+
+    // Set agent_active=0 in DB first
+    this.sql.exec(
+      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+      ticketId,
+    );
+
+    // Notify TicketAgent DO — best-effort, don't throw on failure
+    try {
+      const agentNs = this.env.TICKET_AGENT as any;
+      const id = agentNs.idFromName(ticketId);
+      const agent = agentNs.get(id);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      await agent.fetch(
+        new Request("http://internal/mark-terminal", { method: "POST", signal: controller.signal })
+      ).finally(() => clearTimeout(timeout));
+    } catch (err) {
+      // Timeout or network error — agent may already be dead
+      console.warn(`[AgentManager] Could not notify agent for ${ticketId}:`, err);
+    }
+  }
+
+  /**
+   * Send an event to a running agent. Retries with backoff.
+   */
+  async sendEvent(ticketId: string, event: unknown): Promise<void> {
+    const ticket = this.getTicket(ticketId);
+    if (!ticket) throw new Error(`Ticket ${ticketId} not found`);
+    if (this.isTerminal(ticketId)) {
+      console.log(`[AgentManager] Ignoring event for terminal ticket ${ticketId}`);
+      return;
+    }
+    if (ticket.agent_active !== 1) {
+      console.log(`[AgentManager] No active agent for ${ticketId}, skipping event`);
+      return;
+    }
+
+    const agentNs = this.env.TICKET_AGENT as any;
+    const id = agentNs.idFromName(ticketId);
+    const agent = agentNs.get(id);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await agent.fetch(new Request("http://internal/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(event),
+      }));
+
+      if (res.ok) return;
+      if (res.status !== 503) {
+        throw new Error(`Event delivery failed: ${res.status}`);
+      }
+
+      // Container not ready, backoff and retry
+      console.warn(`[AgentManager] Agent not ready for ${ticketId}, retry ${attempt + 1}/3`);
+      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+
+    // Exhausted retries
+    console.error(`[AgentManager] Event delivery failed after retries for ${ticketId}`);
+    this.sql.exec(
+      "UPDATE tickets SET agent_active = 0, status = ?, updated_at = datetime('now') WHERE id = ?",
+      "failed",
+      ticketId,
+    );
+  }
+
+  recordHeartbeat(ticketId: string): void {
+    this.sql.exec(
+      "UPDATE tickets SET last_heartbeat = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_active = 1",
+      ticketId,
+    );
+  }
+
+  getActiveAgents(): TicketRecord[] {
+    return this.sql.exec(
+      "SELECT * FROM tickets WHERE agent_active = 1 ORDER BY updated_at DESC",
+    ).toArray() as TicketRecord[];
+  }
+
+  async stopAllAgents(reason: string): Promise<void> {
+    const agents = this.getActiveAgents();
+    for (const agent of agents) {
+      await this.stopAgent(agent.id, reason).catch(err =>
+        console.error(`[AgentManager] Failed to stop ${agent.id}:`, err)
+      );
+    }
+  }
+
+  async cleanupInactive(): Promise<void> {
+    const terminalList = TERMINAL_STATUSES.map(s => `'${s}'`).join(", ");
+    const inactive = this.sql.exec(
+      `SELECT id FROM tickets WHERE agent_active = 1 AND status IN (${terminalList})`,
+    ).toArray() as { id: string }[];
+
+    for (const { id } of inactive) {
+      await this.stopAgent(id, "cleanup: terminal but still active").catch(() => {});
+    }
   }
 }
