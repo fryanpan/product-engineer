@@ -59,6 +59,28 @@ export interface DecisionLog {
   confidence: number;
 }
 
+// Metrics types for observability
+export interface TicketMetrics {
+  ticket_id: string;
+  outcome: "automerge_success" | "automerge_failure" | "manual_merge" | "closed" | "deferred" | "failed";
+  pr_count: number;           // Number of PRs created for this ticket
+  revision_count: number;     // Times sent back for revision
+  total_agent_time_ms: number;
+  total_cost_usd: number;
+  hands_on_sessions: number;
+  hands_on_notes: string | null;
+  first_response_at: string | null;
+  completed_at: string | null;
+}
+
+export interface DecisionFeedback {
+  decision_id: string;
+  feedback: "good" | "bad";
+  details: string | null;
+  given_by: string | null;   // Slack user who gave feedback
+  given_at: string;
+}
+
 export interface Bindings {
   ORCHESTRATOR: DurableObjectNamespace;
   TICKET_AGENT: DurableObjectNamespace;

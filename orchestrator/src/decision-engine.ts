@@ -97,7 +97,7 @@ export class DecisionEngine {
     return this.parseDecisionResponse(textBlock.text);
   }
 
-  /** Log a decision to all 4 destinations */
+  /** Log a decision to all 4 destinations. Returns the Slack message TS for feedback tracking. */
   async logDecision(
     log: DecisionLog,
     opts: {
@@ -106,22 +106,8 @@ export class DecisionEngine {
       slackThreadTs?: string;
       linearIssueId?: string;
     },
-  ): Promise<void> {
-    // 1. SQLite
-    opts.sqlExec(
-      `INSERT INTO decision_log (id, timestamp, type, ticket_id, context_summary, action, reason, confidence)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      log.id,
-      log.timestamp,
-      log.type,
-      log.ticket_id,
-      log.context_summary,
-      log.action,
-      log.reason,
-      log.confidence,
-    );
-
-    // Format for Slack
+  ): Promise<{ slackMessageTs?: string }> {
+    // Format for Slack — includes feedback instruction
     const emoji =
       log.type === "ticket_review"
         ? "\uD83C\uDFAB"
@@ -131,15 +117,33 @@ export class DecisionEngine {
     const typeLabel = log.type
       .replace(/_/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase());
-    const slackText = `${emoji} *${typeLabel}*${log.ticket_id ? ` \u2014 \`${log.ticket_id}\`` : ""}\n*Action:* ${log.action}\n*Reason:* ${log.reason}`;
+    const feedbackHint = `\n_React 👍 or 👎 to give feedback, or reply with details_`;
+    const slackText = `${emoji} *${typeLabel}*${log.ticket_id ? ` \u2014 \`${log.ticket_id}\`` : ""}\n*Action:* ${log.action}\n*Reason:* ${log.reason}${feedbackHint}`;
 
-    // 2. #product-engineer-decisions channel
-    await this.postSlack(this.config.decisionsChannel, slackText).catch(
-      (err) =>
-        console.error(
-          "[DecisionEngine] Failed to post to decisions channel:",
-          err,
-        ),
+    // 2. #product-engineer-decisions channel — capture message TS for feedback
+    let decisionsMessageTs: string | undefined;
+    try {
+      const res = await this.postSlackWithResponse(this.config.decisionsChannel, slackText);
+      if (res?.ts) {
+        decisionsMessageTs = res.ts;
+      }
+    } catch (err) {
+      console.error("[DecisionEngine] Failed to post to decisions channel:", err);
+    }
+
+    // 1. SQLite — include slack_message_ts for feedback correlation
+    opts.sqlExec(
+      `INSERT INTO decision_log (id, timestamp, type, ticket_id, context_summary, action, reason, confidence, slack_message_ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      log.id,
+      log.timestamp,
+      log.type,
+      log.ticket_id,
+      log.context_summary,
+      log.action,
+      log.reason,
+      log.confidence,
+      decisionsMessageTs || null,
     );
 
     // 3. Ticket Slack thread
@@ -165,6 +169,8 @@ export class DecisionEngine {
         console.error("[DecisionEngine] Failed to post Linear comment:", err),
       );
     }
+
+    return { slackMessageTs: decisionsMessageTs };
   }
 
   private async postSlack(channel: string, text: string, threadTs?: string) {
@@ -180,6 +186,31 @@ export class DecisionEngine {
         ...(threadTs && { thread_ts: threadTs }),
       }),
     });
+  }
+
+  /** Post to Slack and return the response including message ts */
+  private async postSlackWithResponse(
+    channel: string,
+    text: string,
+    threadTs?: string,
+  ): Promise<{ ok: boolean; ts?: string } | null> {
+    try {
+      const res = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.slackBotToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel,
+          text,
+          ...(threadTs && { thread_ts: threadTs }),
+        }),
+      });
+      return res.json();
+    } catch {
+      return null;
+    }
   }
 
   private async postLinearComment(issueId: string, body: string) {
