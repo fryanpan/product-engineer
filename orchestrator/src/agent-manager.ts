@@ -188,17 +188,20 @@ export class AgentManager {
       }
       console.log(`[AgentManager] Agent spawned for ${ticketId} (respawn=${isRespawn})`);
     } catch (err) {
-      // On failure: mark agent inactive
-      this.sql.exec(
-        "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-        ticketId,
-      );
+      // On failure: mark agent inactive, transition to failed for new spawns
       if (!isRespawn) {
-        // Only transition to failed for new spawns — respawns keep current state
-        // so the alarm can retry later
+        try {
+          this.updateStatus(ticketId, { status: "failed" });
+        } catch {
+          this.sql.exec(
+            "UPDATE tickets SET status = 'failed', agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+            ticketId,
+          );
+        }
+      } else {
+        // Respawns keep current state so alarm can retry later
         this.sql.exec(
-          "UPDATE tickets SET status = ?, agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-          "failed",
+          "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
           ticketId,
         );
       }
@@ -273,13 +276,17 @@ export class AgentManager {
       await new Promise(r => setTimeout(r, this.retryDelayMs * (attempt + 1)));
     }
 
-    // Exhausted retries
+    // Exhausted retries — mark ticket as failed via state machine
     console.error(`[AgentManager] Event delivery failed after retries for ${ticketId}`);
-    this.sql.exec(
-      "UPDATE tickets SET agent_active = 0, status = ?, updated_at = datetime('now') WHERE id = ?",
-      "failed",
-      ticketId,
-    );
+    try {
+      this.updateStatus(ticketId, { status: "failed" });
+    } catch {
+      // State transition rejected — force it
+      this.sql.exec(
+        "UPDATE tickets SET agent_active = 0, status = 'failed', updated_at = datetime('now') WHERE id = ?",
+        ticketId,
+      );
+    }
   }
 
   /**

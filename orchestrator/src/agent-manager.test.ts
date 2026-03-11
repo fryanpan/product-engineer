@@ -719,4 +719,37 @@ describe("AgentManager", () => {
       expect(mgr2.getTicket("PE-1")!.agent_active).toBe(0);
     });
   });
+
+  describe("reactivate", () => {
+    it("sets agent_active=1 for non-terminal ticket", () => {
+      manager.createTicket(defaultParams);
+      expect(manager.getTicket("PE-1")!.agent_active).toBe(0);
+
+      manager.reactivate("PE-1");
+      expect(manager.getTicket("PE-1")!.agent_active).toBe(1);
+    });
+
+    it("no-ops for terminal ticket", () => {
+      manager.createTicket(defaultParams);
+      manager.updateStatus("PE-1", { status: "failed" });
+
+      manager.reactivate("PE-1");
+      expect(manager.getTicket("PE-1")!.agent_active).toBe(0);
+    });
+  });
+
+  describe("isTerminalStatus", () => {
+    it("returns true for terminal statuses", () => {
+      expect(manager.isTerminalStatus("merged")).toBe(true);
+      expect(manager.isTerminalStatus("closed")).toBe(true);
+      expect(manager.isTerminalStatus("deferred")).toBe(true);
+      expect(manager.isTerminalStatus("failed")).toBe(true);
+    });
+
+    it("returns false for non-terminal statuses", () => {
+      expect(manager.isTerminalStatus("created")).toBe(false);
+      expect(manager.isTerminalStatus("active")).toBe(false);
+      expect(manager.isTerminalStatus("pr_open")).toBe(false);
+    });
+  });
 });

@@ -18,7 +18,7 @@ export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
   queued:      ["reviewing", "spawning", "closed", "deferred", "failed"],
   spawning:    ["active", "failed"],
   active:      ["active", "pr_open", "failed"],
-  pr_open:     ["active", "merged", "escalated", "failed"],
+  pr_open:     ["active", "merged", "escalated", "closed", "failed"],
   escalated:   ["active", "merged", "closed", "failed"],
   merged:      [],
   closed:      [],
