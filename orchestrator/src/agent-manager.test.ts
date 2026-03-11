@@ -220,9 +220,8 @@ describe("AgentManager", () => {
         } else if (terminalStatus === "failed") {
           manager.updateStatus(id, { status: "failed" });
         } else if (terminalStatus === "deferred") {
-          // deferred has no inbound transitions in VALID_TRANSITIONS,
-          // so we set it directly via the mock for this test
-          sql._tickets.get(id)!.status = "deferred";
+          manager.updateStatus(id, { status: "reviewing" });
+          manager.updateStatus(id, { status: "deferred" });
         }
 
         expect(manager.isTerminal(id)).toBe(true);

@@ -13,9 +13,9 @@ export type TicketState = typeof TICKET_STATES[number];
 /** Valid state transitions. Key = from state, value = allowed to states. */
 export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
   created:     ["reviewing", "failed"],
-  reviewing:   ["spawning", "needs_info", "queued", "closed", "failed"],
-  needs_info:  ["reviewing", "closed", "failed"],
-  queued:      ["reviewing", "spawning", "closed", "failed"],
+  reviewing:   ["spawning", "needs_info", "queued", "closed", "deferred", "failed"],
+  needs_info:  ["reviewing", "closed", "deferred", "failed"],
+  queued:      ["reviewing", "spawning", "closed", "deferred", "failed"],
   spawning:    ["active", "failed"],
   active:      ["active", "pr_open", "failed"],
   pr_open:     ["active", "merged", "escalated", "failed"],
