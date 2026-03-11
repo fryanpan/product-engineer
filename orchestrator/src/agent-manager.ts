@@ -35,11 +35,21 @@ interface SqlExec {
   exec(sql: string, ...params: unknown[]): SqlResult;
 }
 
+export interface AgentManagerOptions {
+  /** Base retry delay in ms for sendEvent backoff. Default 2000. */
+  retryDelayMs?: number;
+}
+
 export class AgentManager {
+  private retryDelayMs: number;
+
   constructor(
     private sql: SqlExec,
     private env: Record<string, unknown>,
-  ) {}
+    options?: AgentManagerOptions,
+  ) {
+    this.retryDelayMs = options?.retryDelayMs ?? 2000;
+  }
 
   createTicket(params: CreateTicketParams): TicketRecord {
     const existing = this.getTicket(params.id);
@@ -255,7 +265,7 @@ export class AgentManager {
 
       // Container not ready, backoff and retry
       console.warn(`[AgentManager] Agent not ready for ${ticketId}, retry ${attempt + 1}/3`);
-      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+      await new Promise(r => setTimeout(r, this.retryDelayMs * (attempt + 1)));
     }
 
     // Exhausted retries

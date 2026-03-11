@@ -515,7 +515,7 @@ describe("AgentManager", () => {
 
     beforeEach(() => {
       mockNs = createMockTicketAgentNs();
-      manager = new AgentManager(sql, { TICKET_AGENT: mockNs });
+      manager = new AgentManager(sql, { TICKET_AGENT: mockNs }, { retryDelayMs: 0 });
     });
 
     it("sends event to running agent", async () => {
@@ -553,6 +553,18 @@ describe("AgentManager", () => {
       await expect(manager.sendEvent("nonexistent", {})).rejects.toThrow(
         "Ticket nonexistent not found"
       );
+    });
+
+    it("marks ticket failed after 3 consecutive 503s", async () => {
+      manager.createTicket(defaultParams);
+      sql._tickets.get("PE-1")!.agent_active = 1;
+      mockNs.setResponse("PE-1", 503, "not ready");
+
+      await manager.sendEvent("PE-1", { type: "test" });
+
+      const ticket = manager.getTicket("PE-1")!;
+      expect(ticket.status).toBe("failed");
+      expect(ticket.agent_active).toBe(0);
     });
 
     it("throws on non-503 error response", async () => {
