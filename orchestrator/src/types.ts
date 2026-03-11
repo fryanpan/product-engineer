@@ -47,6 +47,7 @@ export interface TicketRecord {
   identifier: string | null;
   title: string | null;
   agent_active: number;
+  agent_message: string | null;
   transcript_r2_key: string | null;
   last_heartbeat: string | null;
   created_at: string;

@@ -101,8 +101,8 @@ export class Orchestrator extends Container<Bindings> {
         "SELECT status, pr_url FROM tickets WHERE id = ?", retry.ticket_id
       ).toArray()[0] as { status: string; pr_url: string | null } | undefined;
 
-      if (!row?.pr_url || row.status !== "pr_open") {
-        console.log(`[Orchestrator] Merge gate retry skipped for ${retry.ticket_id} (status=${row?.status})`);
+      if (!row?.pr_url || this.agentManager.isTerminalStatus(row.status)) {
+        console.log(`[Orchestrator] Merge gate retry skipped for ${retry.ticket_id} (status=${row?.status}, pr_url=${!!row?.pr_url})`);
         this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", retry.ticket_id);
         continue;
       }
@@ -491,6 +491,16 @@ export class Orchestrator extends Container<Bindings> {
       const message = err instanceof Error ? err.message : "";
       if (!message.includes("duplicate column") && !message.includes("already exists")) {
         console.error("[Orchestrator] Failed to add title column:", err);
+        throw err;
+      }
+    }
+    // Migration: add agent_message column — stores last phone-home log message from agent (observability only)
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_message TEXT`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add agent_message column:", err);
         throw err;
       }
     }
@@ -1475,8 +1485,8 @@ export class Orchestrator extends Container<Bindings> {
       agent_active?: number;
     }>();
 
-    // Log phone-home payloads so they appear in wrangler tail
-    console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
+    // Log payloads so they appear in wrangler tail
+    console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
     // Reject heartbeats/status updates for tickets already in a terminal state.
     // This prevents agent containers from overwriting supervisor kill decisions.
@@ -1562,9 +1572,6 @@ export class Orchestrator extends Container<Bindings> {
       `UPDATE tickets SET ${updates.join(", ")} WHERE id = ?`,
       ...values,
     );
-
-    // Record heartbeat via AgentManager
-    this.agentManager.recordHeartbeat(ticketId);
 
     // Handle explicit agent_active=0 (dashboard kill) — stop the container
     if (agent_active !== undefined && agent_active === 0) {
@@ -1653,9 +1660,10 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleHeartbeat(request: Request): Promise<Response> {
-    const { ticketId } = await request.json<{ ticketId: string }>();
+    const { ticketId, message } = await request.json<{ ticketId: string; message?: string }>();
 
-    this.agentManager.recordHeartbeat(ticketId);
+    console.log(`[Orchestrator] heartbeat: ticket=${ticketId} ${message || ""}`);
+    this.agentManager.recordPhoneHome(ticketId, message);
 
     return Response.json({ ok: true });
   }
@@ -1807,7 +1815,7 @@ export class Orchestrator extends Container<Bindings> {
   private getSystemStatus(): Response {
     // Get active agents
     const activeAgents = this.ctx.storage.sql.exec(
-      `SELECT id, product, status, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
+      `SELECT id, product, status, agent_message, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
        FROM tickets
        WHERE agent_active = 1
        ORDER BY updated_at DESC`,
@@ -1815,6 +1823,7 @@ export class Orchestrator extends Container<Bindings> {
       id: string;
       product: string;
       status: string;
+      agent_message: string | null;
       last_heartbeat: string | null;
       created_at: string;
       updated_at: string;
@@ -1873,6 +1882,7 @@ export class Orchestrator extends Container<Bindings> {
           id: string;
           product: string;
           status: string;
+          agent_message: string | null;
           last_heartbeat: string | null;
           created_at: string;
           updated_at: string;
@@ -1923,7 +1933,8 @@ export class Orchestrator extends Container<Bindings> {
           const timeSinceUpdate = this.getTimeAgo(agent.updated_at);
 
           message += `${healthEmoji} ${statusEmoji} \`${agent.id}\` (${agent.product})\n`;
-          message += `   Status: ${agent.status} · Updated: ${timeSinceUpdate}\n`;
+          const phaseInfo = agent.agent_message ? ` (${agent.agent_message})` : "";
+          message += `   Status: ${agent.status}${phaseInfo} · Updated: ${timeSinceUpdate}\n`;
           if (agent.pr_url) {
             message += `   PR: ${agent.pr_url}\n`;
           }
@@ -2213,14 +2224,10 @@ export class Orchestrator extends Container<Bindings> {
         console.log(`[Orchestrator] No ticket found for thread_ts=${slackEvent.thread_ts}`);
       }
 
-      // Thread reply but no ticket found - user is replying to something that's not tracked
+      // Thread reply but no ticket found — silently ignore.
+      // Previously this posted an info message, but that was too noisy
+      // (deploy restarts, Socket Mode re-deliveries, etc. caused spam).
       if (slackEvent.type === "message") {
-        await this.postSlackError(
-          slackEvent.channel || "",
-          slackEvent.thread_ts,
-          `ℹ️ This thread is not associated with an active Product Engineer task.\n\n` +
-          `If you want to start a new task, mention me with @product-engineer in your message.`
-        );
         return Response.json({ ok: true, ignored: true, reason: "thread not tracked" });
       }
     }

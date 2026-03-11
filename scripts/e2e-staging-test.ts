@@ -46,7 +46,7 @@ const POLL_INTERVAL_MS = 5_000; // 5 seconds
 const AGENT_START_TIMEOUT_MS = 120_000; // 2 minutes for agent to start
 const AGENT_WORK_TIMEOUT_MS = 600_000; // 10 minutes for agent to finish
 const CI_FIX_TIMEOUT_MS = 300_000; // 5 minutes for CI fix
-const MERGE_TIMEOUT_MS = 120_000; // 2 minutes for merge
+const MERGE_TIMEOUT_MS = 600_000; // 10 minutes for merge (includes Copilot review retries: 5 x 90s)
 
 // --- Interfaces ---
 
@@ -202,11 +202,13 @@ async function fetchGitHubPR(
   return res.json() as Promise<{ state: string; merged: boolean; mergeable: boolean | null; mergeable_state: string }>;
 }
 
-async function getGitHubCheckRuns(
+async function getCommitStatuses(
   repo: string,
   ref: string
-): Promise<Array<{ name: string; status: string; conclusion: string | null }>> {
-  const res = await fetch(`https://api.github.com/repos/${repo}/commits/${ref}/check-runs`, {
+): Promise<Array<{ context: string; state: string; description: string | null }>> {
+  // Use commit statuses API — works with fine-grained PAT "Commit statuses" permission.
+  // (The check-runs API requires "Checks" permission which doesn't exist on fine-grained PATs.)
+  const res = await fetch(`https://api.github.com/repos/${repo}/commits/${ref}/status`, {
     headers: {
       Authorization: `Bearer ${GITHUB_TOKEN}`,
       Accept: "application/vnd.github.v3+json",
@@ -217,8 +219,8 @@ async function getGitHubCheckRuns(
     throw new Error(`GitHub API failed: ${res.status}`);
   }
 
-  const data = (await res.json()) as { check_runs: Array<{ name: string; status: string; conclusion: string | null }> };
-  return data.check_runs;
+  const data = (await res.json()) as { state: string; statuses: Array<{ context: string; state: string; description: string | null }> };
+  return data.statuses;
 }
 
 // --- Test Steps ---
@@ -454,20 +456,22 @@ async function step6_verifyCIFailure(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const checks = await getGitHubCheckRuns(STAGING_REPO, ctx.branchName);
+      const statuses = await getCommitStatuses(STAGING_REPO, ctx.branchName);
 
-      const failedCheck = checks.find(
-        (c) => c.conclusion === "failure"
+      const failedStatus = statuses.find(
+        (s) => s.state === "failure" || s.state === "error"
       );
 
-      if (failedCheck) {
-        logSuccess("step6", `CI failure detected: ${failedCheck.name}`);
+      if (failedStatus) {
+        logSuccess("step6", `CI failure detected: ${failedStatus.context} (${failedStatus.state})`);
         return;
       }
 
-      const pendingChecks = checks.filter((c) => c.status !== "completed");
-      if (pendingChecks.length > 0) {
-        log("step6", `Waiting for checks to complete: ${pendingChecks.map((c) => c.name).join(", ")}`);
+      const pendingStatuses = statuses.filter((s) => s.state === "pending");
+      if (pendingStatuses.length > 0) {
+        log("step6", `Waiting for statuses: ${pendingStatuses.map((s) => s.context).join(", ")}`);
+      } else if (statuses.length === 0) {
+        log("step6", "No commit statuses reported yet");
       }
     } catch (err) {
       log("step6", `Polling error (will retry): ${err}`);

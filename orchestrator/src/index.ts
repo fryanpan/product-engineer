@@ -602,6 +602,7 @@ app.get("/api/dashboard/agents", async (c) => {
       id: string;
       product: string;
       status: string;
+      agent_message: string | null;
       last_heartbeat: string | null;
       created_at: string;
       updated_at: string;

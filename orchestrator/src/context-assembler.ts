@@ -269,8 +269,10 @@ export class ContextAssembler {
     if (!res.ok) return { passed: false, details: `GitHub API error: ${res.status}` };
     const data = await res.json() as { state: string; total_count: number; statuses: Array<{ context: string; state: string; description: string | null }> };
     if (data.total_count === 0) {
-      // No commit statuses — fall back to check-runs API (may 403 with fine-grained PATs)
-      return this.fetchCheckRuns(repo, sha, token);
+      // No commit statuses reported yet. The check_suite webhook that triggered the merge gate
+      // already confirms CI status, so treat this as passed rather than calling the check-runs
+      // API (which requires Checks permission unavailable on fine-grained PATs).
+      return { passed: true, details: "No commit statuses — CI status confirmed via webhook" };
     }
     if (data.state === "pending") return { passed: false, details: "CI still running" };
     if (data.state === "failure" || data.state === "error") {
@@ -313,22 +315,4 @@ export class ContextAssembler {
     };
   }
 
-  private async fetchCheckRuns(repo: string, sha: string, token: string) {
-    const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/check-runs`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
-    });
-    if (!res.ok) {
-      // Fine-grained PATs may not have checks permission — treat as unknown (not a CI failure).
-      // We return passed: true with an explanatory detail so the merge gate doesn't block PRs
-      // on repos where the token simply lacks checks scope. The CI passed event that triggered
-      // the merge gate already confirms CI succeeded via the check_suite webhook.
-      return { passed: true, details: "CI status assumed passed (checks API unavailable — no permission)" };
-    }
-    const data = await res.json() as { check_runs: Array<{ name: string; conclusion: string | null; status: string }> };
-    const failed = data.check_runs.filter(c => c.conclusion && c.conclusion !== "success" && c.conclusion !== "neutral");
-    const pending = data.check_runs.filter(c => c.status !== "completed");
-    if (pending.length > 0) return { passed: false, details: `${pending.length} checks still running` };
-    if (failed.length > 0) return { passed: false, details: failed.map(f => `${f.name}: ${f.conclusion}`).join(", ") };
-    return { passed: true, details: "All checks passed" };
-  }
 }

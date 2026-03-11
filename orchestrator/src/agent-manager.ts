@@ -317,6 +317,19 @@ export class AgentManager {
     );
   }
 
+  /** Record a phone-home from the agent: updates heartbeat timestamp and optional log message. */
+  recordPhoneHome(ticketId: string, message?: string): void {
+    if (this.isTerminal(ticketId)) return;
+    if (message) {
+      this.sql.exec(
+        "UPDATE tickets SET last_heartbeat = datetime('now'), agent_message = ?, updated_at = datetime('now') WHERE id = ? AND agent_active = 1",
+        message, ticketId,
+      );
+    } else {
+      this.recordHeartbeat(ticketId);
+    }
+  }
+
   getActiveAgents(): TicketRecord[] {
     return this.sql.exec(
       "SELECT * FROM tickets WHERE agent_active = 1 ORDER BY updated_at DESC",
