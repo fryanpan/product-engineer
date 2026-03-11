@@ -119,8 +119,13 @@ export class Orchestrator extends Container<Bindings> {
     ).toArray()[0] as { next_at: string | null } | undefined;
     let nextAlarmMs = Date.now() + 300_000; // default: 5 min supervisor tick
     if (nextRetryRow?.next_at) {
-      const retryMs = new Date(nextRetryRow.next_at + "Z").getTime();
-      nextAlarmMs = Math.min(nextAlarmMs, retryMs);
+      // SQLite datetime() returns "YYYY-MM-DD HH:MM:SS" — add "T" separator and "Z" suffix
+      // to form valid ISO-8601 for JS Date parsing
+      const isoStr = nextRetryRow.next_at.replace(" ", "T") + "Z";
+      const retryMs = new Date(isoStr).getTime();
+      if (!Number.isNaN(retryMs)) {
+        nextAlarmMs = Math.min(nextAlarmMs, retryMs);
+      }
     }
     this.ctx.storage.setAlarm(nextAlarmMs);
 
@@ -1706,13 +1711,18 @@ export class Orchestrator extends Container<Bindings> {
 
     console.log(`[Orchestrator] Shutdown all: found ${allTickets.length} total tickets`);
 
-    // Stop all agents via AgentManager (sets agent_active=0 per ticket)
-    await this.agentManager.stopAllAgents("shutdown all requested");
-
+    // Stop each ticket individually to track per-ticket success/failure
     const results: Array<{ ticketId: string; previousStatus: string; success: boolean; error?: string }> = [];
 
     for (const ticket of allTickets) {
-      results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
+      try {
+        await this.agentManager.stopAgent(ticket.id, "shutdown all requested");
+        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[Orchestrator] Failed to stop ${ticket.id}:`, errorMsg);
+        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: errorMsg });
+      }
     }
 
     const successCount = results.filter(r => r.success).length;
@@ -2433,8 +2443,30 @@ export class Orchestrator extends Container<Bindings> {
       slackThreadTs: threadTsToStore || undefined,
       slackChannel: slackEvent.channel || undefined,
     };
-    // Call handleTicketReview directly (not handleEvent which has an agent_active guard
-    // that would skip since we already upserted the ticket above).
+
+    // Create ticket in DB before review — handleTicketReview requires the ticket to exist
+    // for updateStatus/spawnAgent. Use createTicket which is safe if Linear webhook
+    // already created it (handles terminal re-creation and throws for active duplicates).
+    try {
+      this.agentManager.createTicket({
+        id: issue.id,
+        product,
+        slackThreadTs: threadTsToStore || undefined,
+        slackChannel: slackEvent.channel || undefined,
+        identifier: issue.identifier,
+        title,
+      });
+    } catch {
+      // Ticket already exists (from a fast Linear webhook) — safe to proceed
+    }
+
+    // Initialize ticket_metrics row
+    this.ctx.storage.sql.exec(
+      `INSERT INTO ticket_metrics (ticket_id) VALUES (?)
+       ON CONFLICT(ticket_id) DO NOTHING`,
+      issue.id,
+    );
+
     this.handleTicketReview(ticketEvent)
       .catch(err => console.error("[Orchestrator] Direct ticket review failed:", err));
 

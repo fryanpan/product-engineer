@@ -555,15 +555,17 @@ describe("AgentManager", () => {
       );
     });
 
-    it("marks ticket failed after 3 consecutive 503s", async () => {
+    it("marks agent inactive (not terminal) after 3 consecutive 503s", async () => {
       manager.createTicket(defaultParams);
       sql._tickets.get("PE-1")!.agent_active = 1;
+      sql._tickets.get("PE-1")!.status = "active";
       mockNs.setResponse("PE-1", 503, "not ready");
 
       await manager.sendEvent("PE-1", { type: "test" });
 
       const ticket = manager.getTicket("PE-1")!;
-      expect(ticket.status).toBe("failed");
+      // Should NOT be terminal — transient 503s leave ticket retryable
+      expect(ticket.status).toBe("active");
       expect(ticket.agent_active).toBe(0);
     });
 

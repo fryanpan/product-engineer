@@ -276,17 +276,14 @@ export class AgentManager {
       await new Promise(r => setTimeout(r, this.retryDelayMs * (attempt + 1)));
     }
 
-    // Exhausted retries — mark ticket as failed via state machine
+    // Exhausted retries — mark agent inactive but don't terminal-fail the ticket.
+    // Transient 503s (cold start, deploy recovery) should leave the ticket retryable
+    // so supervisor or thread replies can re-activate it later.
     console.error(`[AgentManager] Event delivery failed after retries for ${ticketId}`);
-    try {
-      this.updateStatus(ticketId, { status: "failed" });
-    } catch {
-      // State transition rejected — force it
-      this.sql.exec(
-        "UPDATE tickets SET agent_active = 0, status = 'failed', updated_at = datetime('now') WHERE id = ?",
-        ticketId,
-      );
-    }
+    this.sql.exec(
+      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+      ticketId,
+    );
   }
 
   /**

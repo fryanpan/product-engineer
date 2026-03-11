@@ -77,7 +77,10 @@ export class SlackSocket {
         // Filter out messages from our own bot to prevent loops.
         // We check user ID (not bot_id) because app OAuth tokens produce
         // messages with bot_id even when posted by a real user.
-        const isOwnBot = this.botUserId && slackEvent?.user === this.botUserId;
+        // Fallback: if botUserId is unknown, filter by bot_id to prevent loops.
+        const isOwnBot = this.botUserId
+          ? slackEvent?.user === this.botUserId
+          : !!slackEvent?.bot_id;
         if (slackEvent && !isOwnBot) {
           if (slackEvent.type === "app_mention") {
             // Check if this is a /agent-status command mention
