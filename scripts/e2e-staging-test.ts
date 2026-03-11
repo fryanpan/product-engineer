@@ -405,6 +405,27 @@ async function step5_waitForPR(ctx: TestContext): Promise<void> {
       if (agent?.pr_url) {
         ctx.prUrl = agent.pr_url;
         ctx.branchName = agent.branch_name || null;
+
+        // Fallback: if branch_name not reported, fetch from GitHub PR API
+        if (!ctx.branchName && ctx.prUrl) {
+          try {
+            const prNumber = ctx.prUrl.split("/").pop();
+            const prRes = await fetch(`https://api.github.com/repos/${STAGING_REPO}/pulls/${prNumber}`, {
+              headers: {
+                Authorization: `Bearer ${GITHUB_TOKEN}`,
+                Accept: "application/vnd.github.v3+json",
+              },
+            });
+            if (prRes.ok) {
+              const prData = await prRes.json() as { head: { ref: string } };
+              ctx.branchName = prData.head.ref;
+              log("step5", `Fetched branch name from GitHub API: ${ctx.branchName}`);
+            }
+          } catch {
+            log("step5", "Could not fetch branch name from GitHub API");
+          }
+        }
+
         logSuccess("step5", `PR created: ${agent.pr_url}`);
         return;
       }
