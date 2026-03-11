@@ -91,6 +91,27 @@ export class Orchestrator extends Container<Bindings> {
       // Don't let supervisor failures break the alarm loop
     }
 
+    // Process pending merge gate retries (tickets waiting for Copilot review)
+    if (this.mergeGateRetries.size > 0) {
+      for (const [ticketId, { product }] of this.mergeGateRetries) {
+        // Verify ticket is still eligible (pr_open, not terminal)
+        const row = this.ctx.storage.sql.exec(
+          "SELECT status, pr_url FROM tickets WHERE id = ?", ticketId
+        ).toArray()[0] as { status: string; pr_url: string | null } | undefined;
+
+        if (!row?.pr_url || row.status !== "pr_open") {
+          console.log(`[Orchestrator] Merge gate retry skipped for ${ticketId} (status=${row?.status})`);
+          this.mergeGateRetries.delete(ticketId);
+          continue;
+        }
+
+        console.log(`[Orchestrator] Retrying merge gate for ${ticketId} (Copilot review pending)`);
+        this.evaluateMergeGate(ticketId, product).catch(err =>
+          console.error(`[Orchestrator] Merge gate retry failed for ${ticketId}:`, err)
+        );
+      }
+    }
+
     // Refresh Linear OAuth token every 12h (alarm fires every 5min, so check timestamp)
     try {
       const lastRefreshRow = this.ctx.storage.sql.exec(
@@ -119,6 +140,12 @@ export class Orchestrator extends Container<Bindings> {
   // Verifies the container is actually responsive — the in-memory flag alone isn't
   // reliable across deploys (the flag survives but the container gets replaced).
   private lastHealthCheck = 0;
+
+  // Merge gate retry tracking — tickets waiting for Copilot review
+  // Maps ticketId → { retryCount, product }
+  private mergeGateRetries = new Map<string, { retryCount: number; product: string }>();
+  private static MAX_MERGE_GATE_RETRIES = 5;
+  private static MERGE_GATE_RETRY_DELAY_MS = 90_000; // 90 seconds
   private static HEALTH_CHECK_TTL = 60_000; // 60 seconds
 
   private async ensureContainerRunning() {
@@ -802,10 +829,12 @@ export class Orchestrator extends Container<Bindings> {
     // For Linear comments, route to running agent or re-evaluate via ticket review
     if (event.type === "linear_comment") {
       const ticketRow = this.ctx.storage.sql.exec(
-        "SELECT agent_active FROM tickets WHERE id = ?", event.ticketId,
-      ).toArray()[0] as { agent_active: number } | undefined;
+        "SELECT agent_active, status FROM tickets WHERE id = ?", event.ticketId,
+      ).toArray()[0] as { agent_active: number; status: string } | undefined;
 
-      if (ticketRow?.agent_active) {
+      if (ticketRow && (TERMINAL_STATUSES as readonly string[]).includes(ticketRow.status)) {
+        console.log(`[Orchestrator] Ignoring linear_comment for terminal ticket ${event.ticketId} (status: ${ticketRow.status})`);
+      } else if (ticketRow?.agent_active) {
         // Forward to running agent like a Slack reply
         await this.sendEventToAgent(event);
       } else {
@@ -1189,6 +1218,34 @@ export class Orchestrator extends Container<Bindings> {
       repo: productConfig.repos[0],
     });
 
+    // Wait for Copilot review before proceeding
+    if (!context.copilotReviewComplete) {
+      const retry = this.mergeGateRetries.get(ticketId);
+      const retryCount = retry?.retryCount ?? 0;
+
+      if (retryCount < Orchestrator.MAX_MERGE_GATE_RETRIES) {
+        console.log(
+          `[Orchestrator] Copilot review pending for ${ticketId}, scheduling retry ${retryCount + 1}/${Orchestrator.MAX_MERGE_GATE_RETRIES}`
+        );
+        this.mergeGateRetries.set(ticketId, { retryCount: retryCount + 1, product });
+        // Schedule a DO alarm to re-check — uses the existing alarm mechanism
+        // Set alarm for 90s from now (won't interfere with the 5-min supervisor alarm;
+        // setAlarm picks the earliest scheduled time)
+        const nextRetry = Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS;
+        this.ctx.storage.setAlarm(nextRetry);
+        return;
+      }
+
+      // Exhausted retries — proceed without Copilot review
+      console.log(
+        `[Orchestrator] Copilot review not found after ${Orchestrator.MAX_MERGE_GATE_RETRIES} retries for ${ticketId}, proceeding without it`
+      );
+      this.mergeGateRetries.delete(ticketId);
+    } else {
+      // Copilot review is complete — clear any pending retries
+      this.mergeGateRetries.delete(ticketId);
+    }
+
     let decision;
     try {
       decision = await engine.makeDecision("merge-gate", context);
@@ -1540,11 +1597,16 @@ export class Orchestrator extends Container<Bindings> {
       updates.push("pr_url = ?");
       values.push(pr_url);
 
-      // Increment pr_count when a PR URL is reported
-      this.ctx.storage.sql.exec(
-        `UPDATE ticket_metrics SET pr_count = pr_count + 1, updated_at = datetime('now') WHERE ticket_id = ?`,
-        ticketId,
-      );
+      // Increment pr_count only when the PR URL actually changes
+      const currentPrRow = this.ctx.storage.sql.exec(
+        "SELECT pr_url FROM tickets WHERE id = ?", ticketId,
+      ).toArray()[0] as { pr_url: string | null } | undefined;
+      if (!currentPrRow || currentPrRow.pr_url !== pr_url) {
+        this.ctx.storage.sql.exec(
+          `UPDATE ticket_metrics SET pr_count = pr_count + 1, updated_at = datetime('now') WHERE ticket_id = ?`,
+          ticketId,
+        );
+      }
     }
     if (branch_name) {
       updates.push("branch_name = ?");
@@ -2332,9 +2394,11 @@ export class Orchestrator extends Container<Bindings> {
     const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
 
     // Generate a concise title from the request (first sentence or first 80 chars)
-    const title = rawText.length <= 80
-      ? rawText
-      : rawText.split(/[.!?\n]/)[0].slice(0, 80).trim() || rawText.slice(0, 80).trim();
+    const title = rawText
+      ? (rawText.length <= 80
+        ? rawText
+        : rawText.split(/[.!?\n]/)[0].slice(0, 80).trim() || rawText.slice(0, 80).trim())
+      : "Slack request (no description)";
 
     // Look up the Linear project ID by name
     const projectRes = await fetch("https://api.linear.app/graphql", {
@@ -2486,8 +2550,10 @@ export class Orchestrator extends Container<Bindings> {
 
   private getMetrics(request: Request): Response {
     const url = new URL(request.url);
-    const limit = parseInt(url.searchParams.get("limit") || "50", 10);
-    const days = parseInt(url.searchParams.get("days") || "30", 10);
+    const rawLimit = parseInt(url.searchParams.get("limit") || "50", 10);
+    const limit = Number.isNaN(rawLimit) ? 50 : Math.max(1, Math.min(500, rawLimit));
+    const rawDays = parseInt(url.searchParams.get("days") || "30", 10);
+    const days = Number.isNaN(rawDays) ? 30 : Math.max(1, Math.min(365, rawDays));
 
     // Get ticket metrics with joined data
     const metrics = this.ctx.storage.sql.exec(`
@@ -2607,10 +2673,10 @@ export class Orchestrator extends Container<Bindings> {
       summary: {
         totalTickets: totalTickets.count,
         completed,
-        automergeRate: `${automergeRate}%`,
-        failureRate: `${failureRate}%`,
-        multiPrRate: `${multiPrRate}%`,
-        multiRevisionRate: `${multiRevisionRate}%`,
+        automergeRate: automergeRate === "N/A" ? "N/A" : `${automergeRate}%`,
+        failureRate: failureRate === "N/A" ? "N/A" : `${failureRate}%`,
+        multiPrRate: multiPrRate === "N/A" ? "N/A" : `${multiPrRate}%`,
+        multiRevisionRate: multiRevisionRate === "N/A" ? "N/A" : `${multiRevisionRate}%`,
         avgCompletionMinutes: avgCompletionTime.avg_minutes?.toFixed(1) || "N/A",
       },
       outcomes,
@@ -2624,7 +2690,7 @@ export class Orchestrator extends Container<Bindings> {
         total: totalDecisions.count,
         withFeedback: totalFeedback,
         withoutFeedback: decisionsWithoutFeedback,
-        accuracy: `${decisionAccuracy}%`,
+        accuracy: decisionAccuracy === "N/A" ? "N/A" : `${decisionAccuracy}%`,
         goodCount: goodDecisions,
         badCount: badDecisions,
       },

@@ -30,7 +30,6 @@ import { parseArgs } from "util";
 
 const STAGING_URL = process.env.STAGING_URL || "https://product-engineer-stg.fryanpan.workers.dev";
 const STAGING_SLACK_CHANNEL = process.env.SLACK_CHANNEL || "C0AKB6HUEPM"; // #staging-product-engineer
-const STAGING_LINEAR_TEAM_ID = process.env.LINEAR_TEAM_ID || "ea3572c2-6bb2-4113-9076-3f7ce586768d"; // PE Staging
 const STAGING_REPO = process.env.STAGING_REPO || "fryanpan/staging-test-app";
 
 const API_KEY = process.env.API_KEY;
@@ -85,11 +84,6 @@ function log(step: string, message: string) {
   console.log(`[${elapsed}s] [${step}] ${message}`);
 }
 
-function logError(step: string, message: string) {
-  const elapsed = ((Date.now() - globalStartTime) / 1000).toFixed(1);
-  console.error(`[${elapsed}s] [${step}] ❌ ${message}`);
-}
-
 function logSuccess(step: string, message: string) {
   const elapsed = ((Date.now() - globalStartTime) / 1000).toFixed(1);
   console.log(`[${elapsed}s] [${step}] ✅ ${message}`);
@@ -97,17 +91,6 @@ function logSuccess(step: string, message: string) {
 
 async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  name: string
-): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`${name} timed out after ${ms}ms`)), ms)
-  );
-  return Promise.race([promise, timeout]);
 }
 
 // --- API Clients ---
@@ -160,52 +143,6 @@ async function postSlackMessage(
   return { ts: data.ts, channel: data.channel };
 }
 
-async function createLinearIssue(
-  title: string,
-  description: string
-): Promise<{ id: string; identifier: string }> {
-  const res = await fetch("https://api.linear.app/graphql", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: LINEAR_API_KEY!,
-    },
-    body: JSON.stringify({
-      query: `
-        mutation($title: String!, $description: String!, $teamId: String!) {
-          issueCreate(input: {
-            title: $title,
-            description: $description,
-            teamId: $teamId
-          }) {
-            success
-            issue {
-              id
-              identifier
-            }
-          }
-        }
-      `,
-      variables: {
-        title,
-        description,
-        teamId: STAGING_LINEAR_TEAM_ID,
-      },
-    }),
-  });
-
-  const data = (await res.json()) as {
-    data?: { issueCreate: { success: boolean; issue: { id: string; identifier: string } } };
-    errors?: Array<{ message: string }>;
-  };
-
-  if (data.errors) {
-    throw new Error(`Linear API failed: ${data.errors.map((e) => e.message).join(", ")}`);
-  }
-
-  return data.data!.issueCreate.issue;
-}
-
 async function getLinearIssue(
   issueId: string
 ): Promise<{ state: { name: string }; assignee?: { name: string } }> {
@@ -213,7 +150,7 @@ async function getLinearIssue(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: LINEAR_API_KEY!,
+      Authorization: `Bearer ${LINEAR_API_KEY}`,
     },
     body: JSON.stringify({
       query: `
@@ -349,25 +286,19 @@ async function step2_verifyLinearTicketCreated(ctx: TestContext): Promise<void> 
   while (Date.now() < deadline) {
     // Check orchestrator tickets for one linked to our thread
     try {
-      const status = await apiCall<StatusResponse>("/api/orchestrator/status");
+      const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
+      const ticket = tickets.tickets.find(
+        (t) => t.slack_thread_ts === ctx.slackThreadTs
+      );
 
-      // Look for an agent with our slack thread
-      for (const agent of status.activeAgents) {
-        // Query the full ticket info
-        const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-        const ticket = tickets.tickets.find(
-          (t) => t.slack_thread_ts === ctx.slackThreadTs
-        );
+      if (ticket) {
+        ctx.linearIssueId = ticket.id;
+        log("step2", `Found ticket linked to thread: ${ticket.id}`);
 
-        if (ticket) {
-          ctx.linearIssueId = ticket.id;
-          log("step2", `Found ticket linked to thread: ${ticket.id}`);
-
-          // Get Linear identifier
-          const issue = await getLinearIssue(ticket.id);
-          logSuccess("step2", `Linear ticket created: ${ticket.id} (state: ${issue.state.name})`);
-          return;
-        }
+        // Get Linear identifier
+        const issue = await getLinearIssue(ticket.id);
+        logSuccess("step2", `Linear ticket created: ${ticket.id} (state: ${issue.state.name})`);
+        return;
       }
     } catch (err) {
       log("step2", `Polling error (will retry): ${err}`);

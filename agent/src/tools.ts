@@ -204,7 +204,7 @@ export function createTools(config: AgentConfig) {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: config.linearAppToken,
+              Authorization: `Bearer ${config.linearAppToken}`,
             },
             body: JSON.stringify({
               query: `query($issueId: String!) {
@@ -228,7 +228,7 @@ export function createTools(config: AgentConfig) {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: config.linearAppToken,
+                Authorization: `Bearer ${config.linearAppToken}`,
               },
               body: JSON.stringify({
                 query: `mutation($issueId: String!, $stateId: String!) {

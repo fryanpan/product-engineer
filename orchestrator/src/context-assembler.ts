@@ -31,7 +31,7 @@ export class ContextAssembler {
     slackChannel: string | null;
   }): Promise<Record<string, unknown>> {
     const activeTickets = this.config.sqlExec(
-      "SELECT id, status, product, pr_url FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed')"
+      "SELECT id, status, product, pr_url FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed') ORDER BY created_at DESC LIMIT 10"
     ).toArray();
 
     const [linearComments, slackThread] = await Promise.all([
@@ -75,9 +75,10 @@ export class ContextAssembler {
     const prNumber = prMatch?.[1];
     const repoPath = ticket.repo;
 
-    const [prDetails, reviews, diff, linearComments] = await Promise.all([
+    const [prDetails, reviews, prComments, diff, linearComments] = await Promise.all([
       prNumber && ghToken ? this.fetchPRDetails(repoPath, prNumber, ghToken) : null,
       prNumber && ghToken ? this.fetchPRReviews(repoPath, prNumber, ghToken) : [],
+      prNumber && ghToken ? this.fetchPRComments(repoPath, prNumber, ghToken) : [],
       prNumber && ghToken ? this.fetchPRDiff(repoPath, prNumber, ghToken) : "",
       this.fetchLinearComments(ticket.ticketId).catch(() => []),
     ]);
@@ -90,6 +91,9 @@ export class ContextAssembler {
     // GitHub REST API returns mergeable (boolean|null) and mergeable_state (string)
     const mergeable = prDetails?.mergeable;
     const mergeableState = prDetails?.mergeable_state as string | undefined;
+
+    // Check Copilot review status from reviews and line-level comments
+    const copilotReview = this.extractCopilotReviewStatus(reviews, prComments);
 
     return {
       identifier: ticket.identifier || ticket.ticketId,
@@ -107,6 +111,8 @@ export class ContextAssembler {
       diffSummary: (diff as string).slice(0, 5000),
       reviewComments: reviews,
       linearComments,
+      copilotReviewComplete: copilotReview.reviewed,
+      copilotComments: copilotReview.comments,
     };
   }
 
@@ -274,13 +280,43 @@ export class ContextAssembler {
     return { passed: true, details: "All checks passed" };
   }
 
+  private async fetchPRComments(repo: string, prNumber: string, token: string): Promise<Array<{ user: string; path: string; body: string }>> {
+    const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/comments?per_page=100`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
+    });
+    if (!res.ok) return [];
+    const comments = await res.json() as Array<{ user: { login: string }; path: string; body: string }>;
+    return comments.map(c => ({ user: c.user.login, path: c.path || "", body: c.body?.slice(0, 500) || "" }));
+  }
+
+  /**
+   * Extract Copilot review status from reviews and line-level PR comments.
+   * Returns whether Copilot has reviewed and any comments it left.
+   */
+  private extractCopilotReviewStatus(
+    reviews: Array<{ reviewer: string; state: string; body: string }>,
+    prComments: Array<{ user: string; path: string; body: string }>,
+  ): { reviewed: boolean; comments: Array<{ path: string; body: string }> } {
+    const COPILOT_USERNAME = "copilot-pull-request-reviewer";
+
+    const copilotReview = reviews.find(r => r.reviewer === COPILOT_USERNAME);
+    const copilotComments = prComments
+      .filter(c => c.user === COPILOT_USERNAME)
+      .map(c => ({ path: c.path, body: c.body }));
+
+    return {
+      reviewed: !!copilotReview,
+      comments: copilotComments,
+    };
+  }
+
   private async fetchCheckRuns(repo: string, sha: string, token: string) {
     const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/check-runs`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
     });
     if (!res.ok) {
       // Fine-grained PATs may not have checks permission — treat as unknown
-      return { passed: true, details: "CI status unavailable (no checks permission), assuming passed" };
+      return { passed: false, details: "CI status unavailable (no checks permission)" };
     }
     const data = await res.json() as { check_runs: Array<{ name: string; conclusion: string | null; status: string }> };
     const failed = data.check_runs.filter(c => c.conclusion && c.conclusion !== "success" && c.conclusion !== "neutral");

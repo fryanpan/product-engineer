@@ -62,7 +62,7 @@ export interface DecisionLog {
 // Metrics types for observability
 export interface TicketMetrics {
   ticket_id: string;
-  outcome: "automerge_success" | "automerge_failure" | "manual_merge" | "closed" | "deferred" | "failed";
+  outcome: "automerge_success" | "automerge_failure" | "manual_merge" | "closed" | "deferred" | "failed" | null;
   pr_count: number;           // Number of PRs created for this ticket
   revision_count: number;     // Times sent back for revision
   total_agent_time_ms: number;
