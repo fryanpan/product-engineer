@@ -1698,6 +1698,18 @@ export class Orchestrator extends Container<Bindings> {
     console.log(`[Orchestrator] heartbeat: ticket=${ticketId} ${message || ""}`);
     this.agentManager.recordPhoneHome(ticketId, message);
 
+    // Auto-transition spawning → active on first heartbeat.
+    // The agent sends heartbeats once it's running — this replaces the old
+    // pattern where phoneHome side-effects would overwrite the status field.
+    const ticket = this.agentManager.getTicket(ticketId);
+    if (ticket?.status === "spawning") {
+      this.ctx.storage.sql.exec(
+        "UPDATE tickets SET status = 'active', updated_at = datetime('now') WHERE id = ?",
+        ticketId,
+      );
+      console.log(`[Orchestrator] Auto-transitioned ticket ${ticketId} from spawning → active`);
+    }
+
     return Response.json({ ok: true });
   }
 
