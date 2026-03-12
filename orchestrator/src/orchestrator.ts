@@ -520,9 +520,16 @@ export class Orchestrator extends Container<Bindings> {
         ticket_id TEXT PRIMARY KEY,
         product TEXT NOT NULL,
         retry_count INTEGER NOT NULL DEFAULT 0,
-        next_retry_at TEXT NOT NULL
+        next_retry_at TEXT NOT NULL,
+        phase TEXT NOT NULL DEFAULT 'copilot'
       )
     `);
+    // Migration: add phase column if missing (existing deployments)
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE merge_gate_retries ADD COLUMN phase TEXT NOT NULL DEFAULT 'copilot'`);
+    } catch {
+      // Column already exists
+    }
 
     this.dbInitialized = true;
 
@@ -1190,39 +1197,52 @@ export class Orchestrator extends Container<Bindings> {
       repo: productConfig.repos[0],
     });
 
-    // Wait for Copilot review before proceeding (state persisted in SQLite)
-    if (!context.copilotReviewComplete) {
+    // --- Wait for CI and/or Copilot review before proceeding ---
+    // Retry logic: CI and Copilot share a retry counter with separate phases.
+    // Phase "ci" = waiting for CI. Phase "copilot" = waiting for Copilot review.
+    const checksPassedFlag = (ticketRow.checks_passed as number) === 1;
+    const ciReady = !context.hasCI || context.ciPassed || checksPassedFlag;
+    const copilotReady = context.copilotReviewComplete as boolean;
+
+    const waitReason = !ciReady ? "ci" : !copilotReady ? "copilot" : null;
+
+    if (waitReason) {
       const retryRow = this.ctx.storage.sql.exec(
-        "SELECT retry_count FROM merge_gate_retries WHERE ticket_id = ?", ticketId
-      ).toArray()[0] as { retry_count: number } | undefined;
-      const retryCount = retryRow?.retry_count ?? 0;
+        "SELECT retry_count, phase FROM merge_gate_retries WHERE ticket_id = ?", ticketId
+      ).toArray()[0] as { retry_count: number; phase: string } | undefined;
+      let retryCount = retryRow?.retry_count ?? 0;
+
+      // Reset counter when transitioning from CI wait → Copilot wait
+      if (retryRow?.phase === "ci" && waitReason === "copilot") {
+        retryCount = 0;
+      }
 
       if (retryCount < Orchestrator.MAX_MERGE_GATE_RETRIES) {
         const nextRetryAt = new Date(Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS).toISOString().replace("T", " ").replace("Z", "");
+        const label = waitReason === "ci" ? `CI pending (${context.ciFailureDetails})` : "Copilot review pending";
         console.log(
-          `[Orchestrator] Copilot review pending for ${ticketId}, scheduling retry ${retryCount + 1}/${Orchestrator.MAX_MERGE_GATE_RETRIES}`
+          `[Orchestrator] ${label} for ${ticketId}, scheduling retry ${retryCount + 1}/${Orchestrator.MAX_MERGE_GATE_RETRIES}`
         );
         this.ctx.storage.sql.exec(
-          `INSERT INTO merge_gate_retries (ticket_id, product, retry_count, next_retry_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(ticket_id) DO UPDATE SET retry_count = ?, next_retry_at = ?`,
-          ticketId, product, retryCount + 1, nextRetryAt, retryCount + 1, nextRetryAt
+          `INSERT INTO merge_gate_retries (ticket_id, product, retry_count, next_retry_at, phase)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(ticket_id) DO UPDATE SET retry_count = ?, next_retry_at = ?, phase = ?`,
+          ticketId, product, retryCount + 1, nextRetryAt, waitReason,
+          retryCount + 1, nextRetryAt, waitReason,
         );
-        // Schedule alarm for retry — uses Math.min with existing alarm in the alarm handler
-        const nextRetryMs = Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS;
-        this.ctx.storage.setAlarm(nextRetryMs);
+        this.ctx.storage.setAlarm(Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS);
         return;
       }
 
-      // Exhausted retries — proceed without Copilot review
+      // Exhausted retries — proceed anyway
+      const exhaustedLabel = waitReason === "ci" ? "CI" : "Copilot review";
       console.log(
-        `[Orchestrator] Copilot review not found after ${Orchestrator.MAX_MERGE_GATE_RETRIES} retries for ${ticketId}, proceeding without it`
+        `[Orchestrator] ${exhaustedLabel} not ready after ${Orchestrator.MAX_MERGE_GATE_RETRIES} retries for ${ticketId}, proceeding`
       );
-      this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
-    } else {
-      // Copilot review is complete — clear any pending retries
-      this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
     }
+
+    // Clear retries — either everything is ready, or we've exhausted retries
+    this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
 
     let decision;
     try {
@@ -1609,21 +1629,17 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     // Trigger merge gate when PR URL is reported.
-    // Two scenarios:
-    // 1. PR URL + status "pr_open" — agent explicitly signals PR is ready
-    // 2. PR URL is newly set + checks_passed flag — CI completed before PR was created
-    //    (race condition: check_suite webhook arrived before agent reported PR URL)
+    // Always trigger — evaluateMergeGate handles all cases:
+    // - Repos with CI: checks already passed (via webhook) or will pass later
+    // - Repos without CI: fetchCIStatus returns passed when no statuses exist
+    // - Copilot review: retry loop waits for Copilot if enabled, proceeds after timeout
     if (pr_url) {
-      // Re-read ticket after the DB update above
       const ticket = this.agentManager.getTicket(ticketId);
       if (ticket) {
-        if (status === "pr_open" || ticket.checks_passed === 1) {
-          console.log(`[Orchestrator] PR URL reported for ${ticketId}, triggering merge gate (status=${status}, checks_passed=${ticket.checks_passed})`);
-          // Run async — don't block the status update response
-          this.evaluateMergeGate(ticketId, ticket.product).catch(err =>
-            console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
-          );
-        }
+        console.log(`[Orchestrator] PR URL reported for ${ticketId}, triggering merge gate (status=${status}, checks_passed=${ticket.checks_passed})`);
+        this.evaluateMergeGate(ticketId, ticket.product).catch(err =>
+          console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
+        );
       }
     }
 
