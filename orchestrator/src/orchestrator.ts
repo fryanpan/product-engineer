@@ -1237,12 +1237,13 @@ export class Orchestrator extends Container<Bindings> {
       decision = { action: "escalate", reason: "Merge gate LLM call failed", confidence: 0 };
     }
 
-    // Log the decision
+    // Log the decision (use human-readable identifier like BC-156, fall back to UUID)
+    const displayId = (ticketRow.identifier as string) || ticketId;
     await engine.logDecision({
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       type: "merge_gate",
-      ticket_id: ticketId,
+      ticket_id: displayId,
       context_summary: `PR: ${ticketRow.pr_url}`,
       action: decision.action,
       reason: decision.reason,
@@ -1426,13 +1427,22 @@ export class Orchestrator extends Container<Bindings> {
     for (const action of actions) {
       if (action.action === "none") continue;
 
-      // Log each action
+      // Log each action (use human-readable identifier for display)
+      let displayId = action.target;
+      if (action.target !== "system") {
+        // Look up the human-readable identifier from the tickets table
+        const ticketRow = this.ctx.storage.sql.exec(
+          "SELECT identifier FROM tickets WHERE id = ?", action.target
+        ).toArray()[0] as { identifier: string | null } | undefined;
+        displayId = ticketRow?.identifier || action.target;
+      }
+
       await engine.logDecision({
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         type: "supervisor",
-        ticket_id: action.target !== "system" ? action.target : null,
-        context_summary: `Supervisor: ${action.action} on ${action.target}`,
+        ticket_id: action.target !== "system" ? displayId : null,
+        context_summary: `Supervisor: ${action.action} on ${displayId}`,
         action: action.action,
         reason: action.reason,
         confidence: 0,
@@ -1837,7 +1847,12 @@ export class Orchestrator extends Container<Bindings> {
 
     const params: (string | number)[] = [];
     let query = `
-      SELECT id as ticketId, product, status, transcript_r2_key as r2Key, updated_at as uploadedAt
+      SELECT
+        COALESCE(identifier, id) as ticketId,
+        product,
+        status,
+        transcript_r2_key as r2Key,
+        updated_at as uploadedAt
       FROM tickets
       WHERE transcript_r2_key IS NOT NULL
     `;

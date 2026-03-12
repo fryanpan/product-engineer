@@ -1,3 +1,34 @@
+## 2026-03-12 - BC-156: Use human-readable identifiers in all messages (PR #79)
+
+**Context:** Decision messages in Slack were showing UUIDs instead of human-readable ticket identifiers (e.g., "1513bdac-12ea-46b1-9f7f-85c7ad1c8450" instead of "BC-156"). This made messages harder to parse and reduced usability.
+
+**What worked:**
+- Systematic audit of all message paths: decision logs, Slack notifications, Linear comments, transcript lists
+- Reused existing `identifier` field in tickets table (already being set by Linear webhooks)
+- Context assembler already had the pattern for ticket review and merge gate - extended to supervisor
+- Two-field approach for supervisor: `ticketId` (human-readable, for display) + `internalId` (UUID, for database operations)
+
+**Implementation:**
+- **orchestrator/src/orchestrator.ts**: Merge gate and supervisor logging now use `ticket.identifier || ticketId` fallback
+- **orchestrator/src/context-assembler.ts**: `forSupervisor()` returns both fields for all ticket lists
+- **orchestrator/src/prompts/supervisor.mustache**: Updated to clarify using `internalId` for action targets
+- **Transcript API**: Query uses `COALESCE(identifier, id)` to prefer human IDs in list results
+
+**Test results:**
+- 87 tests pass, 4 unrelated failures (pre-existing missing dependencies)
+- No test updates needed - changes are backwards-compatible (UUIDs work as fallback)
+
+**What didn't:**
+- Initially missed that supervisor returns `target` field which needs identifier lookup - caught during implementation
+- Context assembler test didn't verify the actual field values - only checked types
+
+**Action:**
+- Monitor decision messages in #product-engineer-decisions after deploy to verify identifiers appear
+- Consider adding identifier column to all database queries for consistency
+- Future: make identifier field NOT NULL in schema (requires migration for old tickets)
+
+---
+
 ## 2026-03-12 - BC-152: Merge gate Copilot retry optimization (PR #77)
 
 **Context:** Repos without Copilot review enabled waited through 5 retries × 90s = 7.5 minutes before proceeding. This was unnecessarily slow.

@@ -119,7 +119,7 @@ export class ContextAssembler {
   /** Assemble context for supervisor tick */
   async forSupervisor(): Promise<Record<string, unknown>> {
     const activeTickets = this.config.sqlExec(
-      `SELECT id, product, status, pr_url, slack_thread_ts, slack_channel,
+      `SELECT id, identifier, product, status, pr_url, slack_thread_ts, slack_channel,
               updated_at, created_at
        FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed')
        AND agent_active = 1`
@@ -133,7 +133,8 @@ export class ContextAssembler {
       const heartbeatAgeMin = Math.floor((now - updatedMs) / 60000);
 
       return {
-        ticketId: t.id,
+        ticketId: (t.identifier as string) || (t.id as string),
+        internalId: t.id,
         product: t.product,
         status: t.status,
         lastHeartbeat: t.updated_at,
@@ -146,14 +147,24 @@ export class ContextAssembler {
     });
 
     const stalePRs = this.config.sqlExec(
-      `SELECT id, pr_url, updated_at FROM tickets
+      `SELECT id, identifier, pr_url, updated_at FROM tickets
        WHERE pr_url IS NOT NULL AND status = 'pr_open'
        AND datetime(updated_at) < datetime('now', '-4 hours')`
-    ).toArray();
+    ).toArray().map(t => ({
+      ticketId: (t as Record<string, unknown>).identifier || (t as Record<string, unknown>).id,
+      internalId: (t as Record<string, unknown>).id,
+      pr_url: (t as Record<string, unknown>).pr_url,
+      updated_at: (t as Record<string, unknown>).updated_at,
+    }));
 
     const queuedTickets = this.config.sqlExec(
-      "SELECT id, product, status FROM tickets WHERE status = 'queued' ORDER BY created_at ASC"
-    ).toArray();
+      "SELECT id, identifier, product, status FROM tickets WHERE status = 'queued' ORDER BY created_at ASC"
+    ).toArray().map(t => ({
+      ticketId: (t as Record<string, unknown>).identifier || (t as Record<string, unknown>).id,
+      internalId: (t as Record<string, unknown>).id,
+      product: (t as Record<string, unknown>).product,
+      status: (t as Record<string, unknown>).status,
+    }));
 
     return {
       agentCount: agents.length,
