@@ -504,6 +504,16 @@ export class Orchestrator extends Container<Bindings> {
         throw err;
       }
     }
+    // Migration: add checks_passed flag — set when check_suite webhook arrives before PR URL
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN checks_passed INTEGER DEFAULT 0`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add checks_passed column:", err);
+        throw err;
+      }
+    }
     // Merge gate retry state — persisted so it survives DO restarts/deploys
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS merge_gate_retries (
@@ -894,9 +904,9 @@ export class Orchestrator extends Container<Bindings> {
 
       // Branch names use the human-readable identifier (e.g., ticket/PES-23),
       // but the canonical ticket ID is the Linear UUID. Fall back to identifier lookup.
-      if (!ticketRow?.pr_url) {
+      if (!ticketRow) {
         const byIdentifier = this.agentManager.getTicketByIdentifier(event.ticketId);
-        if (byIdentifier?.pr_url) {
+        if (byIdentifier) {
           console.log(`[Orchestrator] checks_passed: resolved identifier ${event.ticketId} → ticket ${byIdentifier.id}`);
           ticketRow = byIdentifier;
         }
@@ -906,7 +916,18 @@ export class Orchestrator extends Container<Bindings> {
         await this.evaluateMergeGate(ticketRow.id, event.product);
         return Response.json({ ok: true, ticketId: ticketRow.id });
       }
-      // No PR yet — route to agent normally
+
+      // PR URL not set yet — store checks_passed flag so merge gate triggers
+      // when the agent later reports the PR URL via handleStatusUpdate.
+      if (ticketRow) {
+        console.log(`[Orchestrator] checks_passed for ${ticketRow.id} but no PR URL yet — storing flag for deferred merge gate`);
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET checks_passed = 1, updated_at = datetime('now') WHERE id = ?",
+          ticketRow.id,
+        );
+        return Response.json({ ok: true, ticketId: ticketRow.id, deferred: true });
+      }
+      // Ticket not found — route to agent normally
     }
 
     // Route to TicketAgent for all other event types
@@ -1580,17 +1601,22 @@ export class Orchestrator extends Container<Bindings> {
       );
     }
 
-    // When a PR URL is first reported, check if CI already passed and trigger merge gate.
-    // This closes the race condition where check_suite webhook arrives before the agent
-    // reports the PR URL, causing the merge gate to be skipped.
-    if (pr_url && status === "pr_open") {
+    // Trigger merge gate when PR URL is reported.
+    // Two scenarios:
+    // 1. PR URL + status "pr_open" — agent explicitly signals PR is ready
+    // 2. PR URL is newly set + checks_passed flag — CI completed before PR was created
+    //    (race condition: check_suite webhook arrived before agent reported PR URL)
+    if (pr_url) {
+      // Re-read ticket after the DB update above
       const ticket = this.agentManager.getTicket(ticketId);
       if (ticket) {
-        console.log(`[Orchestrator] PR URL reported for ${ticketId}, checking CI status for merge gate...`);
-        // Run async — don't block the status update response
-        this.evaluateMergeGate(ticketId, ticket.product).catch(err =>
-          console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
-        );
+        if (status === "pr_open" || ticket.checks_passed === 1) {
+          console.log(`[Orchestrator] PR URL reported for ${ticketId}, triggering merge gate (status=${status}, checks_passed=${ticket.checks_passed})`);
+          // Run async — don't block the status update response
+          this.evaluateMergeGate(ticketId, ticket.product).catch(err =>
+            console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
+          );
+        }
       }
     }
 

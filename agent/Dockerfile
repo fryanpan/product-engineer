@@ -17,7 +17,7 @@ RUN apt-get update && \
 RUN useradd -m -s /bin/bash agent
 RUN mkdir -p /workspace && chown agent:agent /workspace
 
-# Cache-bust: 2026-03-11
+# Cache-bust: 2026-03-12-v2
 COPY . /app/
 WORKDIR /app
 RUN bun install
