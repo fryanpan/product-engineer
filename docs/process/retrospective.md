@@ -1,3 +1,36 @@
+## 2026-03-12 - BC-157: Deduplicate merge gate decisions (PR #80)
+
+**Context:** Merge gate was generating repetitive, identical decisions for the same PR state. Multiple triggers (CI webhook, PR status update, supervisor, Copilot retries) all called `evaluateMergeGate()` without checking if the PR had actually changed since the last decision.
+
+**What worked:**
+- Simple state tracking: store PR head SHA after each decision, skip if unchanged
+- SHA-based deduplication is deterministic and catches all duplicate triggers
+- Change detection with explicit annotation (e.g., "changes: new commits abc123 → def456") provides clarity
+- Migration pattern with duplicate column check is well-established
+
+**Implementation:**
+- **orchestrator/src/orchestrator.ts**: Add `last_merge_decision_sha` column migration, deduplication check before LLM call, SHA update after decision
+- **orchestrator/src/context-assembler.ts**: Include `headSha` in merge gate context (was computed but not returned)
+- **orchestrator/src/types.ts**: Add field to `TicketRecord` interface
+
+**Key insight:**
+The problem wasn't in any single trigger path - it was the lack of a shared deduplication layer. Multiple valid triggers all converged on `evaluateMergeGate()`, which had no memory of previous decisions. Adding state at the decision point (not the trigger points) fixes all paths at once.
+
+**Test results:**
+- 87 tests pass (same as baseline - no new test failures)
+- Deduplication logic is straightforward: SHA match = skip, SHA diff = proceed
+
+**What didn't:**
+- Initially considered tracking multiple state dimensions (reviews, CI status, merge conflicts) but SHA is simpler and sufficient - any material change results in a new commit/rebase
+
+**Action:**
+- Monitor #product-engineer-decisions after deploy to verify:
+  - Single decision per PR head SHA
+  - Change annotations appear in subsequent decisions
+  - Copilot review retries don't spam when SHA unchanged
+
+---
+
 ## 2026-03-12 - BC-156: Use human-readable identifiers in all messages (PR #79)
 
 **Context:** Decision messages in Slack were showing UUIDs instead of human-readable ticket identifiers (e.g., "1513bdac-12ea-46b1-9f7f-85c7ad1c8450" instead of "BC-156"). This made messages harder to parse and reduced usability.
