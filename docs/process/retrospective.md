@@ -212,3 +212,20 @@ The issue was fixed earlier today with commit edf0236 (orchestrator enriches eve
 - Added tests to verify the full flow
 
 **Key insight:** For critical routing data like thread_ts, pass it at BOTH initialization and per-event. Don't assume events will always arrive before the agent needs to post.
+
+## 2026-03-12 - BC-153: Clean up stale agent:* status values
+
+**What worked:**
+- Clear ticket description made implementation straightforward
+- learnings.md guidance ("lifecycle fixes need both forward-looking prevention AND retroactive cleanup") directly informed the approach
+- Integration test structure was easy to extend with new test case
+- Migration pattern (try/catch with console.log, don't throw on failure) matches existing migrations in the codebase
+
+**What didn't:**
+- Had to install dependencies (`bun install`) before tests would run — missing `mustache` package
+- Git identity wasn't configured in the container, required manual setup
+
+**Action:**
+- Migration added to `initDb()` with clear logging and audit trail
+- Marked as "remove after one deploy cycle" to avoid accumulating dead code
+- Integration test documents expected behavior for stale vs. valid tickets
