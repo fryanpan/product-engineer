@@ -514,7 +514,8 @@ export class Orchestrator extends Container<Bindings> {
         throw err;
       }
     }
-    // Migration: add last_merge_decision_sha — track when we last made a merge decision to prevent noise
+    // Migration: add last_merge_decision_sha — stores composite fingerprint of merge-relevant state
+    // (head SHA, CI status, Copilot review, mergeable state, review count) to deduplicate merge gate decisions
     try {
       this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN last_merge_decision_sha TEXT`);
     } catch (err) {
@@ -1150,8 +1151,14 @@ export class Orchestrator extends Container<Bindings> {
    * LLM Merge Gate — evaluates whether a PR is ready to auto-merge.
    * Called when CI passes and PR exists for a tracked ticket.
    *
-   * Deduplicates decisions: only makes a new decision if the PR state has materially changed
-   * since the last decision (new commits, new reviews, CI status change, merge conflicts resolved).
+   * Deduplicates decisions using composite fingerprint: only makes a new decision if any
+   * merge-relevant state has changed since the last decision:
+   * - Head SHA (new commits)
+   * - CI status (passed/failed)
+   * - Copilot review status (complete/pending)
+   * - Mergeable state (MERGEABLE/CONFLICTING/UNKNOWN)
+   * - Review count (new human reviews)
+   * - Copilot comment content (new/updated comments)
    */
   private async evaluateMergeGate(
     ticketId: string,
@@ -1241,21 +1248,55 @@ export class Orchestrator extends Container<Bindings> {
       this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
     }
 
-    // Deduplication: skip decision if PR state hasn't changed since last decision
-    const currentHeadSha = context.headSha as string;
-    const lastDecisionSha = ticketRow.last_merge_decision_sha as string | null;
+    // Deduplication: skip decision if PR state hasn't materially changed since last decision
+    // Track composite fingerprint of all merge-relevant state (not just commit SHA)
+    const copilotComments = context.copilotComments as Array<{ path: string; body: string }>;
+    const copilotCommentsHash = copilotComments.length > 0
+      ? copilotComments.map(c => `${c.path}:${c.body.slice(0, 100)}`).join(";").slice(0, 200)
+      : "none";
 
-    if (currentHeadSha && lastDecisionSha === currentHeadSha) {
-      console.log(`[Orchestrator] Skipping merge gate for ${ticketId} — no changes since last decision (SHA: ${currentHeadSha.slice(0, 7)})`);
+    const currentFingerprint = [
+      `sha:${context.headSha}`,
+      `ci:${context.ciPassed}`,
+      `copilot:${context.copilotReviewComplete}`,
+      `mergeable:${context.mergeable}`,
+      `reviews:${(context.reviewComments as unknown[]).length}`,
+      `copilot_comments:${copilotCommentsHash}`,
+    ].join("|");
+
+    const lastFingerprint = ticketRow.last_merge_decision_sha as string | null;
+
+    if (lastFingerprint === currentFingerprint) {
+      console.log(`[Orchestrator] Skipping merge gate for ${ticketId} — no changes since last decision`);
       return;
     }
 
     // Detect what changed since last decision for the decision log
     const changes: string[] = [];
-    if (!lastDecisionSha) {
+    if (!lastFingerprint) {
       changes.push("initial evaluation");
-    } else if (lastDecisionSha !== currentHeadSha) {
-      changes.push(`new commits (${lastDecisionSha.slice(0, 7)} → ${currentHeadSha.slice(0, 7)})`);
+    } else {
+      const lastParts = Object.fromEntries(lastFingerprint.split("|").map(p => p.split(":")));
+      const currentParts = Object.fromEntries(currentFingerprint.split("|").map(p => p.split(":")));
+
+      if (lastParts.sha !== currentParts.sha) {
+        changes.push(`new commits (${lastParts.sha?.slice(0, 7) || "?"} → ${currentParts.sha?.slice(0, 7) || "?"})`);
+      }
+      if (lastParts.ci !== currentParts.ci) {
+        changes.push(`CI ${currentParts.ci === "true" ? "passed" : "failed"}`);
+      }
+      if (lastParts.copilot !== currentParts.copilot) {
+        changes.push(currentParts.copilot === "true" ? "Copilot review complete" : "Copilot review pending");
+      }
+      if (lastParts.mergeable !== currentParts.mergeable) {
+        changes.push(`mergeable state: ${lastParts.mergeable} → ${currentParts.mergeable}`);
+      }
+      if (lastParts.reviews !== currentParts.reviews) {
+        changes.push(`reviews: ${lastParts.reviews} → ${currentParts.reviews}`);
+      }
+      if (lastParts.copilot_comments !== currentParts.copilot_comments) {
+        changes.push("Copilot comments updated");
+      }
     }
 
     let decision;
@@ -1267,10 +1308,10 @@ export class Orchestrator extends Container<Bindings> {
       decision = { action: "escalate", reason: "Merge gate LLM call failed", confidence: 0 };
     }
 
-    // Update last decision SHA to prevent re-evaluating on identical state
+    // Update last decision fingerprint to prevent re-evaluating on identical state
     this.ctx.storage.sql.exec(
       "UPDATE tickets SET last_merge_decision_sha = ?, updated_at = datetime('now') WHERE id = ?",
-      currentHeadSha, ticketId
+      currentFingerprint, ticketId
     );
 
     // Log the decision (use human-readable identifier like BC-156, fall back to UUID)

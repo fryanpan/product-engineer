@@ -31,6 +31,41 @@ The problem wasn't in any single trigger path - it was the lack of a shared dedu
 
 ---
 
+## 2026-03-12 - BC-157: Complete merge gate deduplication with composite fingerprint
+
+**Context:** BC-157 branch had partial implementation that only tracked PR head SHA for deduplication. This missed cases where merge conditions changed without new commits (CI status changes, Copilot review completes, merge conflicts resolve, new reviews arrive).
+
+**What worked:**
+- User identified the gap through question: "Does this account for no new commits but the merge gates changing?"
+- Composite fingerprint approach captures all merge-relevant state changes, not just code changes
+- Fingerprint format is simple pipe-delimited string: `sha:abc123|ci:true|copilot:false|mergeable:CONFLICTING|reviews:2`
+- Change detection logic parses fingerprints and reports exactly what changed (e.g., "CI passed", "Copilot review complete", "mergeable state: CONFLICTING → MERGEABLE")
+- Reused existing `last_merge_decision_sha` column (misnomer now, but avoids another migration)
+- All 87 tests still pass
+
+**Implementation:**
+- **orchestrator/src/orchestrator.ts:1250-1295**: Replace SHA-only check with composite fingerprint
+  - Track: head SHA, CI status, Copilot review status, mergeable state, review count, Copilot comment content
+  - Copilot comments hashed to detect re-review with new comments (path + first 100 chars of each comment)
+  - Parse last and current fingerprints to detect what changed
+  - Include specific changes in decision log reason (e.g., "CI passed", "Copilot comments updated")
+- **orchestrator/src/orchestrator.ts:517-520**: Update migration comment to reflect composite fingerprint purpose
+- **orchestrator/src/orchestrator.ts:1151-1161**: Update doc comment to include all tracked dimensions
+
+**Test results:**
+- 87 tests pass, 4 pre-existing failures (missing hono/mustache dependencies)
+- No test changes needed (fingerprint comparison is backwards-compatible with null/missing values)
+
+**What didn't:**
+- Initial implementation (5baef95) only considered code changes, not merge readiness changes
+- Took user feedback to identify the gap
+
+**Action:**
+- Monitor merge gate behavior in production to verify fingerprint correctly triggers re-evaluation when CI/Copilot/mergeable state changes
+- Consider more semantic column name in future schema refactor (e.g., `last_merge_state_fingerprint`)
+
+---
+
 ## 2026-03-12 - BC-156: Use human-readable identifiers in all messages (PR #79)
 
 **Context:** Decision messages in Slack were showing UUIDs instead of human-readable ticket identifiers (e.g., "1513bdac-12ea-46b1-9f7f-85c7ad1c8450" instead of "BC-156"). This made messages harder to parse and reduced usability.
