@@ -1,8 +1,9 @@
 import { Container } from "@cloudflare/containers";
-import { TERMINAL_STATUSES, type TicketEvent, type TicketAgentConfig, type Bindings } from "./types";
+import { TERMINAL_STATUSES, TICKET_STATES, type TicketEvent, type Bindings } from "./types";
 import type { ProductConfig } from "./registry";
 import { DecisionEngine } from "./decision-engine";
 import { ContextAssembler } from "./context-assembler";
+import { AgentManager, type SpawnConfig } from "./agent-manager";
 
 function sanitizeTicketId(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -47,6 +48,7 @@ export class Orchestrator extends Container<Bindings> {
   private containerStarted = false;
   private _decisionEngine: DecisionEngine | null = null;
   private _contextAssembler: ContextAssembler | null = null;
+  private agentManager!: AgentManager;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     // @ts-expect-error — DurableObjectState generic mismatch between Container SDK and Workers types
@@ -80,9 +82,6 @@ export class Orchestrator extends Container<Bindings> {
     this.initDb();
     await this.ensureContainerRunning();
 
-    // Schedule next alarm (5 minutes) for supervisor tick
-    this.ctx.storage.setAlarm(Date.now() + 300_000);
-
     // Run LLM supervisor tick — checks agent health, stale PRs, queued tickets
     try {
       await this.runSupervisorTick();
@@ -90,6 +89,45 @@ export class Orchestrator extends Container<Bindings> {
       console.error("[Orchestrator] Supervisor tick failed:", err);
       // Don't let supervisor failures break the alarm loop
     }
+
+    // Process pending merge gate retries (persisted in SQLite, survives DO restarts)
+    const pendingRetries = this.ctx.storage.sql.exec(
+      "SELECT ticket_id, product, retry_count FROM merge_gate_retries WHERE next_retry_at <= datetime('now')"
+    ).toArray() as Array<{ ticket_id: string; product: string; retry_count: number }>;
+
+    for (const retry of pendingRetries) {
+      // Verify ticket is still eligible (pr_open, not terminal)
+      const row = this.ctx.storage.sql.exec(
+        "SELECT status, pr_url FROM tickets WHERE id = ?", retry.ticket_id
+      ).toArray()[0] as { status: string; pr_url: string | null } | undefined;
+
+      if (!row?.pr_url || this.agentManager.isTerminalStatus(row.status)) {
+        console.log(`[Orchestrator] Merge gate retry skipped for ${retry.ticket_id} (status=${row?.status}, pr_url=${!!row?.pr_url})`);
+        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", retry.ticket_id);
+        continue;
+      }
+
+      console.log(`[Orchestrator] Retrying merge gate for ${retry.ticket_id} (Copilot review pending, attempt ${retry.retry_count})`);
+      this.evaluateMergeGate(retry.ticket_id, retry.product).catch(err =>
+        console.error(`[Orchestrator] Merge gate retry failed for ${retry.ticket_id}:`, err)
+      );
+    }
+
+    // Schedule next alarm — pick the earliest of: supervisor (5 min) or next pending retry
+    const nextRetryRow = this.ctx.storage.sql.exec(
+      "SELECT MIN(next_retry_at) as next_at FROM merge_gate_retries"
+    ).toArray()[0] as { next_at: string | null } | undefined;
+    let nextAlarmMs = Date.now() + 300_000; // default: 5 min supervisor tick
+    if (nextRetryRow?.next_at) {
+      // SQLite datetime() returns "YYYY-MM-DD HH:MM:SS" — add "T" separator and "Z" suffix
+      // to form valid ISO-8601 for JS Date parsing
+      const isoStr = nextRetryRow.next_at.replace(" ", "T") + "Z";
+      const retryMs = new Date(isoStr).getTime();
+      if (!Number.isNaN(retryMs)) {
+        nextAlarmMs = Math.min(nextAlarmMs, retryMs);
+      }
+    }
+    this.ctx.storage.setAlarm(nextAlarmMs);
 
     // Refresh Linear OAuth token every 12h (alarm fires every 5min, so check timestamp)
     try {
@@ -119,6 +157,10 @@ export class Orchestrator extends Container<Bindings> {
   // Verifies the container is actually responsive — the in-memory flag alone isn't
   // reliable across deploys (the flag survives but the container gets replaced).
   private lastHealthCheck = 0;
+
+  // Merge gate retry constants — state is persisted in SQLite (merge_gate_retries table)
+  private static MAX_MERGE_GATE_RETRIES = 5;
+  private static MERGE_GATE_RETRY_DELAY_MS = 90_000; // 90 seconds
   private static HEALTH_CHECK_TTL = 60_000; // 60 seconds
 
   private async ensureContainerRunning() {
@@ -452,7 +494,43 @@ export class Orchestrator extends Container<Bindings> {
         throw err;
       }
     }
+    // Migration: add agent_message column — stores last phone-home log message from agent (observability only)
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_message TEXT`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add agent_message column:", err);
+        throw err;
+      }
+    }
+    // Migration: add checks_passed flag — set when check_suite webhook arrives before PR URL
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN checks_passed INTEGER DEFAULT 0`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add checks_passed column:", err);
+        throw err;
+      }
+    }
+    // Merge gate retry state — persisted so it survives DO restarts/deploys
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS merge_gate_retries (
+        ticket_id TEXT PRIMARY KEY,
+        product TEXT NOT NULL,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TEXT NOT NULL
+      )
+    `);
+
     this.dbInitialized = true;
+
+    // Initialize AgentManager after tables are created
+    this.agentManager = new AgentManager(
+      { exec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params) },
+      this.env as Record<string, unknown>,
+    );
   }
 
   // --- Product registry CRUD methods ---
@@ -694,14 +772,13 @@ export class Orchestrator extends Container<Bindings> {
         // Handle dynamic routes
         if (url.pathname.startsWith("/ticket-status/")) {
           const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
-          const row = this.ctx.storage.sql.exec(
-            "SELECT agent_active, status, product FROM tickets WHERE id = ?",
-            ticketId,
-          ).toArray()[0] as { agent_active: number; status: string; product: string } | undefined;
-          if (!row) return Response.json({ error: "not found" }, { status: 404 });
+          const ticket = this.agentManager.getTicket(ticketId);
+          if (!ticket) return Response.json({ error: "not found" }, { status: 404 });
           return Response.json({
-            ...row,
-            terminal: (TERMINAL_STATUSES as readonly string[]).includes(row.status),
+            agent_active: ticket.agent_active,
+            status: ticket.status,
+            product: ticket.product,
+            terminal: this.agentManager.isTerminal(ticketId),
           });
         }
         if (url.pathname.startsWith("/products/")) {
@@ -726,7 +803,8 @@ export class Orchestrator extends Container<Bindings> {
 
     // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID ticket.
     // GitHub webhooks extract taskId from branch names like "ticket/PES-5",
-    // but the canonical ticket is stored under the Linear UUID. Look up by branch_name.
+    // but the canonical ticket is stored under the Linear UUID. Look up by branch_name
+    // first, then fall back to identifier (e.g., "PES-5" matches tickets.identifier).
     if (event.source === "github") {
       const byBranch = this.ctx.storage.sql.exec(
         "SELECT id FROM tickets WHERE branch_name = ? OR branch_name = ?",
@@ -735,17 +813,20 @@ export class Orchestrator extends Container<Bindings> {
       if (byBranch) {
         console.log(`[Orchestrator] Resolved branch task ID ${event.ticketId} → ${byBranch.id}`);
         event.ticketId = byBranch.id;
+      } else {
+        // branch_name may not be set yet — fall back to identifier lookup
+        const byIdentifier = this.agentManager.getTicketByIdentifier(event.ticketId);
+        if (byIdentifier) {
+          console.log(`[Orchestrator] Resolved identifier ${event.ticketId} → ${byIdentifier.id}`);
+          event.ticketId = byIdentifier.id;
+        }
       }
     }
 
     // Check if this ticket is already in a terminal state — don't re-activate it
-    const existing = this.ctx.storage.sql.exec(
-      "SELECT status FROM tickets WHERE id = ?",
-      event.ticketId,
-    ).toArray()[0] as { status: string } | undefined;
-
-    if (existing && (TERMINAL_STATUSES as readonly string[]).includes(existing.status)) {
-      console.log(`[Orchestrator] Ignoring event for terminal ticket ${event.ticketId} (status: ${existing.status})`);
+    if (this.agentManager.isTerminal(event.ticketId)) {
+      const existing = this.agentManager.getTicket(event.ticketId);
+      console.log(`[Orchestrator] Ignoring event for terminal ticket ${event.ticketId} (status: ${existing?.status})`);
       return Response.json({ ok: true, ticketId: event.ticketId, ignored: true, reason: "terminal ticket" });
     }
 
@@ -764,27 +845,29 @@ export class Orchestrator extends Container<Bindings> {
       }
     }
 
-    // Upsert ticket — only re-activate non-terminal tickets
+    // Create or update ticket
     const payload = event.payload as Record<string, unknown>;
     const identifier = (payload.identifier as string) || null;
     const title = (payload.title as string) || null;
-    this.ctx.storage.sql.exec(
-      `INSERT INTO tickets (id, product, slack_thread_ts, slack_channel, identifier, title)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         slack_thread_ts = COALESCE(excluded.slack_thread_ts, tickets.slack_thread_ts),
-         slack_channel = COALESCE(excluded.slack_channel, tickets.slack_channel),
-         identifier = COALESCE(excluded.identifier, tickets.identifier),
-         title = COALESCE(excluded.title, tickets.title),
-         agent_active = 1,
-         updated_at = datetime('now')`,
-      event.ticketId,
-      event.product,
-      event.slackThreadTs || null,
-      event.slackChannel || null,
-      identifier,
-      title,
-    );
+    const existingTicket = this.agentManager.getTicket(event.ticketId);
+    if (!existingTicket) {
+      this.agentManager.createTicket({
+        id: event.ticketId,
+        product: event.product,
+        slackThreadTs: event.slackThreadTs || undefined,
+        slackChannel: event.slackChannel || undefined,
+        identifier: identifier || undefined,
+        title: title || undefined,
+      });
+    } else {
+      // Update metadata — preserve existing values when new ones are null
+      const metadataUpdate: Record<string, string | undefined> = {};
+      if (event.slackThreadTs) metadataUpdate.slack_thread_ts = event.slackThreadTs;
+      if (event.slackChannel) metadataUpdate.slack_channel = event.slackChannel;
+      if (Object.keys(metadataUpdate).length > 0) {
+        this.agentManager.updateStatus(event.ticketId, metadataUpdate as any);
+      }
+    }
 
     // Initialize ticket_metrics row if not exists
     this.ctx.storage.sql.exec(
@@ -801,13 +884,13 @@ export class Orchestrator extends Container<Bindings> {
 
     // For Linear comments, route to running agent or re-evaluate via ticket review
     if (event.type === "linear_comment") {
-      const ticketRow = this.ctx.storage.sql.exec(
-        "SELECT agent_active FROM tickets WHERE id = ?", event.ticketId,
-      ).toArray()[0] as { agent_active: number } | undefined;
+      const ticketRow = this.agentManager.getTicket(event.ticketId);
 
-      if (ticketRow?.agent_active) {
+      if (ticketRow && this.agentManager.isTerminal(event.ticketId)) {
+        console.log(`[Orchestrator] Ignoring linear_comment for terminal ticket ${event.ticketId} (status: ${ticketRow.status})`);
+      } else if (ticketRow?.agent_active) {
         // Forward to running agent like a Slack reply
-        await this.sendEventToAgent(event);
+        await this.agentManager.sendEvent(event.ticketId, event);
       } else {
         // No agent running — re-evaluate via ticket review
         await this.handleTicketReview(event);
@@ -817,163 +900,40 @@ export class Orchestrator extends Container<Bindings> {
 
     // CI passed + PR exists → evaluate merge gate (orchestrator decides, not agent)
     if (event.type === "checks_passed") {
-      const ticketRow = this.ctx.storage.sql.exec(
-        "SELECT pr_url FROM tickets WHERE id = ?", event.ticketId
-      ).toArray()[0] as { pr_url: string | null } | undefined;
+      let ticketRow = this.agentManager.getTicket(event.ticketId);
+
+      // Branch names use the human-readable identifier (e.g., ticket/PES-23),
+      // but the canonical ticket ID is the Linear UUID. Fall back to identifier lookup.
+      if (!ticketRow) {
+        const byIdentifier = this.agentManager.getTicketByIdentifier(event.ticketId);
+        if (byIdentifier) {
+          console.log(`[Orchestrator] checks_passed: resolved identifier ${event.ticketId} → ticket ${byIdentifier.id}`);
+          ticketRow = byIdentifier;
+        }
+      }
 
       if (ticketRow?.pr_url) {
-        await this.evaluateMergeGate(event.ticketId, event.product);
-        return Response.json({ ok: true, ticketId: event.ticketId });
+        await this.evaluateMergeGate(ticketRow.id, event.product);
+        return Response.json({ ok: true, ticketId: ticketRow.id });
       }
-      // No PR yet — route to agent normally
+
+      // PR URL not set yet — store checks_passed flag so merge gate triggers
+      // when the agent later reports the PR URL via handleStatusUpdate.
+      if (ticketRow) {
+        console.log(`[Orchestrator] checks_passed for ${ticketRow.id} but no PR URL yet — storing flag for deferred merge gate`);
+        this.ctx.storage.sql.exec(
+          "UPDATE tickets SET checks_passed = 1, updated_at = datetime('now') WHERE id = ?",
+          ticketRow.id,
+        );
+        return Response.json({ ok: true, ticketId: ticketRow.id, deferred: true });
+      }
+      // Ticket not found — route to agent normally
     }
 
     // Route to TicketAgent for all other event types
-    await this.routeToAgent(event);
+    await this.agentManager.sendEvent(event.ticketId, event);
 
     return Response.json({ ok: true, ticketId: event.ticketId });
-  }
-
-  private async routeToAgent(event: TicketEvent, model: string = "sonnet") {
-    // Check if agent is still active (not in terminal state) and load thread_ts
-    const ticket = this.ctx.storage.sql.exec(
-      "SELECT agent_active, status, slack_thread_ts, slack_channel FROM tickets WHERE id = ?",
-      event.ticketId,
-    ).toArray()[0] as { agent_active: number; status: string; slack_thread_ts: string | null; slack_channel: string | null } | undefined;
-
-    if (ticket && ticket.agent_active === 0) {
-      console.log(`[Orchestrator] Skipping inactive agent for ${event.ticketId} (status: ${ticket.status})`);
-      return;
-    }
-
-    // Populate thread_ts from database if not already set in the event
-    // This ensures Linear tickets (which don't have thread_ts in the webhook) can reply in-thread
-    if (ticket && ticket.slack_thread_ts && !event.slackThreadTs) {
-      event.slackThreadTs = ticket.slack_thread_ts;
-    }
-    if (ticket && ticket.slack_channel && !event.slackChannel) {
-      event.slackChannel = ticket.slack_channel;
-    }
-
-    const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
-    const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
-
-    // Skip /initialize for thread replies — the agent is already configured.
-    // containerFetch in /event auto-starts the container using envVars from SQLite.
-    // This avoids redundant config writes and port checks on every reply.
-    if (event.type !== "slack_reply") {
-      // Load product config from database
-      const productRows = this.ctx.storage.sql.exec(
-        "SELECT config FROM products WHERE slug = ?",
-        event.product,
-      ).toArray() as Array<{ config: string }>;
-
-      if (productRows.length === 0) {
-        console.error(`[Orchestrator] Unknown product: ${event.product}`);
-        return;
-      }
-
-      const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
-
-      // Load AI Gateway config from settings
-      const gatewayRows = this.ctx.storage.sql.exec(
-        "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
-      ).toArray() as Array<{ value: string }>;
-      const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
-
-      console.log(`[Orchestrator] Routing ${event.ticketId} to agent with model=${model}`);
-
-      // Load slack_thread_ts from database (set by initial event or subsequent updates)
-      const ticketRow = this.ctx.storage.sql.exec(
-        "SELECT slack_thread_ts FROM tickets WHERE id = ?",
-        event.ticketId,
-      ).toArray()[0] as { slack_thread_ts: string | null } | undefined;
-
-      const config: TicketAgentConfig = {
-        ticketId: event.ticketId,
-        product: event.product,
-        repos: productConfig.repos,
-        slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
-        slackThreadTs: event.slackThreadTs || ticketRow?.slack_thread_ts || undefined,
-        secrets: productConfig.secrets,
-        gatewayConfig,
-        model,
-      };
-
-      const initRes = await agent.fetch(new Request("http://internal/initialize", {
-        method: "POST",
-        body: JSON.stringify(config),
-      }));
-
-      if (!initRes.ok) {
-        console.error(`[Orchestrator] Failed to initialize agent for ${event.ticketId}: ${initRes.status}`);
-        // Mark inactive so the orphaned container doesn't block future attempts
-        this.ctx.storage.sql.exec(
-          "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-          event.ticketId,
-        );
-        return;
-      }
-    }
-
-    // Retry event delivery with backoff for cold starts
-    let lastStatus = 0;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const eventRes = await agent.fetch(new Request("http://internal/event", {
-        method: "POST",
-        body: JSON.stringify(event),
-      }));
-      lastStatus = eventRes.status;
-
-      if (eventRes.ok) return;
-      if (eventRes.status !== 503) {
-        console.error(`[Orchestrator] Agent event delivery failed for ${event.ticketId}: ${eventRes.status}`);
-        return;
-      }
-
-      // Container not ready, wait and retry
-      console.warn(`[Orchestrator] Agent container not ready for ${event.ticketId}, retrying (${attempt + 1}/3)...`);
-      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
-    }
-
-    console.error(`[Orchestrator] Agent event delivery failed after retries for ${event.ticketId}: ${lastStatus}`);
-    // Mark inactive to prevent orphaned container from blocking future events
-    this.ctx.storage.sql.exec(
-      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-      event.ticketId,
-    );
-  }
-
-  /**
-   * Send an event to a running TicketAgent container without re-initializing it.
-   * Used for forwarding linear_comment events and other supplementary events
-   * to agents that are already configured and running.
-   */
-  private async sendEventToAgent(event: TicketEvent): Promise<void> {
-    const id = this.env.TICKET_AGENT.idFromName(event.ticketId);
-    const agent = this.env.TICKET_AGENT.get(id) as DurableObjectStub;
-
-    // Retry event delivery with backoff for cold starts
-    let lastStatus = 0;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const eventRes = await agent.fetch(new Request("http://internal/event", {
-        method: "POST",
-        body: JSON.stringify(event),
-      }));
-      lastStatus = eventRes.status;
-
-      if (eventRes.ok) return;
-      if (eventRes.status !== 503) {
-        console.error(`[Orchestrator] Agent event delivery failed for ${event.ticketId}: ${eventRes.status}`);
-        return;
-      }
-
-      // Container not ready, wait and retry
-      console.warn(`[Orchestrator] Agent container not ready for ${event.ticketId}, retrying (${attempt + 1}/3)...`);
-      await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
-    }
-
-    console.error(`[Orchestrator] Agent event delivery failed after retries for ${event.ticketId}: ${lastStatus}`);
   }
 
   /**
@@ -1000,9 +960,7 @@ export class Orchestrator extends Container<Bindings> {
     const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
 
     // Get ticket record for slack info
-    const ticketRow = this.ctx.storage.sql.exec(
-      "SELECT * FROM tickets WHERE id = ?", event.ticketId,
-    ).toArray()[0] as Record<string, unknown> | undefined;
+    const ticketRow = this.agentManager.getTicket(event.ticketId) as Record<string, unknown> | null;
 
     // Skip ticket review if agent is already running or ticket is past initial triage.
     // Linear sends multiple webhooks (create + update) and we don't want to re-review
@@ -1014,6 +972,13 @@ export class Orchestrator extends Container<Bindings> {
         console.log(`[Orchestrator] Skipping ticket review for ${event.ticketId} — already active (status=${status}, agent_active=${agentActive})`);
         return;
       }
+    }
+
+    // Transition to reviewing state (ticket review = the review phase)
+    try {
+      this.agentManager.updateStatus(event.ticketId, { status: "reviewing" });
+    } catch {
+      // May already be in reviewing state — ignore
     }
 
     const context = await assembler.forTicketReview({
@@ -1059,15 +1024,38 @@ export class Orchestrator extends Container<Bindings> {
     switch (decision.action) {
       case "start_agent": {
         const model = decision.model || "sonnet";
-        await this.routeToAgent(event, model);
+
+        // Build spawn config from product
+        const gatewayRows = this.ctx.storage.sql.exec(
+          "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+        ).toArray() as Array<{ value: string }>;
+        const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
+
+        const spawnConfig: SpawnConfig = {
+          product: event.product,
+          repos: productConfig.repos,
+          slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+          slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined,
+          secrets: productConfig.secrets,
+          gatewayConfig,
+          model,
+        };
+
+        try {
+          await this.agentManager.spawnAgent(event.ticketId, spawnConfig);
+          await this.agentManager.sendEvent(event.ticketId, event);
+        } catch (err) {
+          console.error(`[Orchestrator] Failed to spawn agent for ${event.ticketId}:`, err);
+        }
         break;
       }
       case "ask_questions": {
         // Update status to needs_info
-        this.ctx.storage.sql.exec(
-          "UPDATE tickets SET status = 'needs_info', updated_at = datetime('now') WHERE id = ?",
-          event.ticketId,
-        );
+        try {
+          this.agentManager.updateStatus(event.ticketId, { status: "needs_info" });
+        } catch (err) {
+          console.warn(`[Orchestrator] Failed to set needs_info for ${event.ticketId}:`, err);
+        }
 
         // Post questions to Slack thread and Linear
         const questions = (decision as unknown as Record<string, unknown>).questions as string[] | undefined;
@@ -1113,10 +1101,11 @@ export class Orchestrator extends Container<Bindings> {
         break;
       }
       case "mark_duplicate": {
-        this.ctx.storage.sql.exec(
-          "UPDATE tickets SET status = 'closed', updated_at = datetime('now') WHERE id = ?",
-          event.ticketId,
-        );
+        try {
+          this.agentManager.updateStatus(event.ticketId, { status: "closed" });
+        } catch (err) {
+          console.warn(`[Orchestrator] Failed to mark duplicate for ${event.ticketId}:`, err);
+        }
         break;
       }
       case "queue": {
@@ -1127,10 +1116,11 @@ export class Orchestrator extends Container<Bindings> {
           crypto.randomUUID(), event.ticketId, event.product,
           (payload.priority as number) || 3, JSON.stringify(event),
         );
-        this.ctx.storage.sql.exec(
-          "UPDATE tickets SET status = 'queued', updated_at = datetime('now') WHERE id = ?",
-          event.ticketId,
-        );
+        try {
+          this.agentManager.updateStatus(event.ticketId, { status: "queued" });
+        } catch (err) {
+          console.warn(`[Orchestrator] Failed to set queued for ${event.ticketId}:`, err);
+        }
         break;
       }
       case "expand_existing": {
@@ -1139,7 +1129,7 @@ export class Orchestrator extends Container<Bindings> {
         const expandTicketId = (decision as unknown as Record<string, unknown>).expand_ticket as string | undefined;
         if (expandTicketId) {
           const expandedEvent = { ...event, ticketId: expandTicketId };
-          await this.sendEventToAgent(expandedEvent);
+          await this.agentManager.sendEvent(expandTicketId, expandedEvent);
         }
         break;
       }
@@ -1154,9 +1144,20 @@ export class Orchestrator extends Container<Bindings> {
     ticketId: string,
     product: string,
   ): Promise<void> {
-    const ticketRow = this.ctx.storage.sql.exec(
+    let ticketRow = this.ctx.storage.sql.exec(
       "SELECT * FROM tickets WHERE id = ?", ticketId
     ).toArray()[0] as Record<string, unknown> | undefined;
+
+    // Fall back to identifier lookup (branch names use human-readable identifiers)
+    if (!ticketRow?.pr_url) {
+      const byIdentifier = this.ctx.storage.sql.exec(
+        "SELECT * FROM tickets WHERE identifier = ?", ticketId
+      ).toArray()[0] as Record<string, unknown> | undefined;
+      if (byIdentifier?.pr_url) {
+        console.log(`[Orchestrator] evaluateMergeGate: resolved identifier ${ticketId} → ticket ${byIdentifier.id}`);
+        ticketRow = byIdentifier;
+      }
+    }
 
     if (!ticketRow?.pr_url) {
       console.log(`[Orchestrator] No PR URL for ${ticketId}, skipping merge gate`);
@@ -1188,6 +1189,40 @@ export class Orchestrator extends Container<Bindings> {
       branch: (ticketRow.branch_name as string) || "",
       repo: productConfig.repos[0],
     });
+
+    // Wait for Copilot review before proceeding (state persisted in SQLite)
+    if (!context.copilotReviewComplete) {
+      const retryRow = this.ctx.storage.sql.exec(
+        "SELECT retry_count FROM merge_gate_retries WHERE ticket_id = ?", ticketId
+      ).toArray()[0] as { retry_count: number } | undefined;
+      const retryCount = retryRow?.retry_count ?? 0;
+
+      if (retryCount < Orchestrator.MAX_MERGE_GATE_RETRIES) {
+        const nextRetryAt = new Date(Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS).toISOString().replace("T", " ").replace("Z", "");
+        console.log(
+          `[Orchestrator] Copilot review pending for ${ticketId}, scheduling retry ${retryCount + 1}/${Orchestrator.MAX_MERGE_GATE_RETRIES}`
+        );
+        this.ctx.storage.sql.exec(
+          `INSERT INTO merge_gate_retries (ticket_id, product, retry_count, next_retry_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(ticket_id) DO UPDATE SET retry_count = ?, next_retry_at = ?`,
+          ticketId, product, retryCount + 1, nextRetryAt, retryCount + 1, nextRetryAt
+        );
+        // Schedule alarm for retry — uses Math.min with existing alarm in the alarm handler
+        const nextRetryMs = Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS;
+        this.ctx.storage.setAlarm(nextRetryMs);
+        return;
+      }
+
+      // Exhausted retries — proceed without Copilot review
+      console.log(
+        `[Orchestrator] Copilot review not found after ${Orchestrator.MAX_MERGE_GATE_RETRIES} retries for ${ticketId}, proceeding without it`
+      );
+      this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
+    } else {
+      // Copilot review is complete — clear any pending retries
+      this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
+    }
 
     let decision;
     try {
@@ -1251,7 +1286,7 @@ export class Orchestrator extends Container<Bindings> {
           product,
           payload: { feedback: decision.reason, missing: (decision as unknown as Record<string, unknown>).missing },
         };
-        await this.sendEventToAgent(sendBackEvent);
+        await this.agentManager.sendEvent(ticketId, sendBackEvent);
         break;
       }
     }
@@ -1338,7 +1373,7 @@ export class Orchestrator extends Container<Bindings> {
       }
 
       // Route back to agent with rebase instruction
-      const event: TicketEvent = {
+      const rebaseEvent: TicketEvent = {
         type: "merge_conflict",
         source: "github",
         ticketId,
@@ -1347,7 +1382,7 @@ export class Orchestrator extends Container<Bindings> {
         slackThreadTs: ticketRow.slack_thread_ts as string | undefined,
         slackChannel: ticketRow.slack_channel as string | undefined,
       };
-      await this.routeToAgent(event);
+      await this.agentManager.sendEvent(ticketId, rebaseEvent);
     }
   }
 
@@ -1403,29 +1438,27 @@ export class Orchestrator extends Container<Bindings> {
 
       switch (action.action) {
         case "kill": {
-          // Mark agent inactive and tell container to shut down
           if (action.target !== "system") {
-            this.ctx.storage.sql.exec(
-              "UPDATE tickets SET agent_active = 0, status = 'failed', updated_at = datetime('now') WHERE id = ?",
-              action.target,
-            );
             try {
-              const agentId = this.env.TICKET_AGENT.idFromName(action.target);
-              const agentStub = this.env.TICKET_AGENT.get(agentId);
-              await agentStub.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
-            } catch (err) {
-              console.warn(`[Orchestrator] Failed to kill agent for ${action.target}:`, err);
+              this.agentManager.updateStatus(action.target, { status: "failed" });
+            } catch {
+              // Force stop even if state transition is invalid
+              this.ctx.storage.sql.exec(
+                "UPDATE tickets SET status = 'failed', agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+                action.target,
+              );
             }
+            await this.agentManager.stopAgent(action.target, `supervisor: ${action.reason}`).catch(err =>
+              console.warn(`[Orchestrator] Failed to kill agent for ${action.target}:`, err)
+            );
           }
           break;
         }
         case "trigger_merge_eval": {
           if (action.target !== "system") {
-            const ticketRow = this.ctx.storage.sql.exec(
-              "SELECT product FROM tickets WHERE id = ?", action.target
-            ).toArray()[0] as { product: string } | undefined;
-            if (ticketRow) {
-              await this.evaluateMergeGate(action.target, ticketRow.product);
+            const ticket = this.agentManager.getTicket(action.target);
+            if (ticket) {
+              await this.evaluateMergeGate(action.target, ticket.product);
             }
           }
           break;
@@ -1473,18 +1506,16 @@ export class Orchestrator extends Container<Bindings> {
       agent_active?: number;
     }>();
 
-    // Log phone-home payloads so they appear in wrangler tail
-    console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
+    // Log payloads so they appear in wrangler tail
+    console.log(`[Orchestrator] status update: ticket=${ticketId} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
     // Reject heartbeats/status updates for tickets already in a terminal state.
     // This prevents agent containers from overwriting supervisor kill decisions.
-    const currentRow = this.ctx.storage.sql.exec(
-      "SELECT status FROM tickets WHERE id = ?", ticketId
-    ).toArray()[0] as { status: string } | undefined;
-    if (currentRow && (TERMINAL_STATUSES as readonly string[]).includes(currentRow.status)) {
+    if (this.agentManager.isTerminal(ticketId)) {
       // Allow explicit agent_active=0 (dashboard kill) but block heartbeats
       if (agent_active === undefined || agent_active !== 0) {
-        console.log(`[Orchestrator] Ignoring status update for terminal ticket ${ticketId} (current: ${currentRow.status})`);
+        const currentTicket = this.agentManager.getTicket(ticketId);
+        console.log(`[Orchestrator] Ignoring status update for terminal ticket ${ticketId} (current: ${currentTicket?.status})`);
         return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
       }
     }
@@ -1500,8 +1531,15 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     if (status) {
-      updates.push("status = ?");
-      values.push(status);
+      // Only accept valid ticket states — reject agent lifecycle messages (e.g., "agent:*")
+      // that old agent code may still send to this endpoint instead of /heartbeat.
+      if (!(TICKET_STATES as readonly string[]).includes(status)) {
+        console.log(`[Orchestrator] Rejecting invalid status "${status}" for ticket ${ticketId} — use /heartbeat for lifecycle messages`);
+        // Still process other fields (pr_url, branch_name, etc.) below
+      } else {
+        updates.push("status = ?");
+        values.push(status);
+      }
 
       // Track first_response_at when agent starts working
       if (status === "in_progress") {
@@ -1525,26 +1563,24 @@ export class Orchestrator extends Container<Bindings> {
           ticketId,
         );
 
-        // Notify the TicketAgent DO so it marks itself terminal and stops
-        // restarting containers on alarm
-        try {
-          const id = this.env.TICKET_AGENT.idFromName(ticketId);
-          const agent = this.env.TICKET_AGENT.get(id);
-          await agent.fetch(new Request("http://internal/mark-terminal", { method: "POST" }));
-        } catch (err) {
-          console.error(`[Orchestrator] Failed to mark TicketAgent terminal for ${ticketId}:`, err);
-        }
+        // Stop the agent container
+        await this.agentManager.stopAgent(ticketId, `terminal status: ${status}`).catch(err =>
+          console.error(`[Orchestrator] Failed to stop agent for ${ticketId}:`, err)
+        );
       }
     }
     if (pr_url) {
       updates.push("pr_url = ?");
       values.push(pr_url);
 
-      // Increment pr_count when a PR URL is reported
-      this.ctx.storage.sql.exec(
-        `UPDATE ticket_metrics SET pr_count = pr_count + 1, updated_at = datetime('now') WHERE ticket_id = ?`,
-        ticketId,
-      );
+      // Increment pr_count only when the PR URL actually changes
+      const currentTicket = this.agentManager.getTicket(ticketId);
+      if (!currentTicket || currentTicket.pr_url !== pr_url) {
+        this.ctx.storage.sql.exec(
+          `UPDATE ticket_metrics SET pr_count = pr_count + 1, updated_at = datetime('now') WHERE ticket_id = ?`,
+          ticketId,
+        );
+      }
     }
     if (branch_name) {
       updates.push("branch_name = ?");
@@ -1565,19 +1601,29 @@ export class Orchestrator extends Container<Bindings> {
       ...values,
     );
 
-    // When a PR URL is first reported, check if CI already passed and trigger merge gate.
-    // This closes the race condition where check_suite webhook arrives before the agent
-    // reports the PR URL, causing the merge gate to be skipped.
-    if (pr_url && status === "pr_open") {
-      const ticketRow = this.ctx.storage.sql.exec(
-        "SELECT product FROM tickets WHERE id = ?", ticketId
-      ).toArray()[0] as { product: string } | undefined;
-      if (ticketRow) {
-        console.log(`[Orchestrator] PR URL reported for ${ticketId}, checking CI status for merge gate...`);
-        // Run async — don't block the status update response
-        this.evaluateMergeGate(ticketId, ticketRow.product).catch(err =>
-          console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
-        );
+    // Handle explicit agent_active=0 (dashboard kill) — stop the container
+    if (agent_active !== undefined && agent_active === 0) {
+      await this.agentManager.stopAgent(ticketId, "explicit agent_active=0").catch(err =>
+        console.error(`[Orchestrator] Failed to stop agent for ${ticketId}:`, err)
+      );
+    }
+
+    // Trigger merge gate when PR URL is reported.
+    // Two scenarios:
+    // 1. PR URL + status "pr_open" — agent explicitly signals PR is ready
+    // 2. PR URL is newly set + checks_passed flag — CI completed before PR was created
+    //    (race condition: check_suite webhook arrived before agent reported PR URL)
+    if (pr_url) {
+      // Re-read ticket after the DB update above
+      const ticket = this.agentManager.getTicket(ticketId);
+      if (ticket) {
+        if (status === "pr_open" || ticket.checks_passed === 1) {
+          console.log(`[Orchestrator] PR URL reported for ${ticketId}, triggering merge gate (status=${status}, checks_passed=${ticket.checks_passed})`);
+          // Run async — don't block the status update response
+          this.evaluateMergeGate(ticketId, ticket.product).catch(err =>
+            console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketId}:`, err)
+          );
+        }
       }
     }
 
@@ -1647,12 +1693,22 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleHeartbeat(request: Request): Promise<Response> {
-    const { ticketId } = await request.json<{ ticketId: string }>();
+    const { ticketId, message } = await request.json<{ ticketId: string; message?: string }>();
 
-    this.ctx.storage.sql.exec(
-      "UPDATE tickets SET last_heartbeat = datetime('now') WHERE id = ?",
-      ticketId,
-    );
+    console.log(`[Orchestrator] heartbeat: ticket=${ticketId} ${message || ""}`);
+    this.agentManager.recordPhoneHome(ticketId, message);
+
+    // Auto-transition spawning → active on first heartbeat.
+    // The agent sends heartbeats once it's running — this replaces the old
+    // pattern where phoneHome side-effects would overwrite the status field.
+    const ticket = this.agentManager.getTicket(ticketId);
+    if (ticket?.status === "spawning") {
+      this.ctx.storage.sql.exec(
+        "UPDATE tickets SET status = 'active', updated_at = datetime('now') WHERE id = ?",
+        ticketId,
+      );
+      console.log(`[Orchestrator] Auto-transitioned ticket ${ticketId} from spawning → active`);
+    }
 
     return Response.json({ ok: true });
   }
@@ -1693,9 +1749,11 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async cleanupInactiveAgents(): Promise<Response> {
-    // Force shutdown of containers for tickets marked inactive (agent_active = 0).
-    // This handles the case where agents transitioned to terminal state before the
-    // /shutdown fix was deployed — their containers are still running but should stop.
+    // Force shutdown of containers for tickets marked inactive (agent_active = 0)
+    // or terminal but still marked active.
+    await this.agentManager.cleanupInactive();
+
+    // Also stop containers for all inactive tickets (agent_active = 0)
     const inactiveTickets = this.ctx.storage.sql.exec(
       `SELECT id FROM tickets WHERE agent_active = 0`
     ).toArray() as Array<{ id: string }>;
@@ -1706,23 +1764,9 @@ export class Orchestrator extends Container<Bindings> {
 
     for (const ticket of inactiveTickets) {
       try {
-        const id = this.env.TICKET_AGENT.idFromName(ticket.id);
-        const agent = this.env.TICKET_AGENT.get(id);
-
-        // Call /mark-terminal which will invoke /shutdown on the container
-        const res = await agent.fetch(new Request("http://internal/mark-terminal", {
-          method: "POST",
-        }));
-
-        if (res.ok) {
-          console.log(`[Orchestrator] Cleanup: shutdown requested for ${ticket.id}`);
-          results.push({ ticketId: ticket.id, success: true });
-        } else {
-          console.warn(`[Orchestrator] Cleanup: failed to shutdown ${ticket.id}: ${res.status}`);
-          results.push({ ticketId: ticket.id, success: false, error: `HTTP ${res.status}` });
-        }
+        await this.agentManager.stopAgent(ticket.id, "cleanup inactive");
+        results.push({ ticketId: ticket.id, success: true });
       } catch (err) {
-        console.error(`[Orchestrator] Cleanup: error shutting down ${ticket.id}:`, err);
         results.push({ ticketId: ticket.id, success: false, error: String(err) });
       }
     }
@@ -1742,40 +1786,24 @@ export class Orchestrator extends Container<Bindings> {
     // Force shutdown of ALL agent containers, regardless of state.
     // Use case: operator wants to stop all work immediately.
 
-    // Get ALL tickets (active and inactive)
+    // Get ALL tickets for response details before stopping
     const allTickets = this.ctx.storage.sql.exec(
       `SELECT id, status, agent_active FROM tickets`
     ).toArray() as Array<{ id: string; status: string; agent_active: number }>;
 
     console.log(`[Orchestrator] Shutdown all: found ${allTickets.length} total tickets`);
 
-    // Mark all as inactive
-    this.ctx.storage.sql.exec(`UPDATE tickets SET agent_active = 0`);
-    console.log(`[Orchestrator] Marked all agents as inactive`);
-
+    // Stop each ticket individually to track per-ticket success/failure
     const results: Array<{ ticketId: string; previousStatus: string; success: boolean; error?: string }> = [];
 
-    // Shut down all containers
     for (const ticket of allTickets) {
       try {
-        const id = this.env.TICKET_AGENT.idFromName(ticket.id);
-        const agent = this.env.TICKET_AGENT.get(id);
-
-        // Call /mark-terminal which will invoke /shutdown on the container
-        const res = await agent.fetch(new Request("http://internal/mark-terminal", {
-          method: "POST",
-        }));
-
-        if (res.ok) {
-          console.log(`[Orchestrator] Shutdown all: shutdown requested for ${ticket.id}`);
-          results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
-        } else {
-          console.warn(`[Orchestrator] Shutdown all: failed to shutdown ${ticket.id}: ${res.status}`);
-          results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: `HTTP ${res.status}` });
-        }
+        await this.agentManager.stopAgent(ticket.id, "shutdown all requested");
+        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: true });
       } catch (err) {
-        console.error(`[Orchestrator] Shutdown all: error shutting down ${ticket.id}:`, err);
-        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: String(err) });
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[Orchestrator] Failed to stop ${ticket.id}:`, errorMsg);
+        results.push({ ticketId: ticket.id, previousStatus: ticket.status, success: false, error: errorMsg });
       }
     }
 
@@ -1832,7 +1860,7 @@ export class Orchestrator extends Container<Bindings> {
   private getSystemStatus(): Response {
     // Get active agents
     const activeAgents = this.ctx.storage.sql.exec(
-      `SELECT id, product, status, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
+      `SELECT id, product, status, agent_message, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
        FROM tickets
        WHERE agent_active = 1
        ORDER BY updated_at DESC`,
@@ -1840,6 +1868,7 @@ export class Orchestrator extends Container<Bindings> {
       id: string;
       product: string;
       status: string;
+      agent_message: string | null;
       last_heartbeat: string | null;
       created_at: string;
       updated_at: string;
@@ -1898,6 +1927,7 @@ export class Orchestrator extends Container<Bindings> {
           id: string;
           product: string;
           status: string;
+          agent_message: string | null;
           last_heartbeat: string | null;
           created_at: string;
           updated_at: string;
@@ -1948,7 +1978,8 @@ export class Orchestrator extends Container<Bindings> {
           const timeSinceUpdate = this.getTimeAgo(agent.updated_at);
 
           message += `${healthEmoji} ${statusEmoji} \`${agent.id}\` (${agent.product})\n`;
-          message += `   Status: ${agent.status} · Updated: ${timeSinceUpdate}\n`;
+          const phaseInfo = agent.agent_message ? ` (${agent.agent_message})` : "";
+          message += `   Status: ${agent.status}${phaseInfo} · Updated: ${timeSinceUpdate}\n`;
           if (agent.pr_url) {
             message += `   PR: ${agent.pr_url}\n`;
           }
@@ -2215,16 +2246,13 @@ export class Orchestrator extends Container<Bindings> {
         console.log(`[Orchestrator] Thread reply matched ticket=${ticket.id} product=${ticket.product}`);
 
         // Don't re-activate terminal tickets
-        if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status)) {
+        if (this.agentManager.isTerminalStatus(ticket.status)) {
           console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.id} (status=${ticket.status}) — ignoring`);
           return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
         }
 
         // Re-activate agent on thread reply — user is explicitly engaging
-        this.ctx.storage.sql.exec(
-          "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
-          ticket.id,
-        );
+        this.agentManager.reactivate(ticket.id);
         const event: TicketEvent = {
           type: "slack_reply",
           source: "slack",
@@ -2235,20 +2263,16 @@ export class Orchestrator extends Container<Bindings> {
           slackChannel: slackEvent.channel,
         };
         console.log(`[Orchestrator] Routing thread reply to agent for ticket=${ticket.id}`);
-        await this.routeToAgent(event);
+        await this.agentManager.sendEvent(ticket.id, event);
         return Response.json({ ok: true, ticketId: ticket.id });
       } else {
         console.log(`[Orchestrator] No ticket found for thread_ts=${slackEvent.thread_ts}`);
       }
 
-      // Thread reply but no ticket found - user is replying to something that's not tracked
+      // Thread reply but no ticket found — silently ignore.
+      // Previously this posted an info message, but that was too noisy
+      // (deploy restarts, Socket Mode re-deliveries, etc. caused spam).
       if (slackEvent.type === "message") {
-        await this.postSlackError(
-          slackEvent.channel || "",
-          slackEvent.thread_ts,
-          `ℹ️ This thread is not associated with an active Product Engineer task.\n\n` +
-          `If you want to start a new task, mention me with @product-engineer in your message.`
-        );
         return Response.json({ ok: true, ignored: true, reason: "thread not tracked" });
       }
     }
@@ -2332,9 +2356,11 @@ export class Orchestrator extends Container<Bindings> {
     const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
 
     // Generate a concise title from the request (first sentence or first 80 chars)
-    const title = rawText.length <= 80
-      ? rawText
-      : rawText.split(/[.!?\n]/)[0].slice(0, 80).trim() || rawText.slice(0, 80).trim();
+    const title = rawText
+      ? (rawText.length <= 80
+        ? rawText
+        : rawText.split(/[.!?\n]/)[0].slice(0, 80).trim() || rawText.slice(0, 80).trim())
+      : "Slack request (no description)";
 
     // Look up the Linear project ID by name
     const projectRes = await fetch("https://api.linear.app/graphql", {
@@ -2479,6 +2505,52 @@ export class Orchestrator extends Container<Bindings> {
       issue.id, threadTsToStore, slackEvent.channel || null,
     );
 
+    // Dispatch ticket review directly instead of waiting for the Linear webhook
+    // roundtrip. This is more resilient — works even if assignee can't be set (OAuth app
+    // users can't be assigned in Linear) or the webhook is delayed/fails.
+    const ticketEvent: TicketEvent = {
+      type: "ticket_created",
+      source: "slack",
+      ticketId: issue.id,
+      product,
+      payload: {
+        id: issue.id,
+        identifier: issue.identifier,
+        title,
+        description: rawText,
+        priority: 3,
+        labels: [],
+      },
+      slackThreadTs: threadTsToStore || undefined,
+      slackChannel: slackEvent.channel || undefined,
+    };
+
+    // Create ticket in DB before review — handleTicketReview requires the ticket to exist
+    // for updateStatus/spawnAgent. Use createTicket which is safe if Linear webhook
+    // already created it (handles terminal re-creation and throws for active duplicates).
+    try {
+      this.agentManager.createTicket({
+        id: issue.id,
+        product,
+        slackThreadTs: threadTsToStore || undefined,
+        slackChannel: slackEvent.channel || undefined,
+        identifier: issue.identifier,
+        title,
+      });
+    } catch {
+      // Ticket already exists (from a fast Linear webhook) — safe to proceed
+    }
+
+    // Initialize ticket_metrics row
+    this.ctx.storage.sql.exec(
+      `INSERT INTO ticket_metrics (ticket_id) VALUES (?)
+       ON CONFLICT(ticket_id) DO NOTHING`,
+      issue.id,
+    );
+
+    this.handleTicketReview(ticketEvent)
+      .catch(err => console.error("[Orchestrator] Direct ticket review failed:", err));
+
     return Response.json({ ok: true, linearIssue: issue.identifier });
   }
 
@@ -2486,8 +2558,10 @@ export class Orchestrator extends Container<Bindings> {
 
   private getMetrics(request: Request): Response {
     const url = new URL(request.url);
-    const limit = parseInt(url.searchParams.get("limit") || "50", 10);
-    const days = parseInt(url.searchParams.get("days") || "30", 10);
+    const rawLimit = parseInt(url.searchParams.get("limit") || "50", 10);
+    const limit = Number.isNaN(rawLimit) ? 50 : Math.max(1, Math.min(500, rawLimit));
+    const rawDays = parseInt(url.searchParams.get("days") || "30", 10);
+    const days = Number.isNaN(rawDays) ? 30 : Math.max(1, Math.min(365, rawDays));
 
     // Get ticket metrics with joined data
     const metrics = this.ctx.storage.sql.exec(`
@@ -2607,10 +2681,10 @@ export class Orchestrator extends Container<Bindings> {
       summary: {
         totalTickets: totalTickets.count,
         completed,
-        automergeRate: `${automergeRate}%`,
-        failureRate: `${failureRate}%`,
-        multiPrRate: `${multiPrRate}%`,
-        multiRevisionRate: `${multiRevisionRate}%`,
+        automergeRate: automergeRate === "N/A" ? "N/A" : `${automergeRate}%`,
+        failureRate: failureRate === "N/A" ? "N/A" : `${failureRate}%`,
+        multiPrRate: multiPrRate === "N/A" ? "N/A" : `${multiPrRate}%`,
+        multiRevisionRate: multiRevisionRate === "N/A" ? "N/A" : `${multiRevisionRate}%`,
         avgCompletionMinutes: avgCompletionTime.avg_minutes?.toFixed(1) || "N/A",
       },
       outcomes,
@@ -2624,7 +2698,7 @@ export class Orchestrator extends Container<Bindings> {
         total: totalDecisions.count,
         withFeedback: totalFeedback,
         withoutFeedback: decisionsWithoutFeedback,
-        accuracy: `${decisionAccuracy}%`,
+        accuracy: decisionAccuracy === "N/A" ? "N/A" : `${decisionAccuracy}%`,
         goodCount: goodDecisions,
         badCount: badDecisions,
       },

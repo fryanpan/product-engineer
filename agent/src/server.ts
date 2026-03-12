@@ -44,23 +44,18 @@ console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 const config = loadConfig();
 console.log(`[Agent] Config loaded: ticket=${config.ticketId} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"}`);
 
-// Phone-home: report lifecycle events to the worker so they appear in wrangler tail.
-// Only set branch_name when we actually have a git branch (not diagnostic detail).
-function phoneHome(phase: string, detail?: string) {
-  const body: Record<string, unknown> = {
-    ticketId: config.ticketId,
-    status: `agent:${phase}`,
-  };
-  // Log detail locally, but don't send it as branch_name (avoids overwriting real git branch)
-  if (detail) console.log(`[Agent] phoneHome: ${phase} ${detail}`);
-  else console.log(`[Agent] phoneHome: ${phase}`);
-  fetch(`${config.workerUrl}/api/internal/status`, {
+// Phone-home: heartbeat + log message to the orchestrator.
+// Every call updates last_heartbeat. The message is for observability only — the
+// orchestrator never makes decisions based on its content.
+function phoneHome(message: string) {
+  console.log(`[Agent] phoneHome: ${message}`);
+  fetch(`${config.workerUrl}/api/orchestrator/heartbeat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Internal-Key": config.apiKey,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ticketId: config.ticketId, message }),
   }).catch((err) => console.error("[Agent] phoneHome failed:", err));
 }
 
@@ -151,7 +146,7 @@ async function reportTokenUsage() {
   }
 }
 
-phoneHome("server_started", `uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
+phoneHome(`server_started uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 
 // Stable UUID for this agent instance — prefixes all transcript R2 keys
 const agentUuid = crypto.randomUUID();
@@ -261,7 +256,7 @@ const heartbeatInterval = setInterval(() => {
     body: JSON.stringify({ ticketId: config.ticketId }),
   }).catch((err) => console.error("[Agent] Heartbeat failed:", err));
 
-  phoneHome("heartbeat", `status=${sessionStatus} msgs=${sessionMessageCount}`);
+  phoneHome(`heartbeat status=${sessionStatus} msgs=${sessionMessageCount}`);
 }, 120_000);
 
 // Session timeout watchdog: exit if session runs too long or becomes idle
@@ -278,7 +273,7 @@ const timeoutWatchdog = setInterval(() => {
   // Hard timeout: 2 hours of wall-clock time
   if (sessionDuration > SESSION_TIMEOUT_MS) {
     console.log(`[Agent] Session timeout after ${Math.floor(sessionDuration / 60000)}m — exiting`);
-    phoneHome("session_timeout", `duration=${Math.floor(sessionDuration / 60000)}m msgs=${sessionMessageCount}`);
+    phoneHome(`session_timeout duration=${Math.floor(sessionDuration / 60000)}m msgs=${sessionMessageCount}`);
     clearInterval(heartbeatInterval);
     clearInterval(transcriptBackupInterval);
     clearInterval(timeoutWatchdog);
@@ -290,7 +285,7 @@ const timeoutWatchdog = setInterval(() => {
   // "running" without producing messages. We only timeout truly idle sessions.
   if (idleDuration > IDLE_TIMEOUT_MS && sessionStatus !== "running") {
     console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${sessionStatus} — exiting`);
-    phoneHome("idle_timeout", `idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus} msgs=${sessionMessageCount}`);
+    phoneHome(`idle_timeout idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus} msgs=${sessionMessageCount}`);
     clearInterval(heartbeatInterval);
     clearInterval(transcriptBackupInterval);
     clearInterval(timeoutWatchdog);
@@ -316,7 +311,7 @@ async function handleShutdown(signal: string) {
   clearInterval(transcriptBackupInterval);
   clearInterval(timeoutWatchdog);
   await uploadTranscripts(true);
-  phoneHome("container_shutdown", signal);
+  phoneHome(`container_shutdown signal=${signal}`);
   process.exit(0);
 }
 
@@ -453,7 +448,7 @@ async function cloneRepos() {
       throw new Error(`Failed to clone ${repo}: exit code ${exitCode} — ${stderr}`);
     }
     console.log(`[Agent] Cloned ${repo} successfully`);
-    phoneHome("clone_done", repoName);
+    phoneHome(`clone_done repo=${repoName}`);
   }));
 
   // Set working directory to the first repo so Agent SDK tools operate on it
@@ -511,7 +506,7 @@ async function startSession(initialPrompt: MessageContent) {
   messageYielder!(userMessage(initialPrompt));
   console.log(`[Agent] Initial prompt queued (${typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length} chars)`);
 
-  phoneHome("session_starting", `prompt_chars=${typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length}`);
+  phoneHome(`session_starting prompt_chars=${typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length}`);
   console.log("[Agent] Starting Agent SDK query()...");
 
   // Build query options
@@ -571,7 +566,7 @@ async function startSession(initialPrompt: MessageContent) {
             currentSessionId = message.session_id;
             console.log(`[Agent] Session ID: ${currentSessionId}`);
           }
-          phoneHome("first_message", `session_id=${currentSessionId}`);
+          phoneHome(`first_message session_id=${currentSessionId}`);
         }
 
         if (message.type === "assistant" && message.message?.content) {
@@ -651,17 +646,17 @@ async function startSession(initialPrompt: MessageContent) {
           }
 
           console.log(`[Agent] Result message: ${JSON.stringify(result).slice(0, 300)}`);
-          phoneHome("result", JSON.stringify(result).slice(0, 200));
+          phoneHome(`result ${JSON.stringify(result).slice(0, 200)}`);
         }
         // Periodic phone-home every 5th message so we can track progress
         if (sessionMessageCount % 5 === 0) {
-          phoneHome("progress", `msgs=${sessionMessageCount} tool=${lastToolCall.slice(0, 80)}`);
+          phoneHome(`progress msgs=${sessionMessageCount} tool=${lastToolCall.slice(0, 80)}`);
         }
       }
       console.log("[Agent] Session ended normally");
       sessionStatus = "completed";
       sessionActive = false;
-      phoneHome("session_completed", `msgs=${sessionMessageCount}`);
+      phoneHome(`session_completed msgs=${sessionMessageCount}`);
 
       // Report token usage
       await reportTokenUsage();
@@ -678,7 +673,7 @@ async function startSession(initialPrompt: MessageContent) {
       sessionError = String(err);
       sessionStatus = "error";
       sessionActive = false;
-      phoneHome("session_error", `${String(err).slice(0, 150)} | stderr=${lastStderr.slice(0, 100)}`);
+      phoneHome(`session_error ${String(err).slice(0, 150)} | stderr=${lastStderr.slice(0, 100)}`);
 
       // Upload transcripts on error to capture work done before crash
       try {
@@ -755,7 +750,7 @@ app.post("/event", async (c) => {
     return c.json({ ok: true });
   } catch (err) {
     console.error("[Agent] Event handling error:", err);
-    phoneHome("event_error", String(err).slice(0, 200));
+    phoneHome(`event_error ${String(err).slice(0, 200)}`);
     return c.json({ error: String(err) }, 500);
   }
 });
@@ -784,7 +779,7 @@ app.post("/shutdown", async (c) => {
   }
 
   console.log("[Agent] Shutdown requested - exiting container");
-  phoneHome("shutdown_requested", `status=${sessionStatus} msgs=${sessionMessageCount}`);
+  phoneHome(`shutdown_requested status=${sessionStatus} msgs=${sessionMessageCount}`);
 
   // Clear intervals immediately to prevent concurrent work during shutdown
   clearInterval(heartbeatInterval);
@@ -856,10 +851,7 @@ setTimeout(async () => {
             console.log(
               `[Agent] Ticket ${config.ticketId} is inactive (agent_active=${ticketStatus.agent_active}, status=${ticketStatus.status}) — skipping auto-resume`,
             );
-            phoneHome(
-              "auto_resume_skipped",
-              `reason=inactive,status=${ticketStatus.status}`,
-            );
+            phoneHome(`auto_resume_skipped reason=inactive status=${ticketStatus.status}`);
             process.exit(0);
             return;
           }
@@ -873,7 +865,7 @@ setTimeout(async () => {
       }
 
       console.log(`[Agent] Auto-resuming from branch: ${branch}`);
-      phoneHome("auto_resume", `branch=${branch}`);
+      phoneHome(`auto_resume branch=${branch}`);
 
       // Get git state for context
       const logProc = Bun.spawn(["git", "log", "--oneline", "-10"]);
@@ -914,6 +906,6 @@ setTimeout(async () => {
     }
   } catch (err) {
     console.error("[Agent] Auto-resume failed:", err);
-    phoneHome("auto_resume_failed", String(err).slice(0, 200));
+    phoneHome(`auto_resume_failed ${String(err).slice(0, 200)}`);
   }
 }, 5000); // Wait 5s for container to stabilize

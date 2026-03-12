@@ -30,6 +30,7 @@ interface SlackEnvelope {
 
 export class SlackSocket {
   private appToken: string;
+  private botUserId: string | null = null;
   private onEvent: (event: NonNullable<SlackEnvelope["payload"]>["event"] & {}) => void;
   private ws: WebSocket | null = null;
   private reconnectAttempts = 0;
@@ -38,9 +39,11 @@ export class SlackSocket {
   constructor(
     appToken: string,
     onEvent: (event: NonNullable<SlackEnvelope["payload"]>["event"] & {}) => void,
+    botUserId?: string,
   ) {
     this.appToken = appToken;
     this.onEvent = onEvent;
+    this.botUserId = botUserId || null;
   }
 
   async connect(): Promise<void> {
@@ -71,7 +74,14 @@ export class SlackSocket {
         }
 
         const slackEvent = envelope.payload?.event;
-        if (slackEvent && !slackEvent.bot_id) {
+        // Filter out messages from our own bot to prevent loops.
+        // We check user ID (not bot_id) because app OAuth tokens produce
+        // messages with bot_id even when posted by a real user.
+        // Fallback: if botUserId is unknown, filter by bot_id to prevent loops.
+        const isOwnBot = this.botUserId
+          ? slackEvent?.user === this.botUserId
+          : !!slackEvent?.bot_id;
+        if (slackEvent && !isOwnBot) {
           if (slackEvent.type === "app_mention") {
             // Check if this is a /agent-status command mention
             const text = slackEvent.text?.trim() || "";

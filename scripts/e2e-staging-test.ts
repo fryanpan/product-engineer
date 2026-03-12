@@ -30,20 +30,23 @@ import { parseArgs } from "util";
 
 const STAGING_URL = process.env.STAGING_URL || "https://product-engineer-stg.fryanpan.workers.dev";
 const STAGING_SLACK_CHANNEL = process.env.SLACK_CHANNEL || "C0AKB6HUEPM"; // #staging-product-engineer
-const STAGING_LINEAR_TEAM_ID = process.env.LINEAR_TEAM_ID || "ea3572c2-6bb2-4113-9076-3f7ce586768d"; // PE Staging
 const STAGING_REPO = process.env.STAGING_REPO || "fryanpan/staging-test-app";
 
 const API_KEY = process.env.API_KEY;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+// User OAuth token (xoxp-) for posting mentions as a real user.
+// Slack doesn't fire app_mention when a bot mentions itself, so we need a user token
+// to trigger the full Socket Mode flow in E2E tests.
+const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN;
 
 // Test timeout settings
 const POLL_INTERVAL_MS = 5_000; // 5 seconds
 const AGENT_START_TIMEOUT_MS = 120_000; // 2 minutes for agent to start
 const AGENT_WORK_TIMEOUT_MS = 600_000; // 10 minutes for agent to finish
 const CI_FIX_TIMEOUT_MS = 300_000; // 5 minutes for CI fix
-const MERGE_TIMEOUT_MS = 120_000; // 2 minutes for merge
+const MERGE_TIMEOUT_MS = 600_000; // 10 minutes for merge (includes Copilot review retries: 5 x 90s)
 
 // --- Interfaces ---
 
@@ -76,6 +79,8 @@ interface TicketRow {
   pr_url: string | null;
   branch_name: string | null;
   agent_active: number;
+  title: string | null;
+  identifier: string | null;
 }
 
 // --- Helpers ---
@@ -85,11 +90,6 @@ function log(step: string, message: string) {
   console.log(`[${elapsed}s] [${step}] ${message}`);
 }
 
-function logError(step: string, message: string) {
-  const elapsed = ((Date.now() - globalStartTime) / 1000).toFixed(1);
-  console.error(`[${elapsed}s] [${step}] ❌ ${message}`);
-}
-
 function logSuccess(step: string, message: string) {
   const elapsed = ((Date.now() - globalStartTime) / 1000).toFixed(1);
   console.log(`[${elapsed}s] [${step}] ✅ ${message}`);
@@ -97,17 +97,6 @@ function logSuccess(step: string, message: string) {
 
 async function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  name: string
-): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`${name} timed out after ${ms}ms`)), ms)
-  );
-  return Promise.race([promise, timeout]);
 }
 
 // --- API Clients ---
@@ -139,10 +128,19 @@ async function postSlackMessage(
   text: string,
   threadTs?: string
 ): Promise<{ ts: string; channel: string }> {
+  return postSlackMessageWithToken(channel, text, SLACK_BOT_TOKEN!, threadTs);
+}
+
+async function postSlackMessageWithToken(
+  channel: string,
+  text: string,
+  token: string,
+  threadTs?: string
+): Promise<{ ts: string; channel: string }> {
   const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -158,52 +156,6 @@ async function postSlackMessage(
   }
 
   return { ts: data.ts, channel: data.channel };
-}
-
-async function createLinearIssue(
-  title: string,
-  description: string
-): Promise<{ id: string; identifier: string }> {
-  const res = await fetch("https://api.linear.app/graphql", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: LINEAR_API_KEY!,
-    },
-    body: JSON.stringify({
-      query: `
-        mutation($title: String!, $description: String!, $teamId: String!) {
-          issueCreate(input: {
-            title: $title,
-            description: $description,
-            teamId: $teamId
-          }) {
-            success
-            issue {
-              id
-              identifier
-            }
-          }
-        }
-      `,
-      variables: {
-        title,
-        description,
-        teamId: STAGING_LINEAR_TEAM_ID,
-      },
-    }),
-  });
-
-  const data = (await res.json()) as {
-    data?: { issueCreate: { success: boolean; issue: { id: string; identifier: string } } };
-    errors?: Array<{ message: string }>;
-  };
-
-  if (data.errors) {
-    throw new Error(`Linear API failed: ${data.errors.map((e) => e.message).join(", ")}`);
-  }
-
-  return data.data!.issueCreate.issue;
 }
 
 async function getLinearIssue(
@@ -250,11 +202,13 @@ async function fetchGitHubPR(
   return res.json() as Promise<{ state: string; merged: boolean; mergeable: boolean | null; mergeable_state: string }>;
 }
 
-async function getGitHubCheckRuns(
+async function getCommitStatuses(
   repo: string,
   ref: string
-): Promise<Array<{ name: string; status: string; conclusion: string | null }>> {
-  const res = await fetch(`https://api.github.com/repos/${repo}/commits/${ref}/check-runs`, {
+): Promise<Array<{ context: string; state: string; description: string | null }>> {
+  // Use commit statuses API — works with fine-grained PAT "Commit statuses" permission.
+  // (The check-runs API requires "Checks" permission which doesn't exist on fine-grained PATs.)
+  const res = await fetch(`https://api.github.com/repos/${repo}/commits/${ref}/status`, {
     headers: {
       Authorization: `Bearer ${GITHUB_TOKEN}`,
       Accept: "application/vnd.github.v3+json",
@@ -265,8 +219,8 @@ async function getGitHubCheckRuns(
     throw new Error(`GitHub API failed: ${res.status}`);
   }
 
-  const data = (await res.json()) as { check_runs: Array<{ name: string; status: string; conclusion: string | null }> };
-  return data.check_runs;
+  const data = (await res.json()) as { state: string; statuses: Array<{ context: string; state: string; description: string | null }> };
+  return data.statuses;
 }
 
 // --- Test Steps ---
@@ -279,6 +233,8 @@ async function verifyPrerequisites(): Promise<void> {
   if (!SLACK_BOT_TOKEN) missing.push("SLACK_BOT_TOKEN");
   if (!LINEAR_API_KEY) missing.push("LINEAR_API_KEY");
   if (!GITHUB_TOKEN) missing.push("GITHUB_TOKEN/GH_TOKEN");
+
+  if (!SLACK_USER_TOKEN) missing.push("SLACK_USER_TOKEN (xoxp- token for app_mention trigger)");
 
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
@@ -330,15 +286,23 @@ Add a function called \`greetE2E_${ctx.testId.replace(/-/g, "_")}\` to src/index
 
 IMPORTANT: The initial implementation should have a syntax error (missing semicolon) to test CI failure handling. After CI fails, fix the syntax error.`;
 
-  const message = `@product-engineer-staging ${taskDescription}`;
+  const botUserId = process.env.SLACK_BOT_USER_ID || "U0AKJ2C6QUA"; // staging bot
+  const message = `<@${botUserId}> ${taskDescription}`;
 
-  const result = await postSlackMessage(STAGING_SLACK_CHANNEL, message);
+  // Post the mention using a user token (xoxp-) so Slack fires app_mention via Socket Mode.
+  // Slack does NOT fire app_mention when a bot mentions itself (xoxb- token).
+  const mentionToken = SLACK_USER_TOKEN || SLACK_BOT_TOKEN;
+  if (!SLACK_USER_TOKEN) {
+    log("step1", "WARNING: No SLACK_USER_TOKEN — using bot token. Slack won't fire app_mention for self-mentions.");
+    log("step1", "Set SLACK_USER_TOKEN (xoxp-) for full end-to-end Socket Mode testing.");
+  }
+
+  const result = await postSlackMessageWithToken(STAGING_SLACK_CHANNEL, message, mentionToken!);
   ctx.slackThreadTs = result.ts;
+  logSuccess("step1", `Slack mention posted: ts=${result.ts} (as ${SLACK_USER_TOKEN ? "user" : "bot"})`);
 
-  logSuccess("step1", `Slack message posted: ts=${result.ts}`);
-
-  // Wait briefly for orchestrator to process the event
-  await sleep(2000);
+  // Wait for Socket Mode to deliver the event to the orchestrator
+  await sleep(5000);
 }
 
 async function step2_verifyLinearTicketCreated(ctx: TestContext): Promise<void> {
@@ -347,27 +311,23 @@ async function step2_verifyLinearTicketCreated(ctx: TestContext): Promise<void> 
   const deadline = Date.now() + AGENT_START_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    // Check orchestrator tickets for one linked to our thread
+    // Search by test ID in the title since the orchestrator stores the ACK message ts
+    // as slack_thread_ts (not the original mention ts).
     try {
-      const status = await apiCall<StatusResponse>("/api/orchestrator/status");
+      const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
+      const ticket = tickets.tickets.find(
+        (t) => t.title?.includes(ctx.testId)
+      );
 
-      // Look for an agent with our slack thread
-      for (const agent of status.activeAgents) {
-        // Query the full ticket info
-        const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-        const ticket = tickets.tickets.find(
-          (t) => t.slack_thread_ts === ctx.slackThreadTs
-        );
+      if (ticket) {
+        ctx.linearIssueId = ticket.id;
+        ctx.slackThreadTs = ticket.slack_thread_ts;
+        log("step2", `Found ticket linked to thread: ${ticket.id}`);
 
-        if (ticket) {
-          ctx.linearIssueId = ticket.id;
-          log("step2", `Found ticket linked to thread: ${ticket.id}`);
-
-          // Get Linear identifier
-          const issue = await getLinearIssue(ticket.id);
-          logSuccess("step2", `Linear ticket created: ${ticket.id} (state: ${issue.state.name})`);
-          return;
-        }
+        // Get Linear identifier
+        const issue = await getLinearIssue(ticket.id);
+        logSuccess("step2", `Linear ticket created: ${ticket.id} (state: ${issue.state.name})`);
+        return;
       }
     } catch (err) {
       log("step2", `Polling error (will retry): ${err}`);
@@ -447,6 +407,27 @@ async function step5_waitForPR(ctx: TestContext): Promise<void> {
       if (agent?.pr_url) {
         ctx.prUrl = agent.pr_url;
         ctx.branchName = agent.branch_name || null;
+
+        // Fallback: if branch_name not reported, fetch from GitHub PR API
+        if (!ctx.branchName && ctx.prUrl) {
+          try {
+            const prNumber = ctx.prUrl.split("/").pop();
+            const prRes = await fetch(`https://api.github.com/repos/${STAGING_REPO}/pulls/${prNumber}`, {
+              headers: {
+                Authorization: `Bearer ${GITHUB_TOKEN}`,
+                Accept: "application/vnd.github.v3+json",
+              },
+            });
+            if (prRes.ok) {
+              const prData = await prRes.json() as { head: { ref: string } };
+              ctx.branchName = prData.head.ref;
+              log("step5", `Fetched branch name from GitHub API: ${ctx.branchName}`);
+            }
+          } catch {
+            log("step5", "Could not fetch branch name from GitHub API");
+          }
+        }
+
         logSuccess("step5", `PR created: ${agent.pr_url}`);
         return;
       }
@@ -475,20 +456,22 @@ async function step6_verifyCIFailure(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const checks = await getGitHubCheckRuns(STAGING_REPO, ctx.branchName);
+      const statuses = await getCommitStatuses(STAGING_REPO, ctx.branchName);
 
-      const failedCheck = checks.find(
-        (c) => c.conclusion === "failure"
+      const failedStatus = statuses.find(
+        (s) => s.state === "failure" || s.state === "error"
       );
 
-      if (failedCheck) {
-        logSuccess("step6", `CI failure detected: ${failedCheck.name}`);
+      if (failedStatus) {
+        logSuccess("step6", `CI failure detected: ${failedStatus.context} (${failedStatus.state})`);
         return;
       }
 
-      const pendingChecks = checks.filter((c) => c.status !== "completed");
-      if (pendingChecks.length > 0) {
-        log("step6", `Waiting for checks to complete: ${pendingChecks.map((c) => c.name).join(", ")}`);
+      const pendingStatuses = statuses.filter((s) => s.state === "pending");
+      if (pendingStatuses.length > 0) {
+        log("step6", `Waiting for statuses: ${pendingStatuses.map((s) => s.context).join(", ")}`);
+      } else if (statuses.length === 0) {
+        log("step6", "No commit statuses reported yet");
       }
     } catch (err) {
       log("step6", `Polling error (will retry): ${err}`);

@@ -75,6 +75,10 @@ If a Notion URL appeared earlier in the session, default to writing there unless
 
 - After tests pass, run a code review before presenting results to the user
 - Fix issues found by the reviewer before handoff
+- **When the user requests a code review** (e.g., `/code-review`, "review this PR"), always run **both** in parallel:
+  1. Claude code review (`/code-review:code-review` or the superpowers review skill)
+  2. Codex CLI review: `codex review -c 'model="gpt-5.4"' --base <base-branch>` (run via Bash tool in background)
+- Combine findings from both reviewers before presenting results
 
 ## Commit Discipline
 

@@ -595,9 +595,9 @@
         html += `
           <tr>
             <td class="time">${formatTime(d.timestamp)}</td>
-            <td>${d.type.replace(/_/g, ' ')}</td>
-            <td>${d.ticket_id || '—'}</td>
-            <td><span class="status-badge">${d.action}</span></td>
+            <td>${escapeHtml(d.type).replace(/_/g, ' ')}</td>
+            <td>${escapeHtml(d.ticket_id) || '—'}</td>
+            <td><span class="status-badge">${escapeHtml(d.action)}</span></td>
             <td>${escapeHtml((d.reason || '').slice(0, 60))}${(d.reason || '').length > 60 ? '...' : ''}</td>
             <td>
               <div class="feedback-buttons">

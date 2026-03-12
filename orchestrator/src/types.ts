@@ -2,6 +2,30 @@
 export const TERMINAL_STATUSES = ["merged", "closed", "deferred", "failed"] as const;
 export type TerminalStatus = typeof TERMINAL_STATUSES[number];
 
+/** Valid ticket states — forms a state machine. */
+export const TICKET_STATES = [
+  "created", "reviewing", "needs_info", "queued", "spawning",
+  "active", "pr_open", "escalated",
+  "merged", "closed", "deferred", "failed",
+] as const;
+export type TicketState = typeof TICKET_STATES[number];
+
+/** Valid state transitions. Key = from state, value = allowed to states. */
+export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
+  created:     ["reviewing", "failed"],
+  reviewing:   ["spawning", "needs_info", "queued", "closed", "deferred", "failed"],
+  needs_info:  ["reviewing", "closed", "deferred", "failed"],
+  queued:      ["reviewing", "spawning", "closed", "deferred", "failed"],
+  spawning:    ["active", "failed"],
+  active:      ["active", "pr_open", "failed"],
+  pr_open:     ["active", "merged", "escalated", "closed", "failed"],
+  escalated:   ["active", "merged", "closed", "failed"],
+  merged:      [],
+  closed:      [],
+  deferred:    [],
+  failed:      [],
+};
+
 export interface TicketEvent {
   type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_reply", "linear_comment"
   source: string;     // "linear", "github", "slack", "api"
@@ -20,6 +44,13 @@ export interface TicketRecord {
   slack_channel: string | null;
   pr_url: string | null;
   branch_name: string | null;
+  identifier: string | null;
+  title: string | null;
+  agent_active: number;
+  agent_message: string | null;
+  checks_passed: number;
+  transcript_r2_key: string | null;
+  last_heartbeat: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -62,7 +93,7 @@ export interface DecisionLog {
 // Metrics types for observability
 export interface TicketMetrics {
   ticket_id: string;
-  outcome: "automerge_success" | "automerge_failure" | "manual_merge" | "closed" | "deferred" | "failed";
+  outcome: "automerge_success" | "automerge_failure" | "manual_merge" | "closed" | "deferred" | "failed" | null;
   pr_count: number;           // Number of PRs created for this ticket
   revision_count: number;     // Times sent back for revision
   total_agent_time_ms: number;

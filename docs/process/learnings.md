@@ -49,6 +49,24 @@ Technical discoveries that should persist across sessions.
 - Cost is roughly linear with turn count (~$0.02-0.03/turn at ~70K cached tokens). Reducing turns matters more than reducing prompt size.
 - Cache hit rate is ~97% — cache reads ($0.30/M) dominate over cache writes ($3.75/M). Large contexts are cheap per-turn but expensive in aggregate across many turns.
 
+## Slack Bot Self-Mention Limitation
+- Slack does NOT fire `app_mention` events when a bot mentions itself. A message posted by `xoxb-` bot token containing `<@BOT_USER_ID>` will not trigger Socket Mode delivery.
+- E2E tests that need to simulate user mentions must either: (a) use the internal endpoint (`/api/internal/slack-event`) with the `xapp-` token for auth, or (b) use a separate user OAuth token (not the bot token) to post the mention.
+- The E2E test posts via bot for visibility, then sends the event directly to the internal endpoint as a workaround. This is the same code path Socket Mode uses.
+- `scripts/setup.sh` supports `--env staging` for provisioning staging secrets.
+
+## AgentManager Pattern
+- Agent lifecycle management was diffused across 15+ direct DB manipulation points in `orchestrator.ts`. Consolidating into `AgentManager` class eliminated 4 bug classes at once (silent failures, state inconsistencies, duplicate agent spawns, deploy state loss).
+- AgentManager must have zero in-memory state — all state in SQLite. This makes deploy re-hydration automatic: `new AgentManager(sql, env)` just works.
+- `spawnAgent` must be re-entrant: safe to call for tickets already in `spawning`/`active` state (deploy recovery path). Don't throw — re-initialize the container.
+- `stopAgent` must be idempotent: the same ticket might be stopped from supervisor, terminal status, and cleanup paths in the same deploy cycle.
+- State machine validation catches invalid transitions early, but supervisor kill needs a raw SQL fallback since the ticket might be in any state.
+- The `reactivate()` method is needed for thread replies — `sendEvent` checks `agent_active` and skips if 0, so the agent must be re-activated before sending.
+
+## GitHub Fine-Grained PATs
+- Fine-grained PATs do NOT have a "Checks" permission. The check-runs API (`/repos/.../commits/.../check-runs`) is inaccessible. Use the commit statuses API (`/repos/.../commits/.../status`) instead, which requires "Commit statuses: Read" permission.
+- Never use the check-runs API in code that runs with fine-grained PATs. Always use commit statuses.
+
 ## Slack Thread Routing
 - The Orchestrator looks up existing tickets by `slack_thread_ts` (exact string match). Re-triggers must use the original top-level message `ts`, not a reply `ts` — otherwise a new ticket is created instead of routing to the existing one.
 - For new `app_mention` events, `slackEvent.ts` (not `thread_ts`) becomes the canonical `thread_ts` stored in the DB. Subsequent replies arrive with `thread_ts` matching that original `ts`. The asymmetry is intentional — Slack uses the first message's `ts` as the thread identifier.

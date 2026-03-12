@@ -28,6 +28,25 @@ You are the Product Engineer orchestrator evaluating whether a PR is ready to me
 No review comments.
 {{/reviewComments.length}}
 
+## Copilot Review
+{{#copilotReviewComplete}}
+Copilot has reviewed this PR.
+{{/copilotReviewComplete}}
+{{^copilotReviewComplete}}
+Copilot review not yet available (proceeding after timeout).
+{{/copilotReviewComplete}}
+{{#copilotComments.length}}
+### Copilot Suggestions
+{{#copilotComments}}
+- **{{{path}}}**: {{{body}}}
+{{/copilotComments}}
+
+Consider whether these suggestions identify real bugs vs style nits. Real bugs (auth issues, logic errors, XSS, data loss) should trigger "send_back". Style suggestions and minor refactoring nits can be ignored.
+{{/copilotComments.length}}
+{{^copilotComments.length}}
+No Copilot comments.
+{{/copilotComments.length}}
+
 ## Diff Summary
 ```
 {{{diffSummary}}}

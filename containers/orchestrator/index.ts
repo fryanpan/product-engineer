@@ -12,6 +12,25 @@ app.get("/health", (c) => c.json({ ok: true, service: "orchestrator-container" }
 
 const slackAppToken = process.env.SLACK_APP_TOKEN;
 if (slackAppToken) {
+  // Resolve our bot's user ID so we can filter self-messages
+  let botUserId: string | undefined;
+  const botToken = process.env.SLACK_BOT_TOKEN;
+  if (botToken) {
+    try {
+      const authRes = await fetch("https://slack.com/api/auth.test", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${botToken}` },
+      });
+      const authData = (await authRes.json()) as { ok: boolean; user_id?: string };
+      if (authData.ok && authData.user_id) {
+        botUserId = authData.user_id;
+        console.log(`[Orchestrator Container] Bot user ID: ${botUserId}`);
+      }
+    } catch (err) {
+      console.error("[Orchestrator Container] Failed to resolve bot user ID:", err);
+    }
+  }
+
   const socket = new SlackSocket(slackAppToken, async (event) => {
     try {
       console.log(`[Orchestrator Container] Slack event: ${event.type} from ${event.user || "unknown"}`);
@@ -31,7 +50,7 @@ if (slackAppToken) {
     } catch (err) {
       console.error("[Orchestrator Container] Failed to forward Slack event:", err);
     }
-  });
+  }, botUserId);
 
   socket.connect().catch((err) => {
     console.error("[Orchestrator Container] Failed to start Socket Mode:", err);
