@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import { TERMINAL_STATUSES, type TicketEvent, type Bindings } from "./types";
+import { TERMINAL_STATUSES, TICKET_STATES, type TicketEvent, type Bindings } from "./types";
 import type { ProductConfig } from "./registry";
 import { DecisionEngine } from "./decision-engine";
 import { ContextAssembler } from "./context-assembler";
@@ -1531,8 +1531,15 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     if (status) {
-      updates.push("status = ?");
-      values.push(status);
+      // Only accept valid ticket states — reject agent lifecycle messages (e.g., "agent:*")
+      // that old agent code may still send to this endpoint instead of /heartbeat.
+      if (!(TICKET_STATES as readonly string[]).includes(status)) {
+        console.log(`[Orchestrator] Rejecting invalid status "${status}" for ticket ${ticketId} — use /heartbeat for lifecycle messages`);
+        // Still process other fields (pr_url, branch_name, etc.) below
+      } else {
+        updates.push("status = ?");
+        values.push(status);
+      }
 
       // Track first_response_at when agent starts working
       if (status === "in_progress") {
