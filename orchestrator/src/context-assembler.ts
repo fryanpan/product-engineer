@@ -101,6 +101,7 @@ export class ContextAssembler {
       pr_url: ticket.pr_url,
       pr_title: prDetails?.title || "",
       branch: ticket.branch,
+      headSha: headSha || "",
       changedFiles: prDetails?.changed_files || 0,
       additions: prDetails?.additions || 0,
       deletions: prDetails?.deletions || 0,
