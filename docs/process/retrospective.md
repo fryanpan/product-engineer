@@ -336,3 +336,25 @@ The issue was fixed earlier today with commit edf0236 (orchestrator enriches eve
 - Added tests to verify the full flow
 
 **Key insight:** For critical routing data like thread_ts, pass it at BOTH initialization and per-event. Don't assume events will always arrive before the agent needs to post.
+## 2026-03-12 - BC-157 Session Retro
+
+**What worked:**
+- User's question exposed the gap immediately: "Does this account for no new commits but the merge gates changing?"
+- Composite fingerprint approach was straightforward to implement on top of existing partial implementation
+- User feedback during implementation ("fingerprint the PR review commentary") caught a blind spot before merge
+- Simple pipe-delimited format makes fingerprints human-readable in logs
+- Change detection logic provides clear audit trail (exactly what changed between decisions)
+
+**What didn't:**
+- Original PR author (5baef95) only considered code changes, not merge readiness changes
+- Took external review to identify the limitation
+
+**Action taken:**
+- Extended fingerprint to track: SHA, CI status, Copilot review status, Copilot comment content, mergeable state, review count
+- Added change detection with specific annotations in decision logs
+- Updated all documentation (code comments, migration comment, retro)
+
+**Learnings:**
+- When building deduplication logic, enumerate all state dimensions that should trigger re-evaluation, not just the obvious one
+- User questions during code review are often more valuable than autonomous review
+- For merge/deploy automation, explicitly consider: "what happens when X changes but Y stays the same?"
