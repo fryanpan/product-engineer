@@ -1,3 +1,28 @@
+## 2026-03-12 - BC-152: Merge gate Copilot retry optimization (PR #77)
+
+**Context:** Repos without Copilot review enabled waited through 5 retries × 90s = 7.5 minutes before proceeding. This was unnecessarily slow.
+
+**What worked:**
+- Simple heuristic approach (single retry) effectively solves the problem without requiring config changes or GitHub API calls
+- Code change was minimal and localized to one function in `orchestrator.ts:1194-1225`
+- Clear impact: 83% reduction in wait time for non-Copilot repos (7.5min → 90s)
+- Logic is clean: retry once to give Copilot time, then assume not enabled if still no review
+
+**Implementation:**
+- Changed retry logic from "retry up to 5 times" to "retry once (retryCount === 0), then assume Copilot not enabled"
+- Removed `MAX_MERGE_GATE_RETRIES` constant (no longer needed)
+- Updated log messages to reflect new behavior and include "(likely not enabled)" for clarity
+
+**Test results:**
+- 87 tests pass, 4 unrelated failures in test environment (missing hono/mustache dependencies - pre-existing)
+- No existing tests needed updating (constant wasn't referenced in tests)
+
+**Action:**
+- Monitor merge gate behavior in production after deploy to verify the heuristic works as expected
+- Consider adding explicit logging for "Copilot detected" vs "Copilot not detected" cases for better observability
+
+---
+
 ## 2026-03-11 - BC-136: E2E Test Scripts for Orchestrator (PR #72)
 
 **Context:** Create scripted E2E tests that exercise the full orchestrator lifecycle against staging to catch bugs like those found in Mar 9-10: supervisor spam loop, merge gate race condition, duplicate webhook dedup, stale token refresh, thread routing.
