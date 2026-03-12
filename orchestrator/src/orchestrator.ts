@@ -524,6 +524,32 @@ export class Orchestrator extends Container<Bindings> {
       )
     `);
 
+    // One-time migration: clean up stale agent:* status values (BC-153)
+    // PR #75 separated status field from agent lifecycle messages — this migration
+    // handles retroactive cleanup of legacy values. Remove after one deploy cycle.
+    try {
+      const staleTickets = this.ctx.storage.sql.exec(
+        `SELECT id, status, product, identifier FROM tickets WHERE status LIKE 'agent:%' AND agent_active = 0`
+      ).toArray() as Array<{ id: string; status: string; product: string; identifier: string | null }>;
+
+      if (staleTickets.length > 0) {
+        console.log(`[Orchestrator] BC-153 migration: found ${staleTickets.length} tickets with stale agent:* status values`);
+
+        for (const ticket of staleTickets) {
+          this.ctx.storage.sql.exec(
+            `UPDATE tickets SET status = 'failed', updated_at = datetime('now') WHERE id = ?`,
+            ticket.id
+          );
+          console.log(`[Orchestrator] BC-153 migration: ${ticket.identifier || ticket.id} (${ticket.product}): ${ticket.status} → failed`);
+        }
+
+        console.log(`[Orchestrator] BC-153 migration: cleaned up ${staleTickets.length} stale agent:* status values`);
+      }
+    } catch (err) {
+      console.error("[Orchestrator] BC-153 migration failed:", err);
+      // Don't throw — allow initialization to proceed even if migration fails
+    }
+
     this.dbInitialized = true;
 
     // Initialize AgentManager after tables are created
