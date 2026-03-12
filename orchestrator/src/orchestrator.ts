@@ -514,6 +514,16 @@ export class Orchestrator extends Container<Bindings> {
         throw err;
       }
     }
+    // Migration: add last_merge_decision_sha — track when we last made a merge decision to prevent noise
+    try {
+      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN last_merge_decision_sha TEXT`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
+        console.error("[Orchestrator] Failed to add last_merge_decision_sha column:", err);
+        throw err;
+      }
+    }
     // Merge gate retry state — persisted so it survives DO restarts/deploys
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS merge_gate_retries (
@@ -1139,6 +1149,9 @@ export class Orchestrator extends Container<Bindings> {
   /**
    * LLM Merge Gate — evaluates whether a PR is ready to auto-merge.
    * Called when CI passes and PR exists for a tracked ticket.
+   *
+   * Deduplicates decisions: only makes a new decision if the PR state has materially changed
+   * since the last decision (new commits, new reviews, CI status change, merge conflicts resolved).
    */
   private async evaluateMergeGate(
     ticketId: string,
@@ -1228,6 +1241,23 @@ export class Orchestrator extends Container<Bindings> {
       this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
     }
 
+    // Deduplication: skip decision if PR state hasn't changed since last decision
+    const currentHeadSha = context.headSha as string;
+    const lastDecisionSha = ticketRow.last_merge_decision_sha as string | null;
+
+    if (currentHeadSha && lastDecisionSha === currentHeadSha) {
+      console.log(`[Orchestrator] Skipping merge gate for ${ticketId} — no changes since last decision (SHA: ${currentHeadSha.slice(0, 7)})`);
+      return;
+    }
+
+    // Detect what changed since last decision for the decision log
+    const changes: string[] = [];
+    if (!lastDecisionSha) {
+      changes.push("initial evaluation");
+    } else if (lastDecisionSha !== currentHeadSha) {
+      changes.push(`new commits (${lastDecisionSha.slice(0, 7)} → ${currentHeadSha.slice(0, 7)})`);
+    }
+
     let decision;
     try {
       decision = await engine.makeDecision("merge-gate", context);
@@ -1237,8 +1267,18 @@ export class Orchestrator extends Container<Bindings> {
       decision = { action: "escalate", reason: "Merge gate LLM call failed", confidence: 0 };
     }
 
+    // Update last decision SHA to prevent re-evaluating on identical state
+    this.ctx.storage.sql.exec(
+      "UPDATE tickets SET last_merge_decision_sha = ?, updated_at = datetime('now') WHERE id = ?",
+      currentHeadSha, ticketId
+    );
+
     // Log the decision (use human-readable identifier like BC-156, fall back to UUID)
     const displayId = (ticketRow.identifier as string) || ticketId;
+    const reasonWithChanges = changes.length > 0
+      ? `${decision.reason} (changes: ${changes.join(", ")})`
+      : decision.reason;
+
     await engine.logDecision({
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -1246,7 +1286,7 @@ export class Orchestrator extends Container<Bindings> {
       ticket_id: displayId,
       context_summary: `PR: ${ticketRow.pr_url}`,
       action: decision.action,
-      reason: decision.reason,
+      reason: reasonWithChanges,
       confidence: decision.confidence || 0,
     }, {
       sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
