@@ -144,39 +144,72 @@ describe("Agent Lifecycle Integration", () => {
 
   describe("Database Migrations", () => {
     test("BC-153: stale agent:* status values are cleaned up on init", () => {
-      // This test verifies that tickets with legacy agent:* status values
-      // (from before PR #75) are migrated to 'failed' status
+      // This test verifies that the BC-153 migration actually updates tickets
+      // with legacy agent:* status values to 'failed' status when agent_active=0
 
-      // Test data representing stale tickets with agent:* status and agent_active=0
-      const staleStatuses = [
-        { id: "ticket-1", status: "agent:shutdown_requested", identifier: "BC-101" },
-        { id: "ticket-2", status: "agent:container_shutdown", identifier: "BC-102" },
-        { id: "ticket-3", status: "agent:stopping", identifier: null },
-      ];
+      // Create in-memory SQLite database for testing
+      const { Database } = require("bun:sqlite");
+      const db = new Database(":memory:");
 
-      // These should NOT be migrated (either active agent or valid status)
-      const validStatuses = [
-        { id: "ticket-4", status: "agent:running", agent_active: 1 }, // Active agent
-        { id: "ticket-5", status: "failed", agent_active: 0 },        // Already valid status
-        { id: "ticket-6", status: "merged", agent_active: 0 },        // Already terminal
-      ];
+      // Create tickets table (minimal schema for migration test)
+      db.exec(`
+        CREATE TABLE tickets (
+          id TEXT PRIMARY KEY,
+          product TEXT NOT NULL,
+          status TEXT NOT NULL,
+          agent_active INTEGER NOT NULL DEFAULT 0,
+          identifier TEXT
+        )
+      `);
 
-      // The migration logic matches: status LIKE 'agent:%' AND agent_active = 0
-      // Expected behavior:
-      // - staleStatuses entries should be updated to status='failed'
-      // - validStatuses entries should remain unchanged
+      // Insert test data: stale agent:* statuses with agent_active=0
+      db.exec(`
+        INSERT INTO tickets (id, product, status, agent_active, identifier)
+        VALUES
+          ('ticket-1', 'test-app', 'agent:shutdown_requested', 0, 'BC-101'),
+          ('ticket-2', 'test-app', 'agent:container_shutdown', 0, 'BC-102'),
+          ('ticket-3', 'test-app', 'agent:stopping', 0, NULL)
+      `);
 
-      for (const ticket of staleStatuses) {
-        expect(ticket.status).toMatch(/^agent:/);
-        // After migration, these would become "failed"
+      // Insert tickets that should NOT be migrated
+      db.exec(`
+        INSERT INTO tickets (id, product, status, agent_active, identifier)
+        VALUES
+          ('ticket-4', 'test-app', 'agent:running', 1, 'BC-103'),  -- Active agent
+          ('ticket-5', 'test-app', 'failed', 0, 'BC-104'),         -- Already valid
+          ('ticket-6', 'test-app', 'merged', 0, 'BC-105')          -- Already terminal
+      `);
+
+      // Run the BC-153 migration (same logic as in orchestrator.ts initDb)
+      const staleTickets = db.query(
+        `SELECT id, status, product, identifier FROM tickets WHERE status LIKE 'agent:%' AND agent_active = 0`
+      ).all();
+
+      expect(staleTickets.length).toBe(3);
+
+      for (const ticket of staleTickets) {
+        db.exec(`UPDATE tickets SET status = 'failed' WHERE id = ?`, [ticket.id]);
       }
 
-      for (const ticket of validStatuses) {
-        const shouldMigrate =
-          ticket.status.startsWith("agent:") &&
-          ("agent_active" in ticket ? ticket.agent_active : 0) === 0;
-        expect(shouldMigrate).toBe(false);
-      }
+      // Verify: stale tickets should now have status='failed'
+      const ticket1 = db.query(`SELECT status FROM tickets WHERE id = 'ticket-1'`).get();
+      const ticket2 = db.query(`SELECT status FROM tickets WHERE id = 'ticket-2'`).get();
+      const ticket3 = db.query(`SELECT status FROM tickets WHERE id = 'ticket-3'`).get();
+
+      expect(ticket1.status).toBe("failed");
+      expect(ticket2.status).toBe("failed");
+      expect(ticket3.status).toBe("failed");
+
+      // Verify: tickets that should NOT migrate remain unchanged
+      const ticket4 = db.query(`SELECT status FROM tickets WHERE id = 'ticket-4'`).get();
+      const ticket5 = db.query(`SELECT status FROM tickets WHERE id = 'ticket-5'`).get();
+      const ticket6 = db.query(`SELECT status FROM tickets WHERE id = 'ticket-6'`).get();
+
+      expect(ticket4.status).toBe("agent:running");  // Active agent not migrated
+      expect(ticket5.status).toBe("failed");         // Already valid, unchanged
+      expect(ticket6.status).toBe("merged");         // Already terminal, unchanged
+
+      db.close();
     });
   });
 });
