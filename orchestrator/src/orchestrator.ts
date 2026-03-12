@@ -159,7 +159,7 @@ export class Orchestrator extends Container<Bindings> {
   private lastHealthCheck = 0;
 
   // Merge gate retry constants — state is persisted in SQLite (merge_gate_retries table)
-  private static MAX_MERGE_GATE_RETRIES = 5;
+  // Single retry (90s) to detect Copilot availability; if not present, assume not enabled
   private static MERGE_GATE_RETRY_DELAY_MS = 90_000; // 90 seconds
   private static HEALTH_CHECK_TTL = 60_000; // 60 seconds
 
@@ -1197,10 +1197,14 @@ export class Orchestrator extends Container<Bindings> {
       ).toArray()[0] as { retry_count: number } | undefined;
       const retryCount = retryRow?.retry_count ?? 0;
 
-      if (retryCount < Orchestrator.MAX_MERGE_GATE_RETRIES) {
+      // Heuristic: if this is retry 0 (first check), schedule one retry to give Copilot time.
+      // If retry >= 1 and still no Copilot review, assume Copilot isn't enabled and proceed.
+      const shouldRetry = retryCount === 0;
+
+      if (shouldRetry) {
         const nextRetryAt = new Date(Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS).toISOString().replace("T", " ").replace("Z", "");
         console.log(
-          `[Orchestrator] Copilot review pending for ${ticketId}, scheduling retry ${retryCount + 1}/${Orchestrator.MAX_MERGE_GATE_RETRIES}`
+          `[Orchestrator] Copilot review pending for ${ticketId}, scheduling retry ${retryCount + 1}`
         );
         this.ctx.storage.sql.exec(
           `INSERT INTO merge_gate_retries (ticket_id, product, retry_count, next_retry_at)
@@ -1214,9 +1218,9 @@ export class Orchestrator extends Container<Bindings> {
         return;
       }
 
-      // Exhausted retries — proceed without Copilot review
+      // Either exhausted single retry or Copilot not enabled — proceed without Copilot review
       console.log(
-        `[Orchestrator] Copilot review not found after ${Orchestrator.MAX_MERGE_GATE_RETRIES} retries for ${ticketId}, proceeding without it`
+        `[Orchestrator] Copilot review not found after ${retryCount} retry(ies) for ${ticketId}, proceeding without it (likely not enabled)`
       );
       this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", ticketId);
     } else {
