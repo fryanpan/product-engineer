@@ -156,6 +156,16 @@ private async ensureContainerRunning() {
 
 **Result:** Brief Slack disconnection (1-2 seconds) on deployment, then auto-reconnects. No events lost.
 
+### Status Field Separation
+
+**Problem:** The `status` field was being conflated between the formal state machine (12 states) and agent lifecycle messages (`agent:starting_session`, `agent:pushing_to_branch`). This caused merge gate failures and incorrect state checks.
+
+**Solution:** Separate status from lifecycle:
+- `status` — formal state machine only (`TICKET_STATES`). Validated in `handleStatusUpdate` — invalid values rejected with a log warning.
+- `agent_message` — free-form lifecycle text. Updated via `/heartbeat` endpoint.
+- `last_heartbeat` — timestamp of last heartbeat. Also updated via `/heartbeat`.
+- Auto-transition: first heartbeat moves ticket from `spawning → active` automatically.
+
 ### Terminal State Protection
 
 **Problem:** After an agent finishes (PR merged, ticket closed), webhook events could spawn a new agent for the same ticket.
