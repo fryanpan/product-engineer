@@ -315,6 +315,21 @@ describe("buildEventPrompt", () => {
     expect(prompt).toContain("retro");
   });
 
+  it("formats pr_closed event", async () => {
+    const event = makeEvent({
+      type: "pr_closed",
+      payload: { pr_url: "https://github.com/owner/repo/pull/42" },
+    });
+
+    const content = await buildEventPrompt(event, MOCK_SLACK_TOKEN);
+    const prompt = extractText(content);
+
+    expect(prompt).toContain("PR was closed without being merged");
+    expect(prompt).toContain("Update the task status");
+    expect(prompt).toContain("notify Slack");
+    expect(prompt).toContain("retro");
+  });
+
   it("formats ci_status event with status and description", async () => {
     const event = makeEvent({
       type: "ci_status",
