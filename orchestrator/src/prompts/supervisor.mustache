@@ -41,12 +41,14 @@ For each agent or issue that needs action, respond with a JSON array:
 ```json
 [
   {
-    "target": "ticket_id or 'system'",
+    "target": "internalId or 'system'",
     "action": "restart" | "kill" | "escalate" | "trigger_merge_eval" | "redeliver_events" | "defer_new_tickets" | "start_queued" | "none",
     "reason": "one sentence"
   }
 ]
 ```
+
+**IMPORTANT:** Use the `internalId` field as the target, NOT `ticketId`. The `ticketId` field is for human display only.
 
 **Action guide:**
 - **restart**: Heartbeat stale >30min AND health check fails AND ticket not terminal. Max 2 restarts per ticket.

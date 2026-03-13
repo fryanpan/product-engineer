@@ -1,3 +1,127 @@
+## 2026-03-12 - BC-157: Deduplicate merge gate decisions (PR #80)
+
+**Context:** Merge gate was generating repetitive, identical decisions for the same PR state. Multiple triggers (CI webhook, PR status update, supervisor, Copilot retries) all called `evaluateMergeGate()` without checking if the PR had actually changed since the last decision.
+
+**What worked:**
+- Simple state tracking: store PR head SHA after each decision, skip if unchanged
+- SHA-based deduplication is deterministic and catches all duplicate triggers
+- Change detection with explicit annotation (e.g., "changes: new commits abc123 → def456") provides clarity
+- Migration pattern with duplicate column check is well-established
+
+**Implementation:**
+- **orchestrator/src/orchestrator.ts**: Add `last_merge_decision_sha` column migration, deduplication check before LLM call, SHA update after decision
+- **orchestrator/src/context-assembler.ts**: Include `headSha` in merge gate context (was computed but not returned)
+- **orchestrator/src/types.ts**: Add field to `TicketRecord` interface
+
+**Key insight:**
+The problem wasn't in any single trigger path - it was the lack of a shared deduplication layer. Multiple valid triggers all converged on `evaluateMergeGate()`, which had no memory of previous decisions. Adding state at the decision point (not the trigger points) fixes all paths at once.
+
+**Test results:**
+- 87 tests pass (same as baseline - no new test failures)
+- Deduplication logic is straightforward: SHA match = skip, SHA diff = proceed
+
+**What didn't:**
+- Initially considered tracking multiple state dimensions (reviews, CI status, merge conflicts) but SHA is simpler and sufficient - any material change results in a new commit/rebase
+
+**Action:**
+- Monitor #product-engineer-decisions after deploy to verify:
+  - Single decision per PR head SHA
+  - Change annotations appear in subsequent decisions
+  - Copilot review retries don't spam when SHA unchanged
+
+---
+
+## 2026-03-12 - BC-157: Complete merge gate deduplication with composite fingerprint
+
+**Context:** BC-157 branch had partial implementation that only tracked PR head SHA for deduplication. This missed cases where merge conditions changed without new commits (CI status changes, Copilot review completes, merge conflicts resolve, new reviews arrive).
+
+**What worked:**
+- User identified the gap through question: "Does this account for no new commits but the merge gates changing?"
+- Composite fingerprint approach captures all merge-relevant state changes, not just code changes
+- Fingerprint format is simple pipe-delimited string: `sha:abc123|ci:true|copilot:false|mergeable:CONFLICTING|reviews:2`
+- Change detection logic parses fingerprints and reports exactly what changed (e.g., "CI passed", "Copilot review complete", "mergeable state: CONFLICTING → MERGEABLE")
+- Reused existing `last_merge_decision_sha` column (misnomer now, but avoids another migration)
+- All 87 tests still pass
+
+**Implementation:**
+- **orchestrator/src/orchestrator.ts:1250-1295**: Replace SHA-only check with composite fingerprint
+  - Track: head SHA, CI status, Copilot review status, mergeable state, review count, Copilot comment content
+  - Copilot comments hashed to detect re-review with new comments (path + first 100 chars of each comment)
+  - Parse last and current fingerprints to detect what changed
+  - Include specific changes in decision log reason (e.g., "CI passed", "Copilot comments updated")
+- **orchestrator/src/orchestrator.ts:517-520**: Update migration comment to reflect composite fingerprint purpose
+- **orchestrator/src/orchestrator.ts:1151-1161**: Update doc comment to include all tracked dimensions
+
+**Test results:**
+- 87 tests pass, 4 pre-existing failures (missing hono/mustache dependencies)
+- No test changes needed (fingerprint comparison is backwards-compatible with null/missing values)
+
+**What didn't:**
+- Initial implementation (5baef95) only considered code changes, not merge readiness changes
+- Took user feedback to identify the gap
+
+**Action:**
+- Monitor merge gate behavior in production to verify fingerprint correctly triggers re-evaluation when CI/Copilot/mergeable state changes
+- Consider more semantic column name in future schema refactor (e.g., `last_merge_state_fingerprint`)
+
+---
+
+## 2026-03-12 - BC-156: Use human-readable identifiers in all messages (PR #79)
+
+**Context:** Decision messages in Slack were showing UUIDs instead of human-readable ticket identifiers (e.g., "1513bdac-12ea-46b1-9f7f-85c7ad1c8450" instead of "BC-156"). This made messages harder to parse and reduced usability.
+
+**What worked:**
+- Systematic audit of all message paths: decision logs, Slack notifications, Linear comments, transcript lists
+- Reused existing `identifier` field in tickets table (already being set by Linear webhooks)
+- Context assembler already had the pattern for ticket review and merge gate - extended to supervisor
+- Two-field approach for supervisor: `ticketId` (human-readable, for display) + `internalId` (UUID, for database operations)
+
+**Implementation:**
+- **orchestrator/src/orchestrator.ts**: Merge gate and supervisor logging now use `ticket.identifier || ticketId` fallback
+- **orchestrator/src/context-assembler.ts**: `forSupervisor()` returns both fields for all ticket lists
+- **orchestrator/src/prompts/supervisor.mustache**: Updated to clarify using `internalId` for action targets
+- **Transcript API**: Query uses `COALESCE(identifier, id)` to prefer human IDs in list results
+
+**Test results:**
+- 87 tests pass, 4 unrelated failures (pre-existing missing dependencies)
+- No test updates needed - changes are backwards-compatible (UUIDs work as fallback)
+
+**What didn't:**
+- Initially missed that supervisor returns `target` field which needs identifier lookup - caught during implementation
+- Context assembler test didn't verify the actual field values - only checked types
+
+**Action:**
+- Monitor decision messages in #product-engineer-decisions after deploy to verify identifiers appear
+- Consider adding identifier column to all database queries for consistency
+- Future: make identifier field NOT NULL in schema (requires migration for old tickets)
+
+---
+
+## 2026-03-12 - BC-152: Merge gate Copilot retry optimization (PR #77)
+
+**Context:** Repos without Copilot review enabled waited through 5 retries × 90s = 7.5 minutes before proceeding. This was unnecessarily slow.
+
+**What worked:**
+- Simple heuristic approach (single retry) effectively solves the problem without requiring config changes or GitHub API calls
+- Code change was minimal and localized to one function in `orchestrator.ts:1194-1225`
+- Clear impact: 83% reduction in wait time for non-Copilot repos (7.5min → 90s)
+- Logic is clean: retry once to give Copilot time, then assume not enabled if still no review
+
+**Implementation:**
+- Changed retry logic from "retry up to 5 times" to "retry once (retryCount === 0), then assume Copilot not enabled"
+- Removed `MAX_MERGE_GATE_RETRIES` constant (no longer needed)
+- Updated log messages to reflect new behavior and include "(likely not enabled)" for clarity
+
+**Test results:**
+- 87 tests pass, 4 unrelated failures in test environment (missing hono/mustache dependencies - pre-existing)
+- No existing tests needed updating (constant wasn't referenced in tests)
+
+**Action:**
+- Monitor merge gate behavior in production after deploy to verify the heuristic works as expected
+- Consider adding explicit logging for "Copilot detected" vs "Copilot not detected" cases for better observability
+
+---
+
 ## 2026-03-11 - BC-136: E2E Test Scripts for Orchestrator (PR #72)
 
 **Context:** Create scripted E2E tests that exercise the full orchestrator lifecycle against staging to catch bugs like those found in Mar 9-10: supervisor spam loop, merge gate race condition, duplicate webhook dedup, stale token refresh, thread routing.
@@ -212,3 +336,50 @@ The issue was fixed earlier today with commit edf0236 (orchestrator enriches eve
 - Added tests to verify the full flow
 
 **Key insight:** For critical routing data like thread_ts, pass it at BOTH initialization and per-event. Don't assume events will always arrive before the agent needs to post.
+## 2026-03-13 - BC-161: Dozen trigger merge eval decisions every half hour
+
+**What worked:**
+- Quick root cause identification by examining supervisor logic and webhook handlers
+- Found the gap: PR closed without merging had no webhook handler
+- Clean fix with proper test coverage (agent prompt test for pr_closed event)
+- All 129 existing tests continued to pass
+
+**What didn't:**
+- Initial investigation took multiple rounds of grep/read to understand the full flow
+- Had to trace through: supervisor → context-assembler → webhooks → agent prompt
+- Could have been faster if I'd checked webhook handlers first (where the gap was)
+
+**Technical Discovery:**
+- GitHub PR webhooks have `action: "closed"` with `merged: true|false` flag
+- Previous code only handled `closed && merged`, not `closed && !merged`
+- Tickets with closed-but-not-merged PRs stay in `pr_open` status indefinitely
+- Supervisor's stale PR query (`pr_url IS NOT NULL AND status = 'pr_open' AND updated_at > 4h`) picks them up every tick (5 min interval)
+- This caused ~12 LLM merge gate evaluations every 30 minutes for dormant tickets
+
+**Action:**
+- Added this pattern to learnings.md under "GitHub Webhooks" section
+
+---
+
+## 2026-03-12 - BC-157 Session Retro
+
+**What worked:**
+- User's question exposed the gap immediately: "Does this account for no new commits but the merge gates changing?"
+- Composite fingerprint approach was straightforward to implement on top of existing partial implementation
+- User feedback during implementation ("fingerprint the PR review commentary") caught a blind spot before merge
+- Simple pipe-delimited format makes fingerprints human-readable in logs
+- Change detection logic provides clear audit trail (exactly what changed between decisions)
+
+**What didn't:**
+- Original PR author (5baef95) only considered code changes, not merge readiness changes
+- Took external review to identify the limitation
+
+**Action taken:**
+- Extended fingerprint to track: SHA, CI status, Copilot review status, Copilot comment content, mergeable state, review count
+- Added change detection with specific annotations in decision logs
+- Updated all documentation (code comments, migration comment, retro)
+
+**Learnings:**
+- When building deduplication logic, enumerate all state dimensions that should trigger re-evaluation, not just the obvious one
+- User questions during code review are often more valuable than autonomous review
+- For merge/deploy automation, explicitly consider: "what happens when X changes but Y stays the same?"

@@ -362,19 +362,35 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
   }
 
   // Handle different PR actions
-  if (payload.action === "closed" && payload.pull_request.merged) {
-    await forwardToOrchestrator(env, {
-      type: "pr_merged",
-      source: "github",
-      ticketId: taskId,
-      product: productName,
-      payload: {
-        pr_url: payload.pull_request.html_url,
-        branch,
-        repo: payload.repository.full_name,
-      },
-    });
-    return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+  if (payload.action === "closed") {
+    if (payload.pull_request.merged) {
+      await forwardToOrchestrator(env, {
+        type: "pr_merged",
+        source: "github",
+        ticketId: taskId,
+        product: productName,
+        payload: {
+          pr_url: payload.pull_request.html_url,
+          branch,
+          repo: payload.repository.full_name,
+        },
+      });
+      return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
+    } else {
+      // PR closed without merging — notify agent so it can update status
+      await forwardToOrchestrator(env, {
+        type: "pr_closed",
+        source: "github",
+        ticketId: taskId,
+        product: productName,
+        payload: {
+          pr_url: payload.pull_request.html_url,
+          branch,
+          repo: payload.repository.full_name,
+        },
+      });
+      return Response.json({ ok: true, product: productName, taskId, status: "pr_closed" });
+    }
   }
 
   if (payload.action === "synchronize") {

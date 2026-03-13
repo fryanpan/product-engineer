@@ -84,3 +84,9 @@ Technical discoveries that should persist across sessions.
 ## Slack Thread Routing
 - The Orchestrator looks up existing tickets by `slack_thread_ts` (exact string match). Re-triggers must use the original top-level message `ts`, not a reply `ts` — otherwise a new ticket is created instead of routing to the existing one.
 - For new `app_mention` events, `slackEvent.ts` (not `thread_ts`) becomes the canonical `thread_ts` stored in the DB. Subsequent replies arrive with `thread_ts` matching that original `ts`. The asymmetry is intentional — Slack uses the first message's `ts` as the thread identifier.
+
+## GitHub Webhooks
+- GitHub PR webhooks have `action: "closed"` with a `merged: true|false` flag. Always handle BOTH cases:
+  - `action === "closed" && merged === true` → PR was merged (route as `pr_merged` event)
+  - `action === "closed" && merged === false` → PR was closed without merging (route as `pr_closed` event)
+- If you only handle the merged case, tickets with closed-but-not-merged PRs stay in `pr_open` status forever, causing supervisor to repeatedly trigger merge gate evaluations (every 5 min).
