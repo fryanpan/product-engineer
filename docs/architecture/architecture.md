@@ -48,10 +48,11 @@ Stateless Cloudflare Worker. Receives all inbound traffic and proxies to the Orc
 | Route | Auth | Purpose |
 |-------|------|---------|
 | `POST /api/webhooks/linear` | HMAC signature | Linear issue create/update |
-| `POST /api/webhooks/github` | GitHub signature | PR review/merge events |
+| `POST /api/webhooks/github` | GitHub signature | PR review/merge, check_suite (CI) events |
 | `POST /api/internal/slack-event` | `X-Internal-Key: SLACK_APP_TOKEN` | Slack events from Socket Mode container |
-| `POST /api/internal/status` | `X-Internal-Key: API_KEY` | Agent phone-home status updates |
-| `POST /api/orchestrator/heartbeat` | `X-Internal-Key: API_KEY` | Agent heartbeats |
+| `POST /api/internal/status` | `X-Internal-Key: API_KEY` | Agent status updates (pr_url, branch, formal status) |
+| `POST /api/orchestrator/heartbeat` | `X-Internal-Key: API_KEY` | Agent heartbeats (free-form lifecycle messages) |
+| `POST /api/dispatch` | `X-API-Key: API_KEY` | Programmatic event trigger |
 | `GET /health` | None | Health check (also wakes Orchestrator container) |
 
 ### Orchestrator DO (`orchestrator/src/orchestrator.ts`)
@@ -59,15 +60,20 @@ Stateless Cloudflare Worker. Receives all inbound traffic and proxies to the Orc
 Singleton Durable Object. Owns all coordination state in SQLite.
 
 **Tables:**
-- `tickets` — id, product, status, slack_thread_ts, agent_active, last_heartbeat
+- `tickets` — id, product, status, slack_thread_ts, agent_active, last_heartbeat, checks_passed, agent_message
 - `products` — slug, config (repos, secrets, channels)
 - `settings` — key/value (AI gateway config, Linear team ID)
 - `token_usage` — per-ticket token consumption
+- `merge_gate_retries` — ticket_id, retry_count, next_retry_at, phase (ci/copilot)
+- `ticket_metrics` — outcome tracking, pr_count, revision_count, cost
+- `decision_log` — LLM decision audit trail
 
 **Key methods:**
-- `handleEvent` — Upserts ticket, routes to TicketAgent
+- `handleEvent` — Upserts ticket, routes to TicketAgent. `checks_passed` events trigger merge gate.
 - `handleSlackEvent` — Thread reply routing (lookup by `slack_thread_ts`) + new mention handling
-- `routeToAgent` — Initializes TicketAgent, delivers events with retry
+- `handleStatusUpdate` — Agent reports status, pr_url, branch. Validates status against `TICKET_STATES`. Triggers merge gate when pr_url is reported.
+- `handleHeartbeat` — Agent heartbeat with free-form message. Auto-transitions `spawning → active`.
+- `evaluateMergeGate` — Phased wait (CI → Copilot review) then LLM decision (auto_merge/escalate/send_back)
 - `ensureContainerRunning` — Starts/restarts the Socket Mode companion container
 
 ### Orchestrator Container (`containers/orchestrator/`)
@@ -198,6 +204,54 @@ sequenceDiagram
     AC->>Slack: notify_slack → first message<br/>Saves ts as slack_thread_ts
     AC-->>W: persistSlackThreadTs(ts)<br/>(fire-and-forget)
 ```
+
+## Event Flow: Merge Gate
+
+The merge gate decides whether to auto-merge a PR. It has multiple trigger paths depending on whether the repo has CI configured.
+
+```mermaid
+sequenceDiagram
+    participant Agent as Agent Container
+    participant W as Worker
+    participant O as Orchestrator DO
+    participant GH as GitHub API
+
+    Agent->>W: POST /api/internal/status<br/>{pr_url, status: "pr_open"}
+    W->>O: handleStatusUpdate()
+
+    Note over O: Always trigger merge gate<br/>when pr_url is reported
+
+    O->>GH: GET /repos/.../commits/{sha}/status
+    alt No CI configured (0 statuses)
+        Note over O: hasCI=false → skip CI wait
+    else CI configured but pending
+        Note over O: Schedule retry (90s, up to 5x)
+        O-->>O: alarm() → retry evaluateMergeGate
+    else CI passed
+        Note over O: ciReady=true
+    end
+
+    O->>GH: GET /repos/.../pulls/{n}/reviews
+    alt Copilot has reviewed
+        Note over O: copilotReady=true
+    else Copilot not yet reviewed
+        Note over O: Schedule retry (90s, up to 5x)<br/>Counter resets from CI phase
+        O-->>O: alarm() → retry evaluateMergeGate
+    end
+
+    Note over O: Both CI and Copilot ready<br/>(or retries exhausted)
+
+    O->>O: LLM decision:<br/>auto_merge / escalate / send_back
+    alt auto_merge
+        O->>GH: PUT /repos/.../pulls/{n}/merge
+    else send_back
+        O->>Agent: Send review feedback event
+    else escalate
+        O->>Slack: Post to decisions channel
+    end
+```
+
+**Alternative trigger path (repos with CI):** The `check_suite` webhook fires when CI completes. This sets `checks_passed=1` on the ticket and immediately calls `evaluateMergeGate`, bypassing the CI wait retry loop.
 
 ## Key Lifecycle Boundaries
 

@@ -10,8 +10,8 @@ You are the Product Engineer orchestrator evaluating whether a PR is ready to me
 **Additions:** +{{{additions}}} / Deletions: -{{{deletions}}}
 
 ## CI Status
-{{#ciPassed}}All checks passed.{{/ciPassed}}
-{{^ciPassed}}CI FAILED: {{{ciFailureDetails}}}{{/ciPassed}}
+{{^hasCI}}No CI configured for this repo — skip CI check.{{/hasCI}}
+{{#hasCI}}{{#ciPassed}}All checks passed.{{/ciPassed}}{{^ciPassed}}CI FAILED: {{{ciFailureDetails}}}{{/ciPassed}}{{/hasCI}}
 
 ## Merge Status
 {{#mergeable}}Mergeable: {{{mergeable}}}{{/mergeable}}
@@ -80,6 +80,6 @@ Respond with JSON:
 ```
 
 **Decision guide:**
-- **auto_merge**: CI green, no unresolved review comments, no hard gates triggered. This is the default.
+- **auto_merge**: CI green (or no CI configured), no unresolved review comments, no hard gates triggered. This is the default.
 - **escalate**: A hard gate was triggered and risk cannot be demonstrated as low.
 - **send_back**: CI failed, unresolved review comments, merge conflicts, or obvious issues in the diff. If the PR has merge conflicts, send back with instructions to rebase.

@@ -67,6 +67,20 @@ Technical discoveries that should persist across sessions.
 - Fine-grained PATs do NOT have a "Checks" permission. The check-runs API (`/repos/.../commits/.../check-runs`) is inaccessible. Use the commit statuses API (`/repos/.../commits/.../status`) instead, which requires "Commit statuses: Read" permission.
 - Never use the check-runs API in code that runs with fine-grained PATs. Always use commit statuses.
 
+## Status Field vs Agent Lifecycle
+- The `status` field is for the **formal state machine** (12 states: created → reviewing → spawning → active → pr_open → merged etc.). It must only contain values from `TICKET_STATES`.
+- Agent lifecycle messages ("starting session", "cloning repos", "pushing to branch") go to `agent_message` via the `/heartbeat` endpoint. These are free-form strings, not state machine states.
+- Old agent containers were writing `agent:*` strings into `status` via `handleStatusUpdate`, polluting the state machine. Fix: `handleStatusUpdate` validates against `TICKET_STATES` and rejects invalid values.
+- The `spawning → active` transition is now automatic: first heartbeat from the agent triggers it in `handleHeartbeat`. No explicit status update needed.
+
+## Merge Gate for Repos Without CI
+- The merge gate was only triggered by `check_suite` webhooks (CI). Repos without CI never got a merge gate evaluation, leaving PRs stuck forever.
+- Fix: always trigger the merge gate when `pr_url` is reported in `handleStatusUpdate`. The merge gate then checks:
+  1. **CI**: `fetchCIStatus` returns `hasCI: false` when no commit statuses exist → skip CI wait. `hasCI: true` with pending CI → retry up to 5x (90s apart).
+  2. **Copilot review**: if enabled, wait via retries (5x, 90s). If not found after retries → proceed without.
+- The CI wait and Copilot wait are sequential phases sharing the `merge_gate_retries` table with a `phase` column. Counter resets when transitioning from `ci` → `copilot` phase.
+- For repos WITH CI, the `checks_passed` webhook path still works as the fast path — it sets `checks_passed=1` in the DB and calls `evaluateMergeGate` directly.
+
 ## Slack Thread Routing
 - The Orchestrator looks up existing tickets by `slack_thread_ts` (exact string match). Re-triggers must use the original top-level message `ts`, not a reply `ts` — otherwise a new ticket is created instead of routing to the existing one.
 - For new `app_mention` events, `slackEvent.ts` (not `thread_ts`) becomes the canonical `thread_ts` stored in the DB. Subsequent replies arrive with `thread_ts` matching that original `ts`. The asymmetry is intentional — Slack uses the first message's `ts` as the thread identifier.

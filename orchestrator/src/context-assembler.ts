@@ -86,7 +86,7 @@ export class ContextAssembler {
     const headSha = (prDetails?.head as Record<string, unknown> | undefined)?.sha as string | undefined;
     const ciStatus = prNumber && ghToken
       ? await this.fetchCIStatus(repoPath, headSha, ghToken)
-      : { passed: false, details: "No CI data" };
+      : { passed: false, hasCI: false, details: "No CI data" };
 
     // GitHub REST API returns mergeable (boolean|null) and mergeable_state (string)
     const mergeable = prDetails?.mergeable;
@@ -108,6 +108,7 @@ export class ContextAssembler {
       mergeable: mergeable === true ? "MERGEABLE" : mergeable === false ? "CONFLICTING" : "UNKNOWN",
       mergeableState: mergeableState || "",
       ciPassed: ciStatus.passed,
+      hasCI: ciStatus.hasCI,
       ciFailureDetails: ciStatus.details,
       diffSummary: (diff as string).slice(0, 5000),
       reviewComments: reviews,
@@ -273,25 +274,24 @@ export class ContextAssembler {
   }
 
   private async fetchCIStatus(repo: string, sha: string | undefined, token: string) {
-    if (!sha) return { passed: false, details: "No commit SHA" };
+    if (!sha) return { passed: false, hasCI: false, details: "No commit SHA" };
     // Use combined status API (works with fine-grained PAT "Commit statuses" permission)
     const res = await fetch(`https://api.github.com/repos/${repo}/commits/${sha}/status`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json", "User-Agent": "product-engineer-orchestrator" },
     });
-    if (!res.ok) return { passed: false, details: `GitHub API error: ${res.status}` };
+    if (!res.ok) return { passed: false, hasCI: false, details: `GitHub API error: ${res.status}` };
     const data = await res.json() as { state: string; total_count: number; statuses: Array<{ context: string; state: string; description: string | null }> };
     if (data.total_count === 0) {
-      // No commit statuses reported yet. The check_suite webhook that triggered the merge gate
-      // already confirms CI status, so treat this as passed rather than calling the check-runs
-      // API (which requires Checks permission unavailable on fine-grained PATs).
-      return { passed: true, details: "No commit statuses — CI status confirmed via webhook" };
+      // No commit statuses found — either repo has no CI, or CI hasn't reported yet.
+      // Return hasCI: false so callers can distinguish.
+      return { passed: true, hasCI: false, details: "No commit statuses found" };
     }
-    if (data.state === "pending") return { passed: false, details: "CI still running" };
+    if (data.state === "pending") return { passed: false, hasCI: true, details: "CI still running" };
     if (data.state === "failure" || data.state === "error") {
       const failed = data.statuses.filter(s => s.state === "failure" || s.state === "error");
-      return { passed: false, details: failed.map(f => `${f.context}: ${f.state}`).join(", ") };
+      return { passed: false, hasCI: true, details: failed.map(f => `${f.context}: ${f.state}`).join(", ") };
     }
-    return { passed: true, details: "All checks passed" };
+    return { passed: true, hasCI: true, details: "All checks passed" };
   }
 
   private async fetchPRComments(repo: string, prNumber: string, token: string): Promise<Array<{ user: string; path: string; body: string }>> {
