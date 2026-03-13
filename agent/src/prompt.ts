@@ -170,6 +170,8 @@ export async function buildEventPrompt(
       return `A comment was posted on your PR:\n\n**Commenter:** ${payload.commenter || "unknown"}\n**Comment:**\n<user_input>\n${payload.comment_body || "(no comment)"}\n</user_input>\n\nRespond to the comment. If changes are needed, make them, push, and notify Slack.`;
     case "pr_merged":
       return `The PR has been merged. Update the task status to "merged", notify Slack, and do a brief retro.`;
+    case "pr_closed":
+      return `The PR was closed without being merged. Update the task status to "closed", notify Slack, and do a brief retro explaining what happened.`;
     case "ci_status":
       return `CI status update:\n\n**Status:** ${payload.status}\n**Description:** ${payload.description || ""}\n\nIf CI failed, investigate and fix. If it passed, continue with the workflow.`;
     case "linear_comment":
