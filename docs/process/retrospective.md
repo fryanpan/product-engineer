@@ -336,6 +336,31 @@ The issue was fixed earlier today with commit edf0236 (orchestrator enriches eve
 - Added tests to verify the full flow
 
 **Key insight:** For critical routing data like thread_ts, pass it at BOTH initialization and per-event. Don't assume events will always arrive before the agent needs to post.
+## 2026-03-13 - BC-161: Dozen trigger merge eval decisions every half hour
+
+**What worked:**
+- Quick root cause identification by examining supervisor logic and webhook handlers
+- Found the gap: PR closed without merging had no webhook handler
+- Clean fix with proper test coverage (agent prompt test for pr_closed event)
+- All 129 existing tests continued to pass
+
+**What didn't:**
+- Initial investigation took multiple rounds of grep/read to understand the full flow
+- Had to trace through: supervisor → context-assembler → webhooks → agent prompt
+- Could have been faster if I'd checked webhook handlers first (where the gap was)
+
+**Technical Discovery:**
+- GitHub PR webhooks have `action: "closed"` with `merged: true|false` flag
+- Previous code only handled `closed && merged`, not `closed && !merged`
+- Tickets with closed-but-not-merged PRs stay in `pr_open` status indefinitely
+- Supervisor's stale PR query (`pr_url IS NOT NULL AND status = 'pr_open' AND updated_at > 4h`) picks them up every tick (5 min interval)
+- This caused ~12 LLM merge gate evaluations every 30 minutes for dormant tickets
+
+**Action:**
+- Added this pattern to learnings.md under "GitHub Webhooks" section
+
+---
+
 ## 2026-03-12 - BC-157 Session Retro
 
 **What worked:**
