@@ -122,7 +122,7 @@ export class ContextAssembler {
   async forSupervisor(): Promise<Record<string, unknown>> {
     const activeTickets = this.config.sqlExec(
       `SELECT id, identifier, product, status, pr_url, slack_thread_ts, slack_channel,
-              updated_at, created_at
+              updated_at, created_at, last_heartbeat
        FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed')
        AND agent_active = 1`
     ).toArray() as Array<Record<string, unknown>>;
@@ -130,16 +130,19 @@ export class ContextAssembler {
     const now = Date.now();
     const agents = activeTickets.map(t => {
       const createdMs = new Date(t.created_at as string).getTime();
-      const updatedMs = new Date(t.updated_at as string).getTime();
+      // Use last_heartbeat for staleness detection (not updated_at, which changes on any field update)
+      // Fall back to updated_at if last_heartbeat is null (agent never sent heartbeat)
+      const heartbeatTs = (t.last_heartbeat as string) || (t.updated_at as string);
+      const heartbeatMs = new Date(heartbeatTs).getTime();
       const durationMin = Math.floor((now - createdMs) / 60000);
-      const heartbeatAgeMin = Math.floor((now - updatedMs) / 60000);
+      const heartbeatAgeMin = Math.floor((now - heartbeatMs) / 60000);
 
       return {
         ticketId: (t.identifier as string) || (t.id as string),
         internalId: t.id,
         product: t.product,
         status: t.status,
-        lastHeartbeat: t.updated_at,
+        lastHeartbeat: heartbeatTs,
         heartbeatAge: `${heartbeatAgeMin}m`,
         healthStatus: heartbeatAgeMin < 30 ? "healthy" : "stale",
         duration: `${durationMin}m`,
