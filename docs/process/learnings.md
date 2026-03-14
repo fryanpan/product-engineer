@@ -93,5 +93,5 @@ Technical discoveries that should persist across sessions.
 - **Terminal webhook events (`pr_merged`, `pr_closed`) must update orchestrator state directly.** Don't route them through `sendEvent` to the agent container — the container may have already exited. Handle these events in `handleEvent` by updating status and calling `stopAgent`, not by forwarding to the (possibly dead) agent. (Fixed in BC-162)
 
 ## Supervisor Health Detection
-- The supervisor uses the `last_heartbeat` column (set by agent phone-home via `/heartbeat`) to detect stale agents. Don't confuse this with `updated_at`, which changes on any ticket field update (status, PR URL, metadata).
-- Always include `last_heartbeat` in SQL queries for supervisor context. Using `updated_at` for staleness detection gives false positives because status updates (which aren't real heartbeats) reset the timer. (Fixed in BC-162)
+- The supervisor uses the `last_heartbeat` column to detect stale agents. This is set by agent-originated endpoints: `/heartbeat` (explicit phone-home) and `/ticket/status` (status updates from agent). Don't confuse with `updated_at`, which changes on any ticket field update including orchestrator-initiated changes.
+- Always include `last_heartbeat` in SQL queries for supervisor context. Using `updated_at` for staleness detection gives false positives because arbitrary field updates (not from agent) reset the timer. (Fixed in BC-162)

@@ -955,6 +955,16 @@ export class Orchestrator extends Container<Bindings> {
       const ticketRow = this.agentManager.getTicket(event.ticketId);
       if (ticketRow) {
         console.log(`[Orchestrator] PR merged for ${event.ticketId} — marking terminal`);
+
+        // Persist pr_url from webhook payload (may not have been recorded if agent died early)
+        const webhookPrUrl = (event.payload as Record<string, unknown>)?.pr_url as string | undefined;
+        if (webhookPrUrl && !ticketRow.pr_url) {
+          this.ctx.storage.sql.exec(
+            "UPDATE tickets SET pr_url = ?, updated_at = datetime('now') WHERE id = ?",
+            webhookPrUrl, event.ticketId,
+          );
+        }
+
         try {
           this.agentManager.updateStatus(event.ticketId, { status: "merged" });
         } catch {
@@ -964,6 +974,13 @@ export class Orchestrator extends Container<Bindings> {
             event.ticketId,
           );
         }
+
+        // Update ticket_metrics with outcome and completion time (mirrors handleStatusUpdate logic)
+        this.ctx.storage.sql.exec(
+          `UPDATE ticket_metrics SET outcome = 'automerge_success', completed_at = datetime('now'), updated_at = datetime('now') WHERE ticket_id = ?`,
+          event.ticketId,
+        );
+
         // Clean up merge gate retries
         this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", event.ticketId);
         await this.agentManager.stopAgent(event.ticketId, "pr_merged").catch(err =>
@@ -977,6 +994,16 @@ export class Orchestrator extends Container<Bindings> {
       const ticketRow = this.agentManager.getTicket(event.ticketId);
       if (ticketRow) {
         console.log(`[Orchestrator] PR closed (not merged) for ${event.ticketId} — marking terminal`);
+
+        // Persist pr_url from webhook payload (may not have been recorded if agent died early)
+        const webhookPrUrl = (event.payload as Record<string, unknown>)?.pr_url as string | undefined;
+        if (webhookPrUrl && !ticketRow.pr_url) {
+          this.ctx.storage.sql.exec(
+            "UPDATE tickets SET pr_url = ?, updated_at = datetime('now') WHERE id = ?",
+            webhookPrUrl, event.ticketId,
+          );
+        }
+
         try {
           this.agentManager.updateStatus(event.ticketId, { status: "closed" });
         } catch {
@@ -986,6 +1013,13 @@ export class Orchestrator extends Container<Bindings> {
             event.ticketId,
           );
         }
+
+        // Update ticket_metrics with outcome and completion time (mirrors handleStatusUpdate logic)
+        this.ctx.storage.sql.exec(
+          `UPDATE ticket_metrics SET outcome = 'closed', completed_at = datetime('now'), updated_at = datetime('now') WHERE ticket_id = ?`,
+          event.ticketId,
+        );
+
         // Clean up merge gate retries
         this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", event.ticketId);
         await this.agentManager.stopAgent(event.ticketId, "pr_closed").catch(err =>
