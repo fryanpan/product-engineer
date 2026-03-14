@@ -90,3 +90,8 @@ Technical discoveries that should persist across sessions.
   - `action === "closed" && merged === true` → PR was merged (route as `pr_merged` event)
   - `action === "closed" && merged === false` → PR was closed without merging (route as `pr_closed` event)
 - If you only handle the merged case, tickets with closed-but-not-merged PRs stay in `pr_open` status forever, causing supervisor to repeatedly trigger merge gate evaluations (every 5 min).
+- **Terminal webhook events (`pr_merged`, `pr_closed`) must update orchestrator state directly.** Don't route them through `sendEvent` to the agent container — the container may have already exited. Handle these events in `handleEvent` by updating status and calling `stopAgent`, not by forwarding to the (possibly dead) agent. (Fixed in BC-162)
+
+## Supervisor Health Detection
+- The supervisor uses the `last_heartbeat` column (set by agent phone-home via `/heartbeat`) to detect stale agents. Don't confuse this with `updated_at`, which changes on any ticket field update (status, PR URL, metadata).
+- Always include `last_heartbeat` in SQL queries for supervisor context. Using `updated_at` for staleness detection gives false positives because status updates (which aren't real heartbeats) reset the timer. (Fixed in BC-162)

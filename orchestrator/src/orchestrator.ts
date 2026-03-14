@@ -948,6 +948,53 @@ export class Orchestrator extends Container<Bindings> {
       // Ticket not found — route to agent normally
     }
 
+    // Handle PR merged/closed events directly in orchestrator — don't route to agent.
+    // The agent container may have already exited, so routing via sendEvent would silently
+    // drop the event (sendEvent requires agent_active=1). Update status here instead.
+    if (event.type === "pr_merged") {
+      const ticketRow = this.agentManager.getTicket(event.ticketId);
+      if (ticketRow) {
+        console.log(`[Orchestrator] PR merged for ${event.ticketId} — marking terminal`);
+        try {
+          this.agentManager.updateStatus(event.ticketId, { status: "merged" });
+        } catch {
+          // Force update if state transition is invalid (e.g., already in a terminal state)
+          this.ctx.storage.sql.exec(
+            "UPDATE tickets SET status = 'merged', agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+            event.ticketId,
+          );
+        }
+        // Clean up merge gate retries
+        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", event.ticketId);
+        await this.agentManager.stopAgent(event.ticketId, "pr_merged").catch(err =>
+          console.warn(`[Orchestrator] Failed to stop agent on pr_merged:`, err)
+        );
+        return Response.json({ ok: true, ticketId: event.ticketId, status: "merged" });
+      }
+    }
+
+    if (event.type === "pr_closed") {
+      const ticketRow = this.agentManager.getTicket(event.ticketId);
+      if (ticketRow) {
+        console.log(`[Orchestrator] PR closed (not merged) for ${event.ticketId} — marking terminal`);
+        try {
+          this.agentManager.updateStatus(event.ticketId, { status: "closed" });
+        } catch {
+          // Force update if state transition is invalid
+          this.ctx.storage.sql.exec(
+            "UPDATE tickets SET status = 'closed', agent_active = 0, updated_at = datetime('now') WHERE id = ?",
+            event.ticketId,
+          );
+        }
+        // Clean up merge gate retries
+        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_id = ?", event.ticketId);
+        await this.agentManager.stopAgent(event.ticketId, "pr_closed").catch(err =>
+          console.warn(`[Orchestrator] Failed to stop agent on pr_closed:`, err)
+        );
+        return Response.json({ ok: true, ticketId: event.ticketId, status: "closed" });
+      }
+    }
+
     // Route to TicketAgent for all other event types
     await this.agentManager.sendEvent(event.ticketId, event);
 
