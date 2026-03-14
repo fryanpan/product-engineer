@@ -361,6 +361,36 @@ The issue was fixed earlier today with commit edf0236 (orchestrator enriches eve
 
 ---
 
+## 2026-03-14 - BC-162: Agent Lifecycle Bugs (PR #82)
+
+**Context:** Agents showing as active for 24+ hours with stale heartbeats. Supervisor repeatedly escalating for already-merged PRs.
+
+**Root causes found:**
+1. **Supervisor staleness detection using wrong timestamp:** `forSupervisor()` used `updated_at` for heartbeat age, but `updated_at` changes on any field update (status, PR URL). The actual heartbeat timestamp is `last_heartbeat`, set only by agent phone-home.
+
+2. **Terminal webhook events silently dropped:** `pr_merged` and `pr_closed` events were routed through `sendEvent()` to agent containers, but `sendEvent()` requires `agent_active=1`. If agent had already exited (completed, timed out), the event was lost and ticket stayed in `pr_open` forever.
+
+**What worked:**
+- Systematic code tracing: supervisor → context-assembler → handleEvent → sendEvent → agent
+- Reading agent server.ts to understand container lifecycle (process.exit on completion/timeout)
+- Checking existing learnings.md for related patterns (found GitHub webhooks section already documented the action/merged flag)
+- Targeted grep queries to understand data flow
+
+**What didn't:**
+- Initially read orchestrator.ts from line 1 — file is too large, should have jumped to specific sections via grep first
+- Could have identified issue faster by checking the actual SQL queries first (where bug was obvious: SELECT missing `last_heartbeat`)
+
+**Implementation:**
+- `context-assembler.ts`: Added `last_heartbeat` to SQL SELECT, use it for heartbeat age calculation with fallback to `updated_at`
+- `orchestrator.ts`: Handle `pr_merged` and `pr_closed` directly in `handleEvent()` — update status, clean up merge_gate_retries, stop agent
+
+**Learning:**
+- For lifecycle management, always trace "what happens when the container is gone but the webhook still arrives?"
+- State machine transitions must handle both: (1) agent reports completion, (2) external system reports completion
+- Staleness detection must use the field that's ONLY updated by the thing you're detecting (not a general "updated_at")
+
+---
+
 ## 2026-03-12 - BC-157 Session Retro
 
 **What worked:**
