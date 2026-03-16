@@ -253,15 +253,15 @@ dashboardRouter.get("/user", requireAuth(), async (c) => {
 });
 
 // Kill individual agent (protected)
-dashboardRouter.post("/kill-agent/:ticketId", requireAuth(), async (c) => {
-  const ticketId = c.req.param("ticketId");
+dashboardRouter.post("/kill-agent/:ticketUUID", requireAuth(), async (c) => {
+  const ticketUUID = c.req.param("ticketUUID");
   const session = c.get("session") as Session;
 
-  console.log(`[Dashboard] User ${session.email} killing agent ${ticketId}`);
+  console.log(`[Dashboard] User ${session.email} killing agent ${ticketUUID}`);
 
   try {
     // Get the TicketAgent DO
-    const id = c.env.TICKET_AGENT.idFromName(ticketId);
+    const id = c.env.TICKET_AGENT.idFromName(ticketUUID);
     const agent = c.env.TICKET_AGENT.get(id);
 
     // Mark as terminal and shut down
@@ -280,7 +280,7 @@ dashboardRouter.post("/kill-agent/:ticketId", requireAuth(), async (c) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ticketId,
+        ticketUUID: ticketUUID,
         status: "deferred",
       }),
     }));

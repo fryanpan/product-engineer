@@ -80,7 +80,7 @@ export function normalizeImageMediaType(mimetype: string): "image/png" | "image/
 export interface TicketEvent {
   type: string;
   source: string;
-  ticketId: string;
+  ticketUUID: string;
   product: string;
   payload: unknown;
   slackThreadTs?: string;
@@ -88,7 +88,7 @@ export interface TicketEvent {
 }
 
 export interface AgentConfig {
-  ticketId: string;
+  ticketUUID: string;
   product: string;
   repos: string[];
   anthropicApiKey: string;
@@ -112,7 +112,7 @@ export function loadConfig(): AgentConfig {
   };
 
   return {
-    ticketId: required("TICKET_ID"),
+    ticketUUID: required("TICKET_UUID"),
     product: required("PRODUCT"),
     repos: JSON.parse(required("REPOS")),
     anthropicApiKey: required("ANTHROPIC_API_KEY"),

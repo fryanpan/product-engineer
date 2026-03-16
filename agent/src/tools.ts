@@ -32,7 +32,7 @@ export async function persistSlackThreadTs(
           "X-Internal-Key": config.apiKey,
         },
         body: JSON.stringify({
-          ticketId: config.ticketId,
+          ticketUUID: config.ticketUUID,
           slack_thread_ts: ts,
         }),
       });
@@ -156,7 +156,7 @@ export function createTools(config: AgentConfig) {
         .describe("ID of the created or referenced Linear ticket"),
     },
     async ({ status, reason, pr_url, linear_ticket_id: explicitTicketId }) => {
-      const linear_ticket_id = explicitTicketId || config.ticketId;
+      const linear_ticket_id = explicitTicketId || config.ticketUUID;
       console.log(
         `[Agent] Status update: ${status}`,
         JSON.stringify({ reason, pr_url, linear_ticket_id }),
@@ -171,7 +171,7 @@ export function createTools(config: AgentConfig) {
             "X-Internal-Key": config.apiKey,
           },
           body: JSON.stringify({
-            ticketId: config.ticketId,
+            ticketUUID: config.ticketUUID,
             status,
             pr_url,
             branch_name: undefined,
@@ -268,7 +268,7 @@ export function createTools(config: AgentConfig) {
           }
 
           // Generate brief summary from ticket title (first sentence or first 100 chars)
-          const ticketIdentifier = config.ticketIdentifier || config.ticketId;
+          const ticketIdentifier = config.ticketIdentifier || config.ticketUUID;
           let briefSummary = config.ticketTitle || "Working on task";
 
           // Truncate to ~100 chars and ensure it ends cleanly

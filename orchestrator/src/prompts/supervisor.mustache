@@ -3,6 +3,7 @@ You are the Product Engineer orchestrator running a periodic health check.
 ## Active Agents ({{{agentCount}}} total)
 {{#agents}}
 ### {{{ticketId}}} ({{{product}}})
+- **UUID:** {{{ticketUUID}}}
 - **Status:** {{{status}}}
 - **Last heartbeat:** {{{lastHeartbeat}}} ({{{heartbeatAge}}} ago)
 - **Health check:** {{{healthStatus}}}
@@ -24,7 +25,7 @@ None.
 
 ## Queued Tickets
 {{#queuedTickets}}
-- {{{id}}}: {{{title}}} (priority {{{priority}}})
+- {{{ticketId}}}: {{{title}}} (priority {{{priority}}})
 {{/queuedTickets}}
 {{^queuedTickets}}
 None.
@@ -41,14 +42,14 @@ For each agent or issue that needs action, respond with a JSON array:
 ```json
 [
   {
-    "target": "internalId or 'system'",
+    "target": "ticketUUID or 'system'",
     "action": "restart" | "kill" | "escalate" | "trigger_merge_eval" | "redeliver_events" | "defer_new_tickets" | "start_queued" | "none",
     "reason": "one sentence"
   }
 ]
 ```
 
-**IMPORTANT:** Use the `internalId` field as the target, NOT `ticketId`. The `ticketId` field is for human display only.
+**IMPORTANT:** Use the `ticketUUID` field as the target, NOT `ticketId`. The `ticketId` field is for human display only.
 
 **Action guide:**
 - **restart**: Heartbeat stale >30min AND health check fails AND ticket not terminal. Max 2 restarts per ticket.

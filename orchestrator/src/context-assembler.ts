@@ -19,7 +19,7 @@ export class ContextAssembler {
 
   /** Assemble context for ticket review decision */
   async forTicketReview(ticket: {
-    ticketId: string;
+    ticketUUID: string;
     identifier: string | null;
     title: string;
     description: string;
@@ -31,11 +31,11 @@ export class ContextAssembler {
     slackChannel: string | null;
   }): Promise<Record<string, unknown>> {
     const activeTickets = this.config.sqlExec(
-      "SELECT id, status, product, pr_url FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed') ORDER BY created_at DESC LIMIT 10"
+      "SELECT ticket_uuid, status, product, pr_url FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed') ORDER BY created_at DESC LIMIT 10"
     ).toArray();
 
     const [linearComments, slackThread] = await Promise.all([
-      this.fetchLinearComments(ticket.ticketId).catch(() => []),
+      this.fetchLinearComments(ticket.ticketUUID).catch(() => []),
       ticket.slackThreadTs && ticket.slackChannel
         ? this.fetchSlackThread(ticket.slackChannel, ticket.slackThreadTs).catch(() => [])
         : Promise.resolve([]),
@@ -45,7 +45,7 @@ export class ContextAssembler {
     const isSlackOriginated = /^\*\*Slack request from <@/.test(ticket.description || "");
 
     return {
-      identifier: ticket.identifier || ticket.ticketId,
+      identifier: ticket.identifier || ticket.ticketUUID,
       title: ticket.title,
       description: ticket.description,
       priority: this.priorityLabel(ticket.priority),
@@ -62,7 +62,7 @@ export class ContextAssembler {
 
   /** Assemble context for merge gate decision */
   async forMergeGate(ticket: {
-    ticketId: string;
+    ticketUUID: string;
     identifier: string | null;
     title: string;
     product: string;
@@ -80,7 +80,7 @@ export class ContextAssembler {
       prNumber && ghToken ? this.fetchPRReviews(repoPath, prNumber, ghToken) : [],
       prNumber && ghToken ? this.fetchPRComments(repoPath, prNumber, ghToken) : [],
       prNumber && ghToken ? this.fetchPRDiff(repoPath, prNumber, ghToken) : "",
-      this.fetchLinearComments(ticket.ticketId).catch(() => []),
+      this.fetchLinearComments(ticket.ticketUUID).catch(() => []),
     ]);
 
     const headSha = (prDetails?.head as Record<string, unknown> | undefined)?.sha as string | undefined;
@@ -96,7 +96,7 @@ export class ContextAssembler {
     const copilotReview = this.extractCopilotReviewStatus(reviews, prComments);
 
     return {
-      identifier: ticket.identifier || ticket.ticketId,
+      identifier: ticket.identifier || ticket.ticketUUID,
       title: ticket.title,
       pr_url: ticket.pr_url,
       pr_title: prDetails?.title || "",
@@ -121,7 +121,7 @@ export class ContextAssembler {
   /** Assemble context for supervisor tick */
   async forSupervisor(): Promise<Record<string, unknown>> {
     const activeTickets = this.config.sqlExec(
-      `SELECT id, identifier, product, status, pr_url, slack_thread_ts, slack_channel,
+      `SELECT ticket_uuid, ticket_id, product, status, pr_url, slack_thread_ts, slack_channel,
               updated_at, created_at, last_heartbeat
        FROM tickets WHERE status NOT IN ('merged', 'closed', 'deferred', 'failed')
        AND agent_active = 1`
@@ -138,8 +138,8 @@ export class ContextAssembler {
       const heartbeatAgeMin = Math.floor((now - heartbeatMs) / 60000);
 
       return {
-        ticketId: (t.identifier as string) || (t.id as string),
-        internalId: t.id,
+        ticketId: (t.ticket_id as string) || (t.ticket_uuid as string),
+        ticketUUID: t.ticket_uuid,
         product: t.product,
         status: t.status,
         lastHeartbeat: heartbeatTs,
@@ -152,21 +152,21 @@ export class ContextAssembler {
     });
 
     const stalePRs = this.config.sqlExec(
-      `SELECT id, identifier, pr_url, updated_at FROM tickets
+      `SELECT ticket_uuid, ticket_id, pr_url, updated_at FROM tickets
        WHERE pr_url IS NOT NULL AND status = 'pr_open'
        AND datetime(updated_at) < datetime('now', '-4 hours')`
     ).toArray().map(t => ({
-      ticketId: (t as Record<string, unknown>).identifier || (t as Record<string, unknown>).id,
-      internalId: (t as Record<string, unknown>).id,
+      ticketId: (t as Record<string, unknown>).ticket_id || (t as Record<string, unknown>).ticket_uuid,
+      ticketUUID: (t as Record<string, unknown>).ticket_uuid,
       pr_url: (t as Record<string, unknown>).pr_url,
       updated_at: (t as Record<string, unknown>).updated_at,
     }));
 
     const queuedTickets = this.config.sqlExec(
-      "SELECT id, identifier, product, status FROM tickets WHERE status = 'queued' ORDER BY created_at ASC"
+      "SELECT ticket_uuid, ticket_id, product, status FROM tickets WHERE status = 'queued' ORDER BY created_at ASC"
     ).toArray().map(t => ({
-      ticketId: (t as Record<string, unknown>).identifier || (t as Record<string, unknown>).id,
-      internalId: (t as Record<string, unknown>).id,
+      ticketId: (t as Record<string, unknown>).ticket_id || (t as Record<string, unknown>).ticket_uuid,
+      ticketUUID: (t as Record<string, unknown>).ticket_uuid,
       product: (t as Record<string, unknown>).product,
       status: (t as Record<string, unknown>).status,
     }));
@@ -185,7 +185,7 @@ export class ContextAssembler {
   async forThreadClassify(message: {
     user: string;
     text: string;
-    ticketId: string;
+    ticketUUID: string;
     identifier: string | null;
     title: string;
     status: string;
@@ -194,7 +194,7 @@ export class ContextAssembler {
     return {
       user: message.user,
       text: message.text,
-      identifier: message.identifier || message.ticketId,
+      identifier: message.identifier || message.ticketUUID,
       title: message.title,
       status: message.status,
       agentRunning: message.agentRunning ? "yes" : "no",

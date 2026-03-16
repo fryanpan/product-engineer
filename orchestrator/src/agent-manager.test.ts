@@ -12,16 +12,16 @@ function createMockSql() {
 
       // INSERT INTO tickets
       if (trimmed.startsWith("INSERT INTO tickets")) {
-        const [id, product, slackTs, slackCh, identifier, title] = params;
+        const [ticketUUID, product, slackTs, slackCh, ticketId, title] = params;
 
-        tickets.set(id as string, {
-          id, product,
+        tickets.set(ticketUUID as string, {
+          ticket_uuid: ticketUUID, product,
           status: "created",
           slack_thread_ts: slackTs || null,
           slack_channel: slackCh || null,
           pr_url: null,
           branch_name: null,
-          identifier: identifier || null,
+          ticket_id: ticketId || null,
           title: title || null,
           agent_active: 0,
           transcript_r2_key: null,
@@ -32,38 +32,38 @@ function createMockSql() {
         return { toArray: () => [] };
       }
 
-      // DELETE FROM tickets WHERE id = ?
+      // DELETE FROM tickets WHERE ticket_uuid = ?
       if (trimmed.startsWith("DELETE FROM tickets")) {
         tickets.delete(params[0] as string);
         return { toArray: () => [] };
       }
 
-      // SELECT * FROM tickets WHERE id = ?
-      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE id =")) {
-        const id = params[0] as string;
-        const row = tickets.get(id);
+      // SELECT * FROM tickets WHERE ticket_uuid = ?
+      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE ticket_uuid =")) {
+        const ticketUUID = params[0] as string;
+        const row = tickets.get(ticketUUID);
         return { toArray: () => row ? [{ ...row }] : [] };
       }
 
-      // SELECT * FROM tickets WHERE identifier = ?
-      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE identifier")) {
-        const identifier = params[0] as string;
-        const match = [...tickets.values()].find(t => t.identifier === identifier);
+      // SELECT * FROM tickets WHERE ticket_id = ?
+      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE ticket_id")) {
+        const ticketId = params[0] as string;
+        const match = [...tickets.values()].find(t => t.ticket_id === ticketId);
         return { toArray: () => match ? [{ ...match }] : [] };
       }
 
-      // SELECT id FROM tickets WHERE agent_active = 1 AND status IN (...)
+      // SELECT ticket_uuid FROM tickets WHERE agent_active = 1 AND status IN (...)
       if (trimmed.includes("agent_active = 1") && trimmed.includes("status IN")) {
         const statusMatch = trimmed.match(/IN \(([^)]+)\)/);
         const statuses = statusMatch ? statusMatch[1].split(",").map(s => s.trim().replace(/'/g, "")) : [];
         const matching = [...tickets.values()].filter(
           t => t.agent_active === 1 && statuses.includes(t.status as string),
         );
-        return { toArray: () => matching.map(t => ({ id: t.id })) };
+        return { toArray: () => matching.map(t => ({ ticket_uuid: t.ticket_uuid })) };
       }
 
-      // UPDATE tickets SET ... WHERE id = ? AND agent_active = 1
-      // UPDATE tickets SET ... WHERE id = ?
+      // UPDATE tickets SET ... WHERE ticket_uuid = ? AND agent_active = 1
+      // UPDATE tickets SET ... WHERE ticket_uuid = ?
       if (trimmed.startsWith("UPDATE tickets SET")) {
         const id = params[params.length - 1] as string;
         const row = tickets.get(id);
@@ -186,7 +186,7 @@ describe("AgentManager", () => {
   let manager: AgentManager;
 
   const defaultParams: CreateTicketParams = {
-    id: "PE-1",
+    ticketUUID: "PE-1",
     product: "test-product",
   };
 
@@ -198,7 +198,7 @@ describe("AgentManager", () => {
   describe("createTicket", () => {
     it("creates ticket in 'created' state with agent_active=0", () => {
       const ticket = manager.createTicket(defaultParams);
-      expect(ticket.id).toBe("PE-1");
+      expect(ticket.ticket_uuid).toBe("PE-1");
       expect(ticket.product).toBe("test-product");
       expect(ticket.status).toBe("created");
       expect(ticket.agent_active).toBe(0);
@@ -227,17 +227,17 @@ describe("AgentManager", () => {
 
     it("stores all provided fields", () => {
       const ticket = manager.createTicket({
-        id: "PE-2",
+        ticketUUID: "PE-2",
         product: "my-product",
         slackThreadTs: "1234.5678",
         slackChannel: "C123",
-        identifier: "PE-2",
+        ticketId: "PE-2",
         title: "Fix the bug",
       });
 
       expect(ticket.slack_thread_ts).toBe("1234.5678");
       expect(ticket.slack_channel).toBe("C123");
-      expect(ticket.identifier).toBe("PE-2");
+      expect(ticket.ticket_id).toBe("PE-2");
       expect(ticket.title).toBe("Fix the bug");
     });
   });
@@ -251,7 +251,7 @@ describe("AgentManager", () => {
       manager.createTicket(defaultParams);
       const ticket = manager.getTicket("PE-1");
       expect(ticket).not.toBeNull();
-      expect(ticket!.id).toBe("PE-1");
+      expect(ticket!.ticket_uuid).toBe("PE-1");
       expect(ticket!.status).toBe("created");
     });
   });
@@ -262,15 +262,15 @@ describe("AgentManager", () => {
     });
 
     it("finds a ticket by its identifier", () => {
-      manager.createTicket({ id: "uuid-123", product: "test", identifier: "PES-5" });
+      manager.createTicket({ ticketUUID: "uuid-123", product: "test", ticketId: "PES-5" });
       const ticket = manager.getTicketByIdentifier("PES-5");
       expect(ticket).not.toBeNull();
-      expect(ticket!.id).toBe("uuid-123");
-      expect(ticket!.identifier).toBe("PES-5");
+      expect(ticket!.ticket_uuid).toBe("uuid-123");
+      expect(ticket!.ticket_id).toBe("PES-5");
     });
 
     it("does not match by id when looking up by identifier", () => {
-      manager.createTicket({ id: "PES-5", product: "test" });
+      manager.createTicket({ ticketUUID: "PES-5", product: "test" });
       // id is "PES-5" but identifier is null
       expect(manager.getTicketByIdentifier("PES-5")).toBeNull();
     });
@@ -289,7 +289,7 @@ describe("AgentManager", () => {
     it("returns true for each terminal status", () => {
       for (const terminalStatus of TERMINAL_STATUSES) {
         const id = `terminal-${terminalStatus}`;
-        manager.createTicket({ id, product: "test" });
+        manager.createTicket({ ticketUUID: id, product: "test" });
 
         // Get to terminal via valid path
         if (terminalStatus === "merged") {
@@ -410,7 +410,7 @@ describe("AgentManager", () => {
       expect(calls[0].url).toBe("http://internal/initialize");
       expect(calls[0].method).toBe("POST");
       const body = JSON.parse(calls[0].body!);
-      expect(body.ticketId).toBe("PE-1");
+      expect(body.ticketUUID).toBe("PE-1");
       expect(body.product).toBe("test-product");
       expect(body.repos).toEqual(["org/repo"]);
       expect(body.slackThreadTs).toBe("ts-123");
@@ -631,13 +631,13 @@ describe("AgentManager", () => {
 
   describe("getActiveAgents", () => {
     it("returns only active tickets", () => {
-      manager.createTicket({ id: "PE-1", product: "test" });
-      manager.createTicket({ id: "PE-2", product: "test" });
+      manager.createTicket({ ticketUUID: "PE-1", product: "test" });
+      manager.createTicket({ ticketUUID: "PE-2", product: "test" });
       sql._tickets.get("PE-1")!.agent_active = 1;
 
       const active = manager.getActiveAgents();
       expect(active.length).toBe(1);
-      expect(active[0].id).toBe("PE-1");
+      expect(active[0].ticket_uuid).toBe("PE-1");
     });
 
     it("returns empty array when none active", () => {
@@ -657,8 +657,8 @@ describe("AgentManager", () => {
     });
 
     it("stops all active agents", async () => {
-      manager.createTicket({ id: "PE-1", product: "test" });
-      manager.createTicket({ id: "PE-2", product: "test" });
+      manager.createTicket({ ticketUUID: "PE-1", product: "test" });
+      manager.createTicket({ ticketUUID: "PE-2", product: "test" });
       sql._tickets.get("PE-1")!.agent_active = 1;
       sql._tickets.get("PE-2")!.agent_active = 1;
 

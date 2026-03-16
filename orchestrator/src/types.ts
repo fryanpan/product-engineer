@@ -29,7 +29,7 @@ export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
 export interface TicketEvent {
   type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_reply", "linear_comment"
   source: string;     // "linear", "github", "slack", "api"
-  ticketId: string;
+  ticketUUID: string;
   product: string;
   payload: unknown;
   slackThreadTs?: string;
@@ -37,14 +37,14 @@ export interface TicketEvent {
 }
 
 export interface TicketRecord {
-  id: string;
+  ticket_uuid: string;
   product: string;
   status: string;
   slack_thread_ts: string | null;
   slack_channel: string | null;
   pr_url: string | null;
   branch_name: string | null;
-  identifier: string | null;
+  ticket_id: string | null;
   title: string | null;
   agent_active: number;
   agent_message: string | null;
@@ -57,7 +57,7 @@ export interface TicketRecord {
 }
 
 export interface TicketAgentConfig {
-  ticketId: string;
+  ticketUUID: string;
   product: string;
   repos: string[];
   slackChannel: string;
