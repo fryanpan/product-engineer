@@ -16,7 +16,7 @@ describe("ContextAssembler", () => {
     });
 
     const ctx = await assembler.forTicketReview({
-      ticketId: "abc-123",
+      ticketUUID: "abc-123",
       identifier: "PE-42",
       title: "Fix button",
       description: "Make it green",
@@ -52,7 +52,7 @@ describe("ContextAssembler", () => {
     // Test all priority levels
     for (const [num, label] of [[0, "None"], [1, "Urgent"], [2, "High"], [3, "Normal"], [4, "Low"]] as const) {
       const ctx = await assembler.forTicketReview({
-        ticketId: "t", identifier: null, title: "", description: "",
+        ticketUUID: "t", identifier: null, title: "", description: "",
         priority: num, labels: [], product: "p", repos: [],
         slackThreadTs: null, slackChannel: null,
       });
@@ -69,7 +69,7 @@ describe("ContextAssembler", () => {
     });
 
     const ctx = await assembler.forMergeGate({
-      ticketId: "abc-123",
+      ticketUUID: "abc-123",
       identifier: "PE-42",
       title: "Fix button",
       product: "health-tool",
@@ -109,7 +109,7 @@ describe("ContextAssembler", () => {
     const ctx = await assembler.forThreadClassify({
       user: "U12345",
       text: "What's the status?",
-      ticketId: "abc-123",
+      ticketUUID: "abc-123",
       identifier: "PE-42",
       title: "Fix button",
       status: "in_progress",
@@ -121,7 +121,7 @@ describe("ContextAssembler", () => {
     expect(ctx.agentRunning).toBe("yes");
   });
 
-  it("falls back to ticketId when identifier is null", async () => {
+  it("falls back to uuid when identifier is null", async () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
@@ -130,7 +130,7 @@ describe("ContextAssembler", () => {
     });
 
     const ctx = await assembler.forTicketReview({
-      ticketId: "abc-123",
+      ticketUUID: "abc-123",
       identifier: null,
       title: "Fix button",
       description: "",

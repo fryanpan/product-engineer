@@ -4,7 +4,7 @@ import { resolveAgentEnvVars } from "./ticket-agent";
 describe("resolveAgentEnvVars", () => {
   test("resolves secrets from env bindings", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -24,7 +24,7 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.ANTHROPIC_API_KEY).toBe("sk-ant-xyz");
     expect(vars.PRODUCT).toBe("health-tool");
     expect(vars.REPOS).toBe(JSON.stringify(["fryanpan/health-tool"]));
-    expect(vars.TICKET_ID).toBe("LIN-123");
+    expect(vars.TICKET_UUID).toBe("LIN-123");
     expect(vars.SLACK_CHANNEL).toBe("#health-tool");
     expect(vars.SLACK_BOT_TOKEN).toBe("xoxb-slack");
     expect(vars.WORKER_URL).toBe("");
@@ -32,7 +32,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("uses WORKER_URL from env when provided", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -48,7 +48,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("sets GH_TOKEN alias when GITHUB_TOKEN is resolved", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -67,7 +67,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("does not set GH_TOKEN when GITHUB_TOKEN is missing", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -84,7 +84,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("warns on missing secret binding", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -100,7 +100,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("includes R2 credentials for session persistence", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -120,7 +120,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("passes slackThreadTs when provided in config", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -135,7 +135,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("sets empty string for slackThreadTs when not provided", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -151,7 +151,7 @@ describe("resolveAgentEnvVars", () => {
 describe("resolveAgentEnvVars - AI Gateway", () => {
   test("sets ANTHROPIC_BASE_URL when AI Gateway is configured", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -171,7 +171,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("does not set ANTHROPIC_BASE_URL when AI Gateway is explicitly null", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -185,7 +185,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("does not set ANTHROPIC_BASE_URL when registry has no gateway config", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -201,7 +201,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("formats gateway URL correctly with hyphens in IDs", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",
@@ -221,7 +221,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("URL-encodes special characters in gateway IDs", () => {
     const config = {
-      ticketId: "LIN-123",
+      ticketUUID: "LIN-123",
       product: "health-tool",
       repos: ["fryanpan/health-tool"],
       slackChannel: "#health-tool",

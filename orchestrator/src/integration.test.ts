@@ -28,7 +28,7 @@ describe("Agent Lifecycle Integration", () => {
 
     test("resolveAgentEnvVars includes SLACK_THREAD_TS field", () => {
       const config: TicketAgentConfig = {
-        ticketId: "test-123",
+        ticketUUID: "test-123",
         product: "test-app",
         repos: ["org/repo"],
         slackChannel: "C12345",
@@ -97,7 +97,7 @@ describe("Agent Lifecycle Integration", () => {
   describe("Container Lifecycle Configuration", () => {
     test("resolveAgentEnvVars includes all required env vars for agent", () => {
       const config: TicketAgentConfig = {
-        ticketId: "test-123",
+        ticketUUID: "test-123",
         product: "test-app",
         repos: ["org/repo"],
         slackChannel: "C12345",
@@ -112,7 +112,7 @@ describe("Agent Lifecycle Integration", () => {
 
       // Core config
       expect(vars.PRODUCT).toBe("test-app");
-      expect(vars.TICKET_ID).toBe("test-123");
+      expect(vars.TICKET_UUID).toBe("test-123");
       expect(vars.REPOS).toBe(JSON.stringify(["org/repo"]));
       expect(vars.SLACK_CHANNEL).toBe("C12345");
 
@@ -128,7 +128,7 @@ describe("Agent Lifecycle Integration", () => {
 
     test("resolveAgentEnvVars configures AI gateway when provided", () => {
       const config: TicketAgentConfig = {
-        ticketId: "test-123",
+        ticketUUID: "test-123",
         product: "test-app",
         repos: ["org/repo"],
         slackChannel: "C12345",

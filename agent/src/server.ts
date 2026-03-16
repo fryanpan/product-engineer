@@ -37,12 +37,12 @@ console.log("[Agent] Starting server...");
 console.log(`[Agent] Running as: uid=${process.getuid?.()} gid=${process.getgid?.()} HOME=${process.env.HOME}`);
 console.log(`[Agent] Env check: ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 console.log(`[Agent] Env check: GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? "SET" : "MISSING"}`);
-console.log(`[Agent] Env check: TICKET_ID=${process.env.TICKET_ID || "MISSING"}`);
+console.log(`[Agent] Env check: TICKET_UUID=${process.env.TICKET_UUID || "MISSING"}`);
 console.log(`[Agent] Env check: PRODUCT=${process.env.PRODUCT || "MISSING"}`);
 console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 
 const config = loadConfig();
-console.log(`[Agent] Config loaded: ticket=${config.ticketId} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"}`);
+console.log(`[Agent] Config loaded: ticket=${config.ticketUUID} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"}`);
 
 // Phone-home: heartbeat + log message to the orchestrator.
 // Every call updates last_heartbeat. The message is for observability only — the
@@ -55,7 +55,7 @@ function phoneHome(message: string) {
       "Content-Type": "application/json",
       "X-Internal-Key": config.apiKey,
     },
-    body: JSON.stringify({ ticketId: config.ticketId, message }),
+    body: JSON.stringify({ ticketUUID: config.ticketUUID, message }),
   }).catch((err) => console.error("[Agent] phoneHome failed:", err));
 }
 
@@ -65,7 +65,7 @@ async function reportTokenUsage() {
     console.log(`[Agent] Reporting token usage: ${totalInputTokens} in / ${totalOutputTokens} out / $${totalCostUsd.toFixed(2)}`);
 
     const usageSummary = {
-      ticketId: config.ticketId,
+      ticketUUID: config.ticketUUID,
       totalInputTokens,
       totalOutputTokens,
       totalCacheReadTokens,
@@ -216,7 +216,7 @@ async function uploadTranscripts(force = false) {
             "X-Internal-Key": config.apiKey,
           },
           body: JSON.stringify({
-            ticketId: config.ticketId,
+            ticketUUID: config.ticketUUID,
             r2Key,
             transcript: transcriptContent,
           }),
@@ -253,7 +253,7 @@ const heartbeatInterval = setInterval(() => {
       "Content-Type": "application/json",
       "X-Internal-Key": config.apiKey,
     },
-    body: JSON.stringify({ ticketId: config.ticketId }),
+    body: JSON.stringify({ ticketUUID: config.ticketUUID }),
   }).catch((err) => console.error("[Agent] Heartbeat failed:", err));
 
   phoneHome(`heartbeat status=${sessionStatus} msgs=${sessionMessageCount}`);
@@ -341,7 +341,7 @@ async function drainBufferedEvents() {
     const maxBatches = 10;
     while (batch < maxBatches) {
       const drainRes = await fetch(
-        `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketId)}/drain-events`,
+        `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketUUID)}/drain-events`,
         { headers: { "X-Internal-Key": config.apiKey } },
       );
       if (!drainRes.ok) break;
@@ -463,7 +463,7 @@ async function cloneRepos() {
 }
 
 async function checkAndCheckoutWorkBranch(): Promise<string | null> {
-  const branchPrefixes = [`ticket/${config.ticketId}`, `feedback/${config.ticketId}`];
+  const branchPrefixes = [`ticket/${config.ticketUUID}`, `feedback/${config.ticketUUID}`];
 
   for (const branch of branchPrefixes) {
     const check = Bun.spawn(["git", "ls-remote", "--heads", "origin", branch]);
@@ -762,7 +762,7 @@ app.get("/health", (c) =>
 app.get("/status", (c) =>
   c.json({
     service: "ticket-agent-container",
-    ticketId: config.ticketId,
+    ticketUUID: config.ticketUUID,
     product: config.product,
     sessionActive,
     sessionStatus,
@@ -838,7 +838,7 @@ setTimeout(async () => {
       // Check orchestrator state before resuming — skip if ticket is inactive
       try {
         const statusRes = await fetch(
-          `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketId)}`,
+          `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketUUID)}`,
           { headers: { "X-Internal-Key": config.apiKey } },
         );
         if (statusRes.ok) {
@@ -849,7 +849,7 @@ setTimeout(async () => {
           };
           if (ticketStatus.agent_active === 0 || ticketStatus.terminal) {
             console.log(
-              `[Agent] Ticket ${config.ticketId} is inactive (agent_active=${ticketStatus.agent_active}, status=${ticketStatus.status}) — skipping auto-resume`,
+              `[Agent] Ticket ${config.ticketUUID} is inactive (agent_active=${ticketStatus.agent_active}, status=${ticketStatus.status}) — skipping auto-resume`,
             );
             phoneHome(`auto_resume_skipped reason=inactive status=${ticketStatus.status}`);
             process.exit(0);

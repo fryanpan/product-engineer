@@ -11,7 +11,7 @@ export function resolveAgentEnvVars(
 ): Record<string, string> {
   const vars: Record<string, string> = {
     PRODUCT: config.product,
-    TICKET_ID: config.ticketId,
+    TICKET_UUID: config.ticketUUID,
     REPOS: JSON.stringify(config.repos),
     SLACK_CHANNEL: config.slackChannel,
     SLACK_THREAD_TS: config.slackThreadTs || "", // Populated from database or event
@@ -152,7 +152,7 @@ export class TicketAgent extends Container<Bindings> {
       "INSERT INTO event_buffer (event_json) VALUES (?)",
       JSON.stringify(event),
     );
-    console.log(`[TicketAgent] Buffered event: ${event.type} for ${event.ticketId}`);
+    console.log(`[TicketAgent] Buffered event: ${event.type} for ${event.ticketUUID}`);
   }
 
   private drainEventBuffer(): TicketEvent[] {
@@ -203,18 +203,18 @@ export class TicketAgent extends Container<Bindings> {
         const orchestratorId = this.env.ORCHESTRATOR.idFromName("main");
         const orchestratorStub = this.env.ORCHESTRATOR.get(orchestratorId);
         const statusRes = await orchestratorStub.fetch(
-          new Request(`http://internal/ticket-status/${encodeURIComponent(config.ticketId)}`)
+          new Request(`http://internal/ticket-status/${encodeURIComponent(config.ticketUUID)}`)
         );
         if (statusRes.ok) {
           const status = await statusRes.json<{ agent_active: number; status: string }>();
           if (status.agent_active === 0) {
-            console.log(`[TicketAgent] Orchestrator says ${config.ticketId} is inactive (status=${status.status}) — marking terminal, skipping restart`);
+            console.log(`[TicketAgent] Orchestrator says ${config.ticketUUID} is inactive (status=${status.status}) — marking terminal, skipping restart`);
             this.markTerminal();
             return super.alarm(alarmProps);
           }
         }
       } catch (err) {
-        console.warn(`[TicketAgent] Could not check orchestrator status for ${config.ticketId}:`, err);
+        console.warn(`[TicketAgent] Could not check orchestrator status for ${config.ticketUUID}:`, err);
         // Fall through to existing container health check
       }
 
@@ -223,11 +223,11 @@ export class TicketAgent extends Container<Bindings> {
         const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
         const status = await res.json<{ sessionStatus: string }>();
         if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
-          console.log(`[TicketAgent] Session ${status.sessionStatus} for ${config.ticketId}, marking terminal`);
+          console.log(`[TicketAgent] Session ${status.sessionStatus} for ${config.ticketUUID}, marking terminal`);
           this.markTerminal();
         }
       } catch {
-        console.log(`[TicketAgent] Container not healthy for ${config.ticketId}, will auto-resume on restart`);
+        console.log(`[TicketAgent] Container not healthy for ${config.ticketUUID}, will auto-resume on restart`);
       }
     }
     return super.alarm(alarmProps);

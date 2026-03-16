@@ -69,7 +69,7 @@ async function routeWebhookEvent(
   await forwardToOrchestrator(env, {
     type: eventData.type,
     source: "github",
-    ticketId: taskId,
+    ticketUUID: taskId,
     product: productName,
     payload: { ...eventData.payload, branch, repo },
   });
@@ -197,7 +197,7 @@ linearWebhook.post("/", async (c) => {
     await forwardToOrchestrator(c.env, {
       type: "linear_comment",
       source: "linear",
-      ticketId: commentData.issue.id,
+      ticketUUID: commentData.issue.id,
       product: ticketStatus.product,
       payload: {
         comment_id: commentData.id,
@@ -208,7 +208,7 @@ linearWebhook.post("/", async (c) => {
       },
     });
 
-    return c.json({ ok: true, ticketId: commentData.issue.id });
+    return c.json({ ok: true, ticketUUID: commentData.issue.id });
   }
 
   if (!(await isOurTeam(orchestrator, payload.data.teamId))) {
@@ -252,7 +252,7 @@ linearWebhook.post("/", async (c) => {
   await forwardToOrchestrator(c.env, {
     type: "ticket_created",
     source: "linear",
-    ticketId: payload.data.id,
+    ticketUUID: payload.data.id,
     product: match.name,
     payload: {
       id: payload.data.id,
@@ -268,7 +268,7 @@ linearWebhook.post("/", async (c) => {
     ok: true,
     product: match.name,
     project: projectName,
-    ticketId: payload.data.id,
+    ticketUUID: payload.data.id,
   });
 });
 
@@ -367,7 +367,7 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
       await forwardToOrchestrator(env, {
         type: "pr_merged",
         source: "github",
-        ticketId: taskId,
+        ticketUUID: taskId,
         product: productName,
         payload: {
           pr_url: payload.pull_request.html_url,
@@ -381,7 +381,7 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
       await forwardToOrchestrator(env, {
         type: "pr_closed",
         source: "github",
-        ticketId: taskId,
+        ticketUUID: taskId,
         product: productName,
         payload: {
           pr_url: payload.pull_request.html_url,
@@ -398,7 +398,7 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     await forwardToOrchestrator(env, {
       type: "pr_updated",
       source: "github",
-      ticketId: taskId,
+      ticketUUID: taskId,
       product: productName,
       payload: {
         pr_url: payload.pull_request.html_url,
@@ -414,7 +414,7 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     await forwardToOrchestrator(env, {
       type: "pr_reopened",
       source: "github",
-      ticketId: taskId,
+      ticketUUID: taskId,
       product: productName,
       payload: {
         pr_url: payload.pull_request.html_url,
@@ -429,7 +429,7 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     await forwardToOrchestrator(env, {
       type: payload.action === "labeled" ? "pr_labeled" : "pr_unlabeled",
       source: "github",
-      ticketId: taskId,
+      ticketUUID: taskId,
       product: productName,
       payload: {
         pr_url: payload.pull_request.html_url,
@@ -479,7 +479,7 @@ async function handlePullRequestReview(rawBody: string, env: Bindings) {
   await forwardToOrchestrator(env, {
     type: "pr_review",
     source: "github",
-    ticketId: taskId,
+    ticketUUID: taskId,
     product: productName,
     payload: {
       pr_url: payload.pull_request.html_url,
@@ -531,7 +531,7 @@ async function handlePullRequestReviewComment(rawBody: string, env: Bindings) {
   await forwardToOrchestrator(env, {
     type: "pr_review_comment",
     source: "github",
-    ticketId: taskId,
+    ticketUUID: taskId,
     product: productName,
     payload: {
       pr_url: payload.pull_request.html_url,
@@ -620,7 +620,7 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
   await forwardToOrchestrator(env, {
     type: "pr_comment",
     source: "github",
-    ticketId: taskId,
+    ticketUUID: taskId,
     product: productName,
     payload: {
       pr_url: payload.issue.html_url,
@@ -865,17 +865,17 @@ async function handleDependabotAlert(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  // Include repo in ticketId to avoid collisions across repos in the same product
+  // Include repo in uuid to avoid collisions across repos in the same product
   // (alert numbers are only unique per repo). Use action suffix for reopened alerts
   // so they get a fresh ticket instead of hitting the terminal state guard.
   const repoShort = payload.repository.full_name.replace("/", "-");
   const actionSuffix = payload.action === "reopened" ? `-reopen-${Date.now()}` : "";
-  const ticketId = `dependabot-${repoShort}-${payload.alert.number}${actionSuffix}`;
+  const ticketUUID = `dependabot-${repoShort}-${payload.alert.number}${actionSuffix}`;
 
   await forwardToOrchestrator(env, {
     type: "dependabot_alert",
     source: "github",
-    ticketId,
+    ticketUUID,
     product: productName,
     payload: {
       alert_number: payload.alert.number,
@@ -893,7 +893,7 @@ async function handleDependabotAlert(rawBody: string, env: Bindings) {
     },
   });
 
-  return Response.json({ ok: true, product: productName, ticketId, alertNumber: payload.alert.number });
+  return Response.json({ ok: true, product: productName, ticketUUID, alertNumber: payload.alert.number });
 }
 
 export { linearWebhook, githubWebhook };

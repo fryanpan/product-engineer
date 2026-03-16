@@ -13,7 +13,7 @@ describe("buildTicketEvent", () => {
     });
     expect(event.type).toBe("ticket_created");
     expect(event.source).toBe("linear");
-    expect(event.ticketId).toBe("LIN-123");
+    expect(event.ticketUUID).toBe("LIN-123");
     expect(event.product).toBe("test-app");
   });
 

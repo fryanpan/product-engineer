@@ -1,11 +1,11 @@
 import { VALID_TRANSITIONS, TERMINAL_STATUSES, type TicketState, type TicketRecord } from "./types";
 
 export interface CreateTicketParams {
-  id: string;
+  ticketUUID: string;
   product: string;
   slackThreadTs?: string;
   slackChannel?: string;
-  identifier?: string;
+  ticketId?: string;
   title?: string;
 }
 
@@ -52,30 +52,30 @@ export class AgentManager {
   }
 
   createTicket(params: CreateTicketParams): TicketRecord {
-    const existing = this.getTicket(params.id);
-    if (existing && !this.isTerminal(params.id)) {
-      throw new Error(`Ticket ${params.id} already exists (status: ${existing.status})`);
+    const existing = this.getTicket(params.ticketUUID);
+    if (existing && !this.isTerminal(params.ticketUUID)) {
+      throw new Error(`Ticket ${params.ticketUUID} already exists (status: ${existing.status})`);
     }
 
     // If re-creating after terminal, reset everything
     if (existing) {
-      this.sql.exec("DELETE FROM tickets WHERE id = ?", params.id);
+      this.sql.exec("DELETE FROM tickets WHERE ticket_uuid = ?", params.ticketUUID);
     }
 
     this.sql.exec(
-      `INSERT INTO tickets (id, product, status, slack_thread_ts, slack_channel, identifier, title, agent_active)
+      `INSERT INTO tickets (ticket_uuid, product, status, slack_thread_ts, slack_channel, ticket_id, title, agent_active)
        VALUES (?, ?, 'created', ?, ?, ?, ?, 0)`,
-      params.id, params.product,
+      params.ticketUUID, params.product,
       params.slackThreadTs || null, params.slackChannel || null,
-      params.identifier || null, params.title || null,
+      params.ticketId || null, params.title || null,
     );
 
-    return this.getTicket(params.id)!;
+    return this.getTicket(params.ticketUUID)!;
   }
 
-  getTicket(ticketId: string): TicketRecord | null {
+  getTicket(ticketUUID: string): TicketRecord | null {
     const row = this.sql.exec(
-      "SELECT * FROM tickets WHERE id = ?", ticketId,
+      "SELECT * FROM tickets WHERE ticket_uuid = ?", ticketUUID,
     ).toArray()[0] as unknown as TicketRecord | undefined;
     return row || null;
   }
@@ -83,13 +83,13 @@ export class AgentManager {
   /** Look up a ticket by its human-readable identifier (e.g., "PES-23"). */
   getTicketByIdentifier(identifier: string): TicketRecord | null {
     const row = this.sql.exec(
-      "SELECT * FROM tickets WHERE identifier = ?", identifier,
+      "SELECT * FROM tickets WHERE ticket_id = ?", identifier,
     ).toArray()[0] as unknown as TicketRecord | undefined;
     return row || null;
   }
 
-  isTerminal(ticketId: string): boolean {
-    const ticket = this.getTicket(ticketId);
+  isTerminal(ticketUUID: string): boolean {
+    const ticket = this.getTicket(ticketUUID);
     if (!ticket) return false;
     return (TERMINAL_STATUSES as readonly string[]).includes(ticket.status);
   }
@@ -99,12 +99,12 @@ export class AgentManager {
     return (TERMINAL_STATUSES as readonly string[]).includes(status);
   }
 
-  updateStatus(ticketId: string, update: StatusUpdate): TicketRecord {
-    const ticket = this.getTicket(ticketId);
-    if (!ticket) throw new Error(`Ticket ${ticketId} not found`);
+  updateStatus(ticketUUID: string, update: StatusUpdate): TicketRecord {
+    const ticket = this.getTicket(ticketUUID);
+    if (!ticket) throw new Error(`Ticket ${ticketUUID} not found`);
 
-    if (this.isTerminal(ticketId)) {
-      console.log(`[AgentManager] Ignoring update for terminal ticket ${ticketId}`);
+    if (this.isTerminal(ticketUUID)) {
+      console.log(`[AgentManager] Ignoring update for terminal ticket ${ticketUUID}`);
       return ticket;
     }
 
@@ -129,7 +129,7 @@ export class AgentManager {
       // Auto-set agent_active=0 on terminal
       if ((TERMINAL_STATUSES as readonly string[]).includes(update.status)) {
         sets.push("agent_active = 0");
-        console.log(`[AgentManager] Terminal state ${update.status} for ${ticketId}`);
+        console.log(`[AgentManager] Terminal state ${update.status} for ${ticketUUID}`);
       }
     }
     if (update.pr_url !== undefined) { sets.push("pr_url = ?"); values.push(update.pr_url); }
@@ -137,10 +137,10 @@ export class AgentManager {
     if (update.slack_thread_ts !== undefined) { sets.push("slack_thread_ts = ?"); values.push(update.slack_thread_ts); }
     if (update.transcript_r2_key !== undefined) { sets.push("transcript_r2_key = ?"); values.push(update.transcript_r2_key); }
 
-    values.push(ticketId);
-    this.sql.exec(`UPDATE tickets SET ${sets.join(", ")} WHERE id = ?`, ...values);
+    values.push(ticketUUID);
+    this.sql.exec(`UPDATE tickets SET ${sets.join(", ")} WHERE ticket_uuid = ?`, ...values);
 
-    return this.getTicket(ticketId)!;
+    return this.getTicket(ticketUUID)!;
   }
 
   /**
@@ -148,10 +148,10 @@ export class AgentManager {
    * Deploy re-spawn safe: accepts tickets in spawning/active state (re-initializes container).
    * For new spawns, transitions from reviewing/queued → spawning.
    */
-  async spawnAgent(ticketId: string, config: SpawnConfig): Promise<void> {
-    const ticket = this.getTicket(ticketId);
-    if (!ticket) throw new Error(`Ticket ${ticketId} not found`);
-    if (this.isTerminal(ticketId)) throw new Error(`Ticket ${ticketId} is terminal`);
+  async spawnAgent(ticketUUID: string, config: SpawnConfig): Promise<void> {
+    const ticket = this.getTicket(ticketUUID);
+    if (!ticket) throw new Error(`Ticket ${ticketUUID} not found`);
+    if (this.isTerminal(ticketUUID)) throw new Error(`Ticket ${ticketUUID} is terminal`);
 
     const isRespawn = ticket.status === "spawning" || ticket.status === "active";
 
@@ -161,18 +161,18 @@ export class AgentManager {
         throw new Error(`Cannot spawn agent for ticket in ${ticket.status} state`);
       }
       // Transition to spawning
-      this.updateStatus(ticketId, { status: "spawning" });
+      this.updateStatus(ticketUUID, { status: "spawning" });
     }
 
     // Set agent_active=1
     this.sql.exec(
-      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
-      ticketId,
+      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      ticketUUID,
     );
 
     try {
       const agentNs = this.env.TICKET_AGENT as any;
-      const id = agentNs.idFromName(ticketId);
+      const id = agentNs.idFromName(ticketUUID);
       const agent = agentNs.get(id);
 
       // Initialize the agent container with config
@@ -180,7 +180,7 @@ export class AgentManager {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ticketId,
+          ticketUUID,
           product: config.product,
           repos: config.repos,
           slackChannel: config.slackChannel,
@@ -194,26 +194,26 @@ export class AgentManager {
       if (!initRes.ok) {
         throw new Error(`Agent init failed: ${initRes.status}`);
       }
-      console.log(`[AgentManager] Agent spawned for ${ticketId} (respawn=${isRespawn})`);
+      console.log(`[AgentManager] Agent spawned for ${ticketUUID} (respawn=${isRespawn})`);
     } catch (err) {
       // On failure: mark agent inactive, transition to failed for new spawns
       if (!isRespawn) {
         try {
-          this.updateStatus(ticketId, { status: "failed" });
+          this.updateStatus(ticketUUID, { status: "failed" });
         } catch {
           this.sql.exec(
-            "UPDATE tickets SET status = 'failed', agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-            ticketId,
+            "UPDATE tickets SET status = 'failed', agent_active = 0, updated_at = datetime('now') WHERE ticket_uuid = ?",
+            ticketUUID,
           );
         }
       } else {
         // Respawns keep current state so alarm can retry later
         this.sql.exec(
-          "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-          ticketId,
+          "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE ticket_uuid = ?",
+          ticketUUID,
         );
       }
-      console.error(`[AgentManager] Failed to spawn agent for ${ticketId}:`, err);
+      console.error(`[AgentManager] Failed to spawn agent for ${ticketUUID}:`, err);
       throw err;
     }
   }
@@ -221,19 +221,19 @@ export class AgentManager {
   /**
    * Stop an agent. Idempotent — safe to call on already-stopped agents.
    */
-  async stopAgent(ticketId: string, reason: string): Promise<void> {
-    console.log(`[AgentManager] Stopping agent for ${ticketId}: ${reason}`);
+  async stopAgent(ticketUUID: string, reason: string): Promise<void> {
+    console.log(`[AgentManager] Stopping agent for ${ticketUUID}: ${reason}`);
 
     // Set agent_active=0 in DB first
     this.sql.exec(
-      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-      ticketId,
+      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      ticketUUID,
     );
 
     // Notify TicketAgent DO — best-effort, don't throw on failure
     try {
       const agentNs = this.env.TICKET_AGENT as any;
-      const id = agentNs.idFromName(ticketId);
+      const id = agentNs.idFromName(ticketUUID);
       const agent = agentNs.get(id);
 
       const controller = new AbortController();
@@ -244,27 +244,27 @@ export class AgentManager {
       ).finally(() => clearTimeout(timeout));
     } catch (err) {
       // Timeout or network error — agent may already be dead
-      console.warn(`[AgentManager] Could not notify agent for ${ticketId}:`, err);
+      console.warn(`[AgentManager] Could not notify agent for ${ticketUUID}:`, err);
     }
   }
 
   /**
    * Send an event to a running agent. Retries with backoff.
    */
-  async sendEvent(ticketId: string, event: unknown): Promise<void> {
-    const ticket = this.getTicket(ticketId);
-    if (!ticket) throw new Error(`Ticket ${ticketId} not found`);
-    if (this.isTerminal(ticketId)) {
-      console.log(`[AgentManager] Ignoring event for terminal ticket ${ticketId}`);
+  async sendEvent(ticketUUID: string, event: unknown): Promise<void> {
+    const ticket = this.getTicket(ticketUUID);
+    if (!ticket) throw new Error(`Ticket ${ticketUUID} not found`);
+    if (this.isTerminal(ticketUUID)) {
+      console.log(`[AgentManager] Ignoring event for terminal ticket ${ticketUUID}`);
       return;
     }
     if (ticket.agent_active !== 1) {
-      console.log(`[AgentManager] No active agent for ${ticketId}, skipping event`);
+      console.log(`[AgentManager] No active agent for ${ticketUUID}, skipping event`);
       return;
     }
 
     const agentNs = this.env.TICKET_AGENT as any;
-    const id = agentNs.idFromName(ticketId);
+    const id = agentNs.idFromName(ticketUUID);
     const agent = agentNs.get(id);
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -280,17 +280,17 @@ export class AgentManager {
       }
 
       // Container not ready, backoff and retry
-      console.warn(`[AgentManager] Agent not ready for ${ticketId}, retry ${attempt + 1}/3`);
+      console.warn(`[AgentManager] Agent not ready for ${ticketUUID}, retry ${attempt + 1}/3`);
       await new Promise(r => setTimeout(r, this.retryDelayMs * (attempt + 1)));
     }
 
     // Exhausted retries — mark agent inactive but don't terminal-fail the ticket.
     // Transient 503s (cold start, deploy recovery) should leave the ticket retryable
     // so supervisor or thread replies can re-activate it later.
-    console.error(`[AgentManager] Event delivery failed after retries for ${ticketId}`);
+    console.error(`[AgentManager] Event delivery failed after retries for ${ticketUUID}`);
     this.sql.exec(
-      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE id = ?",
-      ticketId,
+      "UPDATE tickets SET agent_active = 0, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      ticketUUID,
     );
   }
 
@@ -298,35 +298,35 @@ export class AgentManager {
    * Re-activate an agent for a ticket (e.g., user replied in thread).
    * Only works for non-terminal tickets.
    */
-  reactivate(ticketId: string): void {
-    if (this.isTerminal(ticketId)) {
-      console.log(`[AgentManager] Cannot reactivate terminal ticket ${ticketId}`);
+  reactivate(ticketUUID: string): void {
+    if (this.isTerminal(ticketUUID)) {
+      console.log(`[AgentManager] Cannot reactivate terminal ticket ${ticketUUID}`);
       return;
     }
     this.sql.exec(
-      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE id = ?",
-      ticketId,
+      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      ticketUUID,
     );
-    console.log(`[AgentManager] Reactivated agent for ${ticketId}`);
+    console.log(`[AgentManager] Reactivated agent for ${ticketUUID}`);
   }
 
-  recordHeartbeat(ticketId: string): void {
+  recordHeartbeat(ticketUUID: string): void {
     this.sql.exec(
-      "UPDATE tickets SET last_heartbeat = datetime('now'), updated_at = datetime('now') WHERE id = ? AND agent_active = 1",
-      ticketId,
+      "UPDATE tickets SET last_heartbeat = datetime('now'), updated_at = datetime('now') WHERE ticket_uuid = ? AND agent_active = 1",
+      ticketUUID,
     );
   }
 
   /** Record a phone-home from the agent: updates heartbeat timestamp and optional log message. */
-  recordPhoneHome(ticketId: string, message?: string): void {
-    if (this.isTerminal(ticketId)) return;
+  recordPhoneHome(ticketUUID: string, message?: string): void {
+    if (this.isTerminal(ticketUUID)) return;
     if (message) {
       this.sql.exec(
-        "UPDATE tickets SET last_heartbeat = datetime('now'), agent_message = ?, updated_at = datetime('now') WHERE id = ? AND agent_active = 1",
-        message, ticketId,
+        "UPDATE tickets SET last_heartbeat = datetime('now'), agent_message = ?, updated_at = datetime('now') WHERE ticket_uuid = ? AND agent_active = 1",
+        message, ticketUUID,
       );
     } else {
-      this.recordHeartbeat(ticketId);
+      this.recordHeartbeat(ticketUUID);
     }
   }
 
@@ -339,8 +339,8 @@ export class AgentManager {
   async stopAllAgents(reason: string): Promise<void> {
     const agents = this.getActiveAgents();
     for (const agent of agents) {
-      await this.stopAgent(agent.id, reason).catch(err =>
-        console.error(`[AgentManager] Failed to stop ${agent.id}:`, err)
+      await this.stopAgent(agent.ticket_uuid, reason).catch(err =>
+        console.error(`[AgentManager] Failed to stop ${agent.ticket_uuid}:`, err)
       );
     }
   }
@@ -348,11 +348,11 @@ export class AgentManager {
   async cleanupInactive(): Promise<void> {
     const terminalList = TERMINAL_STATUSES.map(s => `'${s}'`).join(", ");
     const inactive = this.sql.exec(
-      `SELECT id FROM tickets WHERE agent_active = 1 AND status IN (${terminalList})`,
-    ).toArray() as { id: string }[];
+      `SELECT ticket_uuid FROM tickets WHERE agent_active = 1 AND status IN (${terminalList})`,
+    ).toArray() as { ticket_uuid: string }[];
 
-    for (const { id } of inactive) {
-      await this.stopAgent(id, "cleanup: terminal but still active").catch(() => {});
+    for (const { ticket_uuid } of inactive) {
+      await this.stopAgent(ticket_uuid, "cleanup: terminal but still active").catch(() => {});
     }
   }
 }

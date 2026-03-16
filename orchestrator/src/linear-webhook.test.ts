@@ -205,13 +205,13 @@ describe("linear webhook handler", () => {
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.ticketId).toBe("tracked-issue");
+    expect(json.ticketUUID).toBe("tracked-issue");
 
     expect(sentEvents).toHaveLength(1);
     const event = sentEvents[0] as Record<string, unknown>;
     expect(event.type).toBe("linear_comment");
     expect(event.source).toBe("linear");
-    expect(event.ticketId).toBe("tracked-issue");
+    expect(event.ticketUUID).toBe("tracked-issue");
     expect(event.product).toBe("test-app");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.comment_id).toBe("comment-3");

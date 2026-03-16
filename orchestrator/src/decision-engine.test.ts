@@ -56,6 +56,7 @@ describe("DecisionEngine", () => {
       agentCount: 1,
       agents: [{
         ticketId: "PE-40",
+        ticketUUID: "abc-123-uuid",
         product: "health-tool",
         status: "in_progress",
         lastHeartbeat: "2026-03-09T10:00:00Z",

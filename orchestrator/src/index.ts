@@ -75,7 +75,7 @@ app.post("/api/dispatch", async (c) => {
     body: JSON.stringify({
       type: body.type,
       source: "api",
-      ticketId: (body.data as Record<string, unknown>).id || `api-${Date.now()}`,
+      ticketUUID: (body.data as Record<string, unknown>).id || `api-${Date.now()}`,
       product: body.product,
       payload: body.data,
       slackThreadTs: body.slack_thread_ts,
@@ -151,17 +151,23 @@ app.post("/api/internal/upload-transcript", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
-  const { ticketId, r2Key, transcript } = await c.req.json<{
-    ticketId: string;
+  const body = await c.req.json<{
+    ticketUUID: string;
     r2Key: string;
     transcript: string;
   }>();
+  const { ticketUUID } = body;
+  const { r2Key, transcript } = body;
+
+  if (!ticketUUID) {
+    return c.json({ error: "Missing ticketUUID" }, 400);
+  }
 
   try {
     // Upload to R2
     await c.env.TRANSCRIPTS.put(r2Key, transcript, {
       httpMetadata: { contentType: "application/x-ndjson" },
-      customMetadata: { ticketId, uploadedAt: new Date().toISOString() },
+      customMetadata: { ticketUUID, uploadedAt: new Date().toISOString() },
     });
 
     // Update ticket record with R2 key
@@ -169,10 +175,10 @@ app.post("/api/internal/upload-transcript", async (c) => {
     await orchestrator.fetch(new Request("http://internal/ticket/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticketId, transcript_r2_key: r2Key }),
+      body: JSON.stringify({ ticketUUID, transcript_r2_key: r2Key }),
     }));
 
-    console.log(`[Worker] Transcript uploaded: ticket=${ticketId} key=${r2Key} size=${transcript.length}`);
+    console.log(`[Worker] Transcript uploaded: ticket=${ticketUUID} key=${r2Key} size=${transcript.length}`);
     return c.json({ ok: true, r2Key });
   } catch (err) {
     console.error("[Worker] Transcript upload failed:", err);
@@ -228,36 +234,36 @@ app.get("/api/transcripts/:r2Key", async (c) => {
 });
 
 // Internal: check orchestrator ticket state (used by agent auto-resume)
-app.get("/api/orchestrator/ticket-status/:ticketId", async (c) => {
+app.get("/api/orchestrator/ticket-status/:ticketUUID", async (c) => {
   const key = c.req.header("X-Internal-Key");
   if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  const ticketId = c.req.param("ticketId");
+  const ticketUUID = c.req.param("ticketUUID");
   const orchestrator = getOrchestrator(c.env);
-  return orchestrator.fetch(new Request(`http://internal/ticket-status/${encodeURIComponent(ticketId)}`));
+  return orchestrator.fetch(new Request(`http://internal/ticket-status/${encodeURIComponent(ticketUUID)}`));
 });
 
 // Internal: drain buffered events from a ticket agent (called by agent on session start)
-app.get("/api/agent/:ticketId/drain-events", async (c) => {
+app.get("/api/agent/:ticketUUID/drain-events", async (c) => {
   const key = c.req.header("X-Internal-Key");
   if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  const ticketId = c.req.param("ticketId");
-  const id = c.env.TICKET_AGENT.idFromName(ticketId);
+  const ticketUUID = c.req.param("ticketUUID");
+  const id = c.env.TICKET_AGENT.idFromName(ticketUUID);
   const agent = c.env.TICKET_AGENT.get(id);
   return agent.fetch(new Request("http://internal/drain-events"));
 });
 
 // Debug: query a specific ticket agent's container status
-app.get("/api/agent/:ticketId/status", async (c) => {
+app.get("/api/agent/:ticketUUID/status", async (c) => {
   const apiKey = c.req.header("X-API-Key");
   if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  const ticketId = c.req.param("ticketId");
-  const id = c.env.TICKET_AGENT.idFromName(ticketId);
+  const ticketUUID = c.req.param("ticketUUID");
+  const id = c.env.TICKET_AGENT.idFromName(ticketUUID);
   const agent = c.env.TICKET_AGENT.get(id);
   return agent.fetch(new Request("http://internal/status"));
 });
@@ -617,18 +623,18 @@ app.get("/api/dashboard/agents", async (c) => {
 });
 
 // Dashboard API: kill a specific agent
-app.post("/api/dashboard/agents/:ticketId/kill", async (c) => {
+app.post("/api/dashboard/agents/:ticketUUID/kill", async (c) => {
   const authResult = await requireAuth(c);
   if (authResult instanceof Response) return authResult;
 
-  const ticketId = c.req.param("ticketId");
+  const ticketUUID = c.req.param("ticketUUID");
 
   // Mark agent as inactive in orchestrator
   const orchestrator = getOrchestrator(c.env);
   const statusResponse = await orchestrator.fetch(new Request("http://internal/ticket/status", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ticketId, agent_active: 0 }),
+    body: JSON.stringify({ ticketUUID, agent_active: 0 }),
   }));
 
   // If the orchestrator failed to mark the agent inactive, abort shutdown
@@ -643,7 +649,7 @@ app.post("/api/dashboard/agents/:ticketId/kill", async (c) => {
     return c.json(
       {
         ok: false,
-        ticketId,
+        ticketUUID,
         error: "Failed to mark agent inactive in orchestrator",
         status: statusResponse.status,
         body: errorBody,
@@ -653,13 +659,13 @@ app.post("/api/dashboard/agents/:ticketId/kill", async (c) => {
   }
 
   // Request shutdown of the container
-  const id = c.env.TICKET_AGENT.idFromName(ticketId);
+  const id = c.env.TICKET_AGENT.idFromName(ticketUUID);
   const agent = c.env.TICKET_AGENT.get(id);
   await agent.fetch(new Request("http://internal/mark-terminal", {
     method: "POST",
   }));
 
-  return c.json({ ok: true, ticketId });
+  return c.json({ ok: true, ticketUUID });
 });
 
 // Dashboard API: kill all agents
