@@ -52,7 +52,7 @@ describe("ContextAssembler", () => {
     // Test all priority levels
     for (const [num, label] of [[0, "None"], [1, "Urgent"], [2, "High"], [3, "Normal"], [4, "Low"]] as const) {
       const ctx = await assembler.forTicketReview({
-        uuid: "t", identifier: null, title: "", description: "",
+        ticketUUID: "t", identifier: null, title: "", description: "",
         priority: num, labels: [], product: "p", repos: [],
         slackThreadTs: null, slackChannel: null,
       });

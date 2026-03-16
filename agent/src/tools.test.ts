@@ -10,7 +10,7 @@ import type { AgentConfig } from "./config";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
-    uuid: "slack-123",
+    ticketUUID: "slack-123",
     product: "test-app",
     repos: ["test-org/test-app"],
     anthropicApiKey: "ak-test",

@@ -225,7 +225,7 @@ describe("buildPrompt", () => {
 function makeEvent(overrides: Partial<TicketEvent> & { type: string; payload: unknown }): TicketEvent {
   return {
     source: "test",
-    uuid: "PE-1",
+    ticketUUID: "PE-1",
     product: "test-product",
     ...overrides,
   };
