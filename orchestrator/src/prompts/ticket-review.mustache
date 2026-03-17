@@ -61,7 +61,25 @@ Evaluate this ticket and respond with JSON:
 - **ask_questions**: The ticket is vague on outcome, value, or intended workflow. Ask up to 2 specific questions.
 {{#isSlackOriginated}}
 
-**Slack requests:** This ticket originates from a Slack mention. The user has already expressed clear intent. Prefer `start_agent` unless the request is genuinely ambiguous about WHAT to do (not just lacking implementation details — the agent will figure those out). "Add X to the app" is clear enough. "Something is broken" without context is not.
+**CRITICAL - Slack requests:** This ticket originates from a Slack mention. The user has already expressed clear intent.
+
+**Default to `start_agent` unless BOTH conditions are met:**
+1. The request is genuinely ambiguous about WHAT to do (not just lacking HOW details)
+2. You cannot determine the answer by reading the codebase
+
+**Examples:**
+- "Add X to Y" → `start_agent` (agent will figure out implementation)
+- "Fix the bug in Z" → `start_agent` (agent will investigate and fix)
+- "Improve performance" → `start_agent` (agent will profile and optimize)
+- "Something is broken" with NO context → `ask_questions` (what is broken?)
+- "Add authentication" with multiple fundamentally different options (OAuth vs JWT vs session) and NO existing auth → `ask_questions` (which approach?)
+
+**If uncertain whether to ask questions:**
+1. Can the agent look this up in the code, Linear comments, Slack thread, or links provided?
+2. If yes → `start_agent`
+3. If no → ask the MINIMUM questions needed to proceed
+
+The agent is autonomous and can ask clarifying questions during implementation via the `ask_question` tool. Don't block ticket creation for details the agent can gather itself.
 {{/isSlackOriginated}}
 - **mark_duplicate**: Substantially overlaps an active ticket listed above.
 - **expand_existing**: Related to an active ticket — add scope to existing work instead of starting a new agent.

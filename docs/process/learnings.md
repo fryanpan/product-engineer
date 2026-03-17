@@ -42,6 +42,12 @@ Technical discoveries that should persist across sessions.
 - Multi-agent features have many interacting edge cases: deploy resume, terminal state, alarm restarts, merge target, retro ordering. Plan with explicit edge case enumeration before implementing — ask "what happens when X restarts for a ticket that's already done?" at every lifecycle boundary.
 - **Lifecycle fixes need both forward-looking prevention AND retroactive cleanup.** When fixing a lifecycle bug, implement: (1) the fix for future instances, (2) cleanup mechanism for existing broken instances, (3) deploy both before declaring resolved. Example: BC-118 required 4 PRs because each fix only addressed new instances, not pre-existing stuck agents. PR #63 added `/cleanup-inactive` endpoint to forcefully shut down containers that were already stuck before the fix existed.
 
+## Ticket Review Decision Engine
+- **Default to action, not questions.** For Slack-originated requests, the bar for asking questions should be VERY high. The user already took action to mention the bot — they expect work to start, not a questionnaire.
+- Only ask questions if BOTH conditions are met: (1) genuinely ambiguous about WHAT to do (not HOW), and (2) cannot be determined by reading code/comments/links.
+- Agents have tools (`ask_question`, codebase exploration) to gather details during implementation. Don't block ticket creation for details the agent can gather itself.
+- Prompt guidance must be specific and concrete. "Prefer X unless Y" is too vague — use explicit decision criteria + concrete examples.
+
 ## LLM Token Optimization
 - `settingSources: ["project"]` injects ALL `alwaysApply: true` rules into every agent turn. Target repos with interactive-only alwaysApply rules (asking for feedback, offering retros, watching for user frustration) silently waste agent context tokens. Fix the target repos, not the agent config.
 - Templates for headless-compatible target repo rules live in `templates/` — use `/propagate` to push updates to registered products.

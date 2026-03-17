@@ -391,6 +391,41 @@ The issue was fixed earlier today with commit edf0236 (orchestrator enriches eve
 
 ---
 
+## 2026-03-17 - BC-165: Feedback - Asking Unnecessary Questions and Stalling (Feedback ticket)
+
+**Context:** User provided feedback about the agent asking unnecessary questions that could be answered by reading the codebase/links, then stalling after the user responded.
+
+**Root cause:**
+The orchestrator's ticket review decision engine (`orchestrator/src/prompts/ticket-review.mustache`) allows the LLM to choose `ask_questions` instead of `start_agent`. The guidance for Slack-originated requests was too weak, leading to unnecessary question-asking for requests where the user had already expressed clear intent.
+
+**What worked:**
+- User provided direct, specific feedback about the problem behavior
+- Clear examples in the codebase showed the pattern (ticket-review.mustache guidance)
+- Strengthened prompt with explicit decision criteria and concrete examples
+
+**What didn't:**
+- Original prompt guidance was too permissive: "Prefer `start_agent` unless genuinely ambiguous"
+- Didn't emphasize that agents can ask questions during implementation via `ask_question` tool
+- Lacked concrete examples showing the boundary between "ask questions" vs "start agent"
+
+**Implementation:**
+- **orchestrator/src/prompts/ticket-review.mustache:59-81**: Strengthened Slack request guidance
+  - Added CRITICAL marker for visibility
+  - Added explicit decision criteria: only ask if BOTH (a) genuinely ambiguous about WHAT and (b) cannot be determined from code/comments/links
+  - Added 5 concrete examples showing when to start_agent vs ask_questions
+  - Emphasized that agents can ask questions during implementation, so don't block at ticket creation
+
+**Learning:**
+- **Autonomous agents should default to action, not questions.** The orchestrator's job is to route tickets to agents, not to gather perfect requirements. Agents have tools (`ask_question`, codebase exploration) to gather details during implementation.
+- **Prompt guidance must be specific and concrete.** "Prefer X unless Y" is too vague. Use explicit criteria + examples.
+- **For Slack requests, the bar for asking questions should be VERY high.** The user already took action to mention the bot — they expect work to start, not a questionnaire.
+
+**Action:**
+- Monitor ticket review decisions in #product-engineer-decisions after deploy
+- If agents still ask unnecessary questions during implementation (via `ask_question` tool), add similar strengthening to the product-engineer skill
+
+---
+
 ## 2026-03-12 - BC-157 Session Retro
 
 **What worked:**
