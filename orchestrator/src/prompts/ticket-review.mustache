@@ -65,7 +65,7 @@ Evaluate this ticket and respond with JSON:
 
 **Default to `start_agent` unless BOTH conditions are met:**
 1. The request is genuinely ambiguous about WHAT to do (not just lacking HOW details)
-2. You cannot determine the answer by reading the codebase
+2. You cannot determine the answer from the codebase, Linear comments, Slack thread, or provided links
 
 **Examples:**
 - "Add X to Y" → `start_agent` (agent will figure out implementation)
