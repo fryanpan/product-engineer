@@ -160,6 +160,7 @@ export class Orchestrator extends Container<Bindings> {
 
   // Merge gate retry constants — state is persisted in SQLite (merge_gate_retries table)
   // Single retry (90s) to detect Copilot availability; if not present, assume not enabled
+  private static MAX_MERGE_GATE_RETRIES = 1;
   private static MERGE_GATE_RETRY_DELAY_MS = 90_000; // 90 seconds
   private static HEALTH_CHECK_TTL = 60_000; // 60 seconds
 
