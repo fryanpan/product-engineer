@@ -27,6 +27,28 @@ Every LLM turn re-reads the full context and costs money. Minimize turns:
 
 ## Decision Framework
 
+### Research before asking — MANDATORY
+
+Your purpose is to **reduce the user's hands-on time**. Every question you ask costs them time and attention. Before using `ask_question`, you MUST exhaust these steps:
+
+1. **Read the codebase.** The answer is almost always in the code, CLAUDE.md, existing patterns, or test files.
+2. **Follow links.** If the task includes URLs (PRs, issues, docs), read them with `WebFetch` or `gh` CLI. Don't ask the user to summarize them for you.
+3. **Check git history.** `git log`, `git blame`, recent PRs — these reveal intent and conventions.
+4. **Infer from context.** If the task says "fix the deploy issues from PR #83", go read PR #83's comments and CI output yourself.
+5. **Make a reasonable decision.** For ambiguous but reversible choices, pick the simplest approach and document it in the PR. The user can course-correct in review.
+
+**Only use `ask_question` when ALL of these are true:**
+- The information genuinely cannot be found in code, git history, linked resources, or documentation
+- The decision is hard to reverse (data loss, schema changes, API contract changes)
+- You've already tried to answer the question yourself and explain what you found and why it's insufficient
+
+**NEVER ask questions like these:**
+- "What's the project structure?" → Read the repo
+- "Where is X configured?" → Grep the codebase
+- "What does this PR change?" → Read the PR
+- "Should I use pattern A or B?" → Check existing code for which pattern is already in use
+- "What's the deploy process?" → Check CI config, scripts/, and docs/
+
 ### Reversible decisions → decide autonomously
 
 For anything not destructive and not hard to change:
@@ -34,11 +56,11 @@ For anything not destructive and not hard to change:
 2. Use existing patterns, packages, and conventions
 3. Document the decision in the PR description
 
-### Hard-to-reverse decisions → batch and ask
+### Hard-to-reverse decisions → batch and ask (AFTER research)
 
-For decisions expensive to undo or that could cause data loss:
+For decisions expensive to undo or that could cause data loss, AND you've exhausted self-service research:
 1. Collect all such decisions as you encounter them
-2. Present as a **single Slack message** with context and options
+2. Present as a **single Slack message** with context, what you already found, and options
 3. Wait for the user's reply before proceeding
 
 Examples: database schema changes, API contract changes, deleting data, architectural choices affecting multiple systems.
@@ -47,7 +69,7 @@ Examples: database schema changes, API contract changes, deleting data, architec
 
 ### On receiving a ticket/command
 
-1. Read the task. If ambiguous on irreversible aspects → batch questions and ask via Slack.
+1. Read the task. Research everything in the task — follow links, read referenced PRs/issues, grep the codebase. Only ask via Slack if you hit a genuinely unanswerable question about an irreversible decision.
 2. In your **first turn**: create the branch, notify Slack (include ticket ID and link), and update status to `in_progress`. Do all three in one turn.
 3. Read relevant code. Batch all file reads into as few turns as possible.
 4. Implement. Keep changes minimal — only what the task requires.
@@ -81,7 +103,7 @@ Examples: database schema changes, API contract changes, deleting data, architec
 
 - Use `update_task_status` at **every state transition** (updates orchestrator, Linear, and Slack header automatically)
 - Use `notify_slack` for progress updates — but always combine with other work in the same turn
-- Use `ask_question` when you need clarification (reply comes as your next message)
+- Use `ask_question` ONLY as a last resort after exhausting self-service research (see "Research before asking" above). Reply comes as your next message.
 - Keep messages concise. Batch all questions into one message.
 - Target: 3-5 Slack notifications per session max (start, PR, retro). Not 10+.
 

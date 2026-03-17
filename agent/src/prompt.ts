@@ -179,6 +179,7 @@ export async function buildEventPrompt(
     case "slack_reply": {
       const files = payload.files as CommandData["files"];
       let message = `The user replied via Slack:\n\n<user_input>\n${payload.text}\n</user_input>`;
+      const resumeInstruction = `\n\nImmediately resume your task using this answer. Do NOT ask follow-up questions unless absolutely necessary — the user expects you to act on their reply, not ask more questions. If their answer is sufficient to proceed, proceed.`;
 
       if (files && files.length > 0) {
         message += `\n\n**Attachments:**\n${formatFileList(files)}`;
@@ -187,13 +188,13 @@ export async function buildEventPrompt(
         const imageBlocks = await fetchSlackFiles(files, slackBotToken);
         if (imageBlocks.length > 0) {
           return [
-            { type: "text" as const, text: message + `\n\nContinue processing with this information.` },
+            { type: "text" as const, text: message + resumeInstruction },
             ...imageBlocks,
           ];
         }
       }
 
-      return message + `\n\nContinue processing with this information.`;
+      return message + resumeInstruction;
     }
     default:
       return `New event: ${event.type}\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;

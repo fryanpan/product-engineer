@@ -123,7 +123,7 @@ export function createTools(config: AgentConfig) {
 
   const askQuestion = tool(
     "ask_question",
-    "Post a clarifying question to the Slack channel. Use this when a task is ambiguous and you need more information. The user's reply will arrive as a new event.",
+    "LAST RESORT: Post a clarifying question to Slack. Before calling this, you MUST have already: (1) read the codebase and relevant files, (2) followed any links in the task (PRs, issues, docs), (3) checked git history. Only ask when the information genuinely cannot be found through self-service research AND the decision is hard to reverse. Never ask questions like 'what's the project structure?' or 'where is X configured?' — look it up yourself. The user's reply will arrive as a new event.",
     { question: z.string().describe("The question to ask the user via Slack") },
     ({ question }) => postToSlack(`*Agent question:*\n${question}`, config),
   );

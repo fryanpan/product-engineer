@@ -371,7 +371,7 @@ describe("buildEventPrompt", () => {
     const prompt = extractText(content);
 
     expect(prompt).toContain("Yes, please go ahead with option B");
-    expect(prompt).toContain("Continue processing with this information");
+    expect(prompt).toContain("Immediately resume your task");
   });
 
   it("falls back to JSON serialization for unknown event types", async () => {
