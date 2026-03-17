@@ -43,7 +43,7 @@ describe("persistSlackThreadTs", () => {
     expect(url).toBe("https://worker.example.com/api/internal/status");
     expect(opts.method).toBe("POST");
     const body = JSON.parse(opts.body as string);
-    expect(body.ticketId).toBe("slack-123");
+    expect(body.ticketUUID).toBe("slack-123");
     expect(body.slack_thread_ts).toBe("1234567890.123456");
   });
 

@@ -4,7 +4,7 @@
 
 **Goal:** Rename identifiers throughout the codebase to match Linear's convention: `uuid` for the internal UUID primary key, `id` for the human-readable identifier (e.g., "BC-163"). This also fixes a critical bug where supervisor actions (kill, trigger_merge_eval) silently fail because the LLM returns human-readable IDs but the code only looks up by UUID.
 
-**Architecture:** Mechanical rename across types, orchestrator, agent, and tests. The database column names (`id`, `identifier`) stay unchanged — only TypeScript field/param names change. A defense-in-depth fallback is added to resolve human-readable IDs to UUIDs in the supervisor action execution path.
+**Architecture:** Mechanical rename across types, orchestrator, agent, and tests. Database columns were migrated: `id` → `ticket_uuid`, `identifier` → `ticket_id`. Environment variable `TICKET_ID` → `TICKET_UUID`. Wire protocol JSON keys updated throughout. A defense-in-depth fallback is added to resolve human-readable IDs to UUIDs in the supervisor action execution path.
 
 **Tech Stack:** TypeScript, Cloudflare Workers/Containers, SQLite
 
@@ -12,12 +12,12 @@
 
 ## Naming Convention
 
-| What | Old name(s) | New name | Example value |
-|------|-------------|----------|---------------|
-| UUID primary key | `ticketId`, `internalId`, `id` (param) | `uuid` | `a751c66e-4f13-4b35-b070-9ce78bb8e101` |
-| Human-readable ID | `ticketId` (template), `identifier` | `id` | `BC-163` |
+| What | Old name(s) | New name (TS) | New name (DB) | Example value |
+|------|-------------|---------------|---------------|---------------|
+| UUID primary key | `ticketId`, `internalId`, `id` | `ticketUUID` | `ticket_uuid` | `a751c66e-4f13-4b35-b070-9ce78bb8e101` |
+| Human-readable ID | `ticketId` (template), `identifier` | `ticketId` | `ticket_id` | `BC-163` |
 
-**Exception:** `TicketRecord.id` stays as-is — it mirrors the DB `id` column. The `identifier` DB column also stays. Only TypeScript interface fields, method params, and template vars change.
+DB columns were migrated via `ALTER TABLE RENAME COLUMN` with idempotent try/catch. Environment variable renamed: `TICKET_ID` → `TICKET_UUID`.
 
 ---
 

@@ -1260,6 +1260,8 @@ export class Orchestrator extends Container<Bindings> {
       if (byIdentifier?.pr_url) {
         console.log(`[Orchestrator] evaluateMergeGate: resolved identifier ${ticketUUID} → ticket ${byIdentifier.ticket_uuid}`);
         ticketRow = byIdentifier;
+        // Use canonical UUID for all downstream operations
+        ticketUUID = ticketRow.ticket_uuid as string;
       }
     }
 
@@ -2030,7 +2032,8 @@ export class Orchestrator extends Container<Bindings> {
     const params: (string | number)[] = [];
     let query = `
       SELECT
-        COALESCE(ticket_id, ticket_uuid) as ticketUUID,
+        ticket_uuid as ticketUUID,
+        COALESCE(ticket_id, ticket_uuid) as ticketId,
         product,
         status,
         transcript_r2_key as r2Key,
