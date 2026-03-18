@@ -454,3 +454,41 @@ The orchestrator's ticket review decision engine (`orchestrator/src/prompts/tick
 - When building deduplication logic, enumerate all state dimensions that should trigger re-evaluation, not just the obvious one
 - User questions during code review are often more valuable than autonomous review
 - For merge/deploy automation, explicitly consider: "what happens when X changes but Y stays the same?"
+
+## 2026-03-18 - BC-170: Per-product agent secrets and custom prompts
+
+**Context:** Ticket agents working on the product-engineer repo need admin API access to test orchestrator changes, but agents for other products should NOT have this access (to keep the blast radius low).
+
+**What worked:**
+- Clean separation between base secrets (shared) and agent_secrets (per-product)
+- Merge approach preserves base secrets, adds product-specific ones at spawn time
+- Mustache conditional rendering (`{{#additionalPrompt}}...{{/additionalPrompt}}`) keeps prompt clean when not set
+- Secrets map to binding names (not values), maintaining security model
+- Documentation-first approach: wrote `docs/per-product-agent-config.md` explaining usage before implementation
+- Setup script (`scripts/update-product-engineer-config.sh`) automates registry updates
+
+**Implementation:**
+- **orchestrator/src/registry.ts**: Add `agent_secrets` and `agent_prompt` to `ProductConfig`
+- **orchestrator/src/types.ts**: Add `additionalPrompt` to `TicketAgentConfig`
+- **orchestrator/src/orchestrator.ts:1130-1145**: Merge agent_secrets into base secrets at spawn time
+- **orchestrator/src/agent-manager.ts**: Pass additionalPrompt through to agent init
+- **orchestrator/src/ticket-agent.ts**: Set ADDITIONAL_PROMPT env var from config
+- **agent/src/config.ts**: Load additionalPrompt from env
+- **agent/src/prompt.ts**: Pass additionalPrompt to template
+- **agent/src/prompts/task-initial.mustache**: Render in "Additional Context" section
+
+**Key insight:**
+Per-product permissions are a scoping problem, not a capability problem. The platform already has secrets management and prompt construction - we just needed a way to scope them per-product. The registry is the natural place for this config since it already maps products to repos, channels, and base secrets.
+
+**What didn't:**
+- Initial attempt to run tests failed due to missing node_modules in test env (expected)
+- Git commit identity needed configuration (headless container issue)
+
+**Action:**
+- After deploy, run `bash scripts/update-product-engineer-config.sh` to configure product-engineer with admin access
+- Monitor first ticket agent working on product-engineer to verify:
+  - WORKER_URL and API_KEY are set in env
+  - additionalPrompt appears in initial prompt
+  - Agent can successfully call admin API endpoints
+
+---
