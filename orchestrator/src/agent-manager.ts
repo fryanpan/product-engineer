@@ -181,8 +181,8 @@ export class AgentManager {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ticketUUID,
-          ticketId: ticket.ticket_id || undefined,
-          ticketTitle: ticket.title || undefined,
+          ticketId: ticket.ticket_id ?? undefined,
+          ticketTitle: ticket.title ?? undefined,
           product: config.product,
           repos: config.repos,
           slackChannel: config.slackChannel,

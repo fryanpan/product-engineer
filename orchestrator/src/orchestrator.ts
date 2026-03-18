@@ -2192,7 +2192,7 @@ export class Orchestrator extends Container<Bindings> {
             : "❓";
           const statusEmoji = this.getStatusEmoji(agent.status);
           const timeSinceUpdate = this.getTimeAgo(agent.updated_at);
-          const ticketDisplay = agent.ticket_id || agent.ticket_uuid;
+          const ticketDisplay = agent.ticket_id ?? agent.ticket_uuid;
 
           message += `${healthEmoji} ${statusEmoji} \`${ticketDisplay}\` (${agent.product})\n`;
           const phaseInfo = agent.agent_message ? ` (${agent.agent_message})` : "";
@@ -2228,7 +2228,7 @@ export class Orchestrator extends Container<Bindings> {
         for (const ticket of statusData.recentCompleted.slice(0, 5)) {
           const statusEmoji = this.getStatusEmoji(ticket.status);
           const timeAgo = this.getTimeAgo(ticket.updated_at);
-          const ticketDisplay = ticket.ticket_id || ticket.ticket_uuid;
+          const ticketDisplay = ticket.ticket_id ?? ticket.ticket_uuid;
           message += `${statusEmoji} \`${ticketDisplay}\` (${ticket.product}) - ${timeAgo}\n`;
           if (ticket.pr_url) {
             message += `   ${ticket.pr_url}\n`;
