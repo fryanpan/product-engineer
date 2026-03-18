@@ -252,6 +252,11 @@ export class Orchestrator extends Container<Bindings> {
     return (this.env.LINEAR_APP_TOKEN as string) || "";
   }
 
+  /** Get the Slack bot token from env. */
+  private getSlackBotToken(): string {
+    return (this.env.SLACK_BOT_TOKEN as string) || "";
+  }
+
   /** Refresh the Linear OAuth token using the stored refresh token. */
   private async refreshLinearToken(): Promise<boolean> {
     try {
@@ -791,6 +796,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.handleTokenUsage(request);
       case "/slack-event":
         return this.handleSlackEvent(request);
+      case "/slack-interactive":
+        return this.handleSlackInteractive(request);
       case "/heartbeat":
         return this.handleHeartbeat(request);
       case "/check-health":
@@ -2757,6 +2764,175 @@ export class Orchestrator extends Container<Bindings> {
       .catch(err => console.error("[Orchestrator] Direct ticket review failed:", err));
 
     return Response.json({ ok: true, linearIssue: issue.identifier });
+  }
+
+  private async handleSlackInteractive(request: Request): Promise<Response> {
+    const payload = await request.json<{
+      type: string;
+      user: { id: string };
+      actions?: Array<{ action_id: string; value: string }>;
+      message?: { ts: string };
+      view?: {
+        id: string;
+        state: {
+          values: Record<string, Record<string, { value?: string; selected_option?: { value: string } }>>;
+        };
+        private_metadata?: string;
+      };
+      trigger_id?: string;
+    }>();
+
+    // Handle button clicks for decision feedback
+    if (payload.type === "block_actions" && payload.actions && payload.actions.length > 0) {
+      const action = payload.actions[0];
+      const decisionId = action.value;
+      const userId = payload.user.id;
+
+      if (action.action_id === "decision_feedback_good") {
+        // Record "correct" feedback
+        this.ctx.storage.sql.exec(
+          `INSERT INTO decision_feedback (id, decision_id, feedback, given_by, given_at, slack_message_ts)
+           VALUES (?, ?, ?, ?, datetime('now'), ?)
+           ON CONFLICT(decision_id) DO UPDATE SET
+             feedback = excluded.feedback,
+             given_by = excluded.given_by,
+             given_at = datetime('now')`,
+          crypto.randomUUID(),
+          decisionId,
+          "good",
+          userId,
+          payload.message?.ts || null,
+        );
+        console.log(`[Orchestrator] Decision feedback (button): good for ${decisionId} from user ${userId}`);
+        return Response.json({ ok: true });
+      }
+
+      if (action.action_id === "decision_feedback_bad") {
+        // Record "incorrect" feedback
+        this.ctx.storage.sql.exec(
+          `INSERT INTO decision_feedback (id, decision_id, feedback, given_by, given_at, slack_message_ts)
+           VALUES (?, ?, ?, ?, datetime('now'), ?)
+           ON CONFLICT(decision_id) DO UPDATE SET
+             feedback = excluded.feedback,
+             given_by = excluded.given_by,
+             given_at = datetime('now')`,
+          crypto.randomUUID(),
+          decisionId,
+          "bad",
+          userId,
+          payload.message?.ts || null,
+        );
+        console.log(`[Orchestrator] Decision feedback (button): bad for ${decisionId} from user ${userId}`);
+        return Response.json({ ok: true });
+      }
+
+      if (action.action_id === "decision_feedback_details" && payload.trigger_id) {
+        // Open a modal for detailed feedback
+        const modalView = {
+          type: "modal",
+          callback_id: "decision_feedback_modal",
+          private_metadata: decisionId,
+          title: { type: "plain_text", text: "Decision Feedback" },
+          submit: { type: "plain_text", text: "Submit" },
+          close: { type: "plain_text", text: "Cancel" },
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: "Was this decision correct?",
+              },
+            },
+            {
+              type: "actions",
+              block_id: "feedback_choice",
+              elements: [
+                {
+                  type: "radio_buttons",
+                  action_id: "feedback_radio",
+                  options: [
+                    {
+                      text: { type: "plain_text", text: "✓ Correct" },
+                      value: "good",
+                    },
+                    {
+                      text: { type: "plain_text", text: "✗ Incorrect" },
+                      value: "bad",
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "input",
+              block_id: "feedback_details",
+              label: { type: "plain_text", text: "Additional context (optional)" },
+              element: {
+                type: "plain_text_input",
+                action_id: "details_input",
+                multiline: true,
+                placeholder: {
+                  type: "plain_text",
+                  text: "Provide more details about what was right or wrong with this decision...",
+                },
+              },
+              optional: true,
+            },
+          ],
+        };
+
+        // Open the modal
+        try {
+          await fetch("https://slack.com/api/views.open", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${this.getSlackBotToken()}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              trigger_id: payload.trigger_id,
+              view: modalView,
+            }),
+          });
+        } catch (err) {
+          console.error("[Orchestrator] Failed to open modal:", err);
+        }
+
+        return Response.json({ ok: true });
+      }
+    }
+
+    // Handle modal submission for detailed feedback
+    if (payload.type === "view_submission" && payload.view) {
+      const decisionId = payload.view.private_metadata || "";
+      const values = payload.view.state.values;
+      const feedbackChoice = values.feedback_choice?.feedback_radio?.selected_option?.value as "good" | "bad" | undefined;
+      const details = values.feedback_details?.details_input?.value || null;
+      const userId = payload.user.id;
+
+      if (feedbackChoice) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO decision_feedback (id, decision_id, feedback, details, given_by, given_at, slack_message_ts)
+           VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
+           ON CONFLICT(decision_id) DO UPDATE SET
+             feedback = excluded.feedback,
+             details = excluded.details,
+             given_by = excluded.given_by,
+             given_at = datetime('now')`,
+          crypto.randomUUID(),
+          decisionId,
+          feedbackChoice,
+          details,
+          userId,
+          null,
+        );
+        console.log(`[Orchestrator] Decision feedback (modal): ${feedbackChoice} for ${decisionId} from user ${userId} with details`);
+      }
+
+      return Response.json({ response_action: "clear" });
+    }
+
+    return Response.json({ ok: true });
   }
 
   // --- Metrics endpoints ---

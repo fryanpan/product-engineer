@@ -103,4 +103,37 @@ describe("DecisionEngine", () => {
     const result = engine.parseDecisionResponse('Here is my analysis:\n\n```json\n{"action":"escalate","reason":"security concern"}\n```\n\nLet me know if you need more details.');
     expect(result.action).toBe("escalate");
   });
+
+  it("builds Block Kit blocks with feedback buttons", () => {
+    const log = {
+      id: "decision-123",
+      timestamp: "2026-03-18T10:00:00Z",
+      type: "ticket_review" as const,
+      ticket_id: "PE-42",
+      context_summary: "Test context",
+      action: "start_agent",
+      reason: "Clear task description",
+      confidence: 0.9,
+    };
+
+    // @ts-ignore - accessing private method for testing
+    const blocks = engine.buildDecisionBlocks(log, "🎫", "Ticket Review");
+
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0]).toHaveProperty("type", "section");
+    expect(blocks[1]).toHaveProperty("type", "actions");
+    expect(blocks[2]).toHaveProperty("type", "context");
+
+    // Check action block has three buttons
+    const actionBlock = blocks[1] as { elements: Array<{ action_id: string; value: string }> };
+    expect(actionBlock.elements).toHaveLength(3);
+    expect(actionBlock.elements[0].action_id).toBe("decision_feedback_good");
+    expect(actionBlock.elements[1].action_id).toBe("decision_feedback_bad");
+    expect(actionBlock.elements[2].action_id).toBe("decision_feedback_details");
+
+    // All buttons should have the decision ID as their value
+    expect(actionBlock.elements[0].value).toBe("decision-123");
+    expect(actionBlock.elements[1].value).toBe("decision-123");
+    expect(actionBlock.elements[2].value).toBe("decision-123");
+  });
 });

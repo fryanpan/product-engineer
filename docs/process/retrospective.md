@@ -31,6 +31,42 @@ The problem wasn't in any single trigger path - it was the lack of a shared dedu
 
 ---
 
+## 2026-03-18 - BC-168: Improve decision feedback UI with prominent Slack buttons
+
+**Context:** Decision feedback required clicking on a message to add emoji reactions, which was fiddly especially on mobile. Small buttons made the feedback loop more cumbersome than necessary.
+
+**What worked:**
+- Slack Block Kit provides prominent, easy-to-tap buttons that are much more accessible
+- Three-button layout: "✓ Correct Decision" (primary/green), "✗ Incorrect Decision" (danger/red), "💬 Give Details" (neutral)
+- Modal form for detailed feedback combines radio button selection with optional text input
+- Backward compatibility maintained: emoji reactions and thread replies still work
+- Clean separation of concerns: `decision-engine.ts` builds blocks, `orchestrator.ts` handles interactions
+- Test coverage for Block Kit generation ensures structure remains consistent
+
+**Implementation:**
+- **orchestrator/src/decision-engine.ts**: Added `buildDecisionBlocks()` to construct Block Kit layout, `postSlackBlocksWithResponse()` to post with blocks
+- **orchestrator/src/orchestrator.ts**: Added `handleSlackInteractive()` to process button clicks and modal submissions, `getSlackBotToken()` helper
+- **orchestrator/src/index.ts**: Added `/api/webhooks/slack/interactive` endpoint to receive Slack interactivity payloads
+- **orchestrator/src/decision-engine.test.ts**: Added test validating Block Kit structure and button configuration
+
+**Key insight:**
+Using Block Kit action buttons instead of reactions moves the feedback mechanism from implicit (user must know about reactions) to explicit (buttons are right there). The modal pattern for detailed feedback keeps the simple case (just clicking correct/incorrect) one tap, while making the detailed case accessible without requiring knowledge of thread replies.
+
+**Test results:**
+- All 87 existing tests pass
+- New test validates Block Kit block structure (3 blocks: section, actions with 3 buttons, context)
+- TypeScript compilation successful
+
+**Configuration required:**
+- Slack app's Interactivity & Shortcuts settings must be updated to point to: `https://<worker-url>/api/webhooks/slack/interactive`
+
+**Action:**
+- Deploy to staging and verify button UI appears on decision messages
+- Test all three interaction paths (correct button, incorrect button, details modal)
+- Monitor feedback submission rates to see if the easier UI increases feedback volume
+
+---
+
 ## 2026-03-12 - BC-157: Complete merge gate deduplication with composite fingerprint
 
 **Context:** BC-157 branch had partial implementation that only tracked PR head SHA for deduplication. This missed cases where merge conditions changed without new commits (CI status changes, Copilot review completes, merge conflicts resolve, new reviews arrive).

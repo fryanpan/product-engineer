@@ -121,9 +121,13 @@ export class DecisionEngine {
     const slackText = `${emoji} *${typeLabel}*${log.ticket_id ? ` \u2014 \`${log.ticket_id}\`` : ""}\n*Action:* ${log.action}\n*Reason:* ${log.reason}${feedbackHint}`;
 
     // 2. #product-engineer-decisions channel — capture message TS for feedback
+    // Use Block Kit with prominent buttons for easy feedback
     let decisionsMessageTs: string | undefined;
     try {
-      const res = await this.postSlackWithResponse(this.config.decisionsChannel, slackText);
+      const res = await this.postSlackBlocksWithResponse(
+        this.config.decisionsChannel,
+        this.buildDecisionBlocks(log, emoji, typeLabel),
+      );
       if (res?.ts) {
         decisionsMessageTs = res.ts;
       }
@@ -225,5 +229,95 @@ export class DecisionEngine {
         variables: { issueId, body },
       }),
     });
+  }
+
+  /** Build Slack Block Kit blocks for decision messages with prominent feedback buttons */
+  private buildDecisionBlocks(
+    log: DecisionLog,
+    emoji: string,
+    typeLabel: string,
+  ): unknown[] {
+    return [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `${emoji} *${typeLabel}*${log.ticket_id ? ` — \`${log.ticket_id}\`` : ""}\n*Action:* ${log.action}\n*Reason:* ${log.reason}`,
+        },
+      },
+      {
+        type: "actions",
+        block_id: `decision_feedback_${log.id}`,
+        elements: [
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "✓ Correct Decision",
+              emoji: true,
+            },
+            style: "primary",
+            action_id: "decision_feedback_good",
+            value: log.id,
+          },
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "✗ Incorrect Decision",
+              emoji: true,
+            },
+            style: "danger",
+            action_id: "decision_feedback_bad",
+            value: log.id,
+          },
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "💬 Give Details",
+              emoji: true,
+            },
+            action_id: "decision_feedback_details",
+            value: log.id,
+          },
+        ],
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `_Click buttons above to give feedback. "Give Details" opens a form for more context._`,
+          },
+        ],
+      },
+    ];
+  }
+
+  /** Post Slack blocks and return the response including message ts */
+  private async postSlackBlocksWithResponse(
+    channel: string,
+    blocks: unknown[],
+    threadTs?: string,
+  ): Promise<{ ok: boolean; ts?: string } | null> {
+    try {
+      const res = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.slackBotToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel,
+          blocks,
+          text: "Decision notification", // Fallback text for notifications
+          ...(threadTs && { thread_ts: threadTs }),
+        }),
+      });
+      return res.json();
+    } catch {
+      return null;
+    }
   }
 }
