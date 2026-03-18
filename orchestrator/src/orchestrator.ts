@@ -2797,7 +2797,8 @@ export class Orchestrator extends Container<Bindings> {
       type: string;
       user: { id: string };
       actions?: Array<{ action_id: string; value: string }>;
-      message?: { ts: string };
+      channel?: { id: string };
+      message?: { ts: string; blocks?: unknown[] };
       view?: {
         id: string;
         state: {
@@ -2959,6 +2960,21 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     return Response.json({ ok: true });
+  }
+
+  private async updateSlackMessage(channel: string, ts: string, blocks: unknown[]): Promise<void> {
+    try {
+      await fetch("https://slack.com/api/chat.update", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.getSlackBotToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ channel, ts, blocks }),
+      });
+    } catch (err) {
+      console.error("[Orchestrator] Failed to update Slack message:", err);
+    }
   }
 
   // --- Metrics endpoints ---
