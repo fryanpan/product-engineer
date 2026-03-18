@@ -75,12 +75,13 @@ export class ContextAssembler {
     const prNumber = prMatch?.[1];
     const repoPath = ticket.repo;
 
-    const [prDetails, reviews, prComments, diff, linearComments] = await Promise.all([
+    const [prDetails, reviews, prComments, diff, linearComments, definitionOfDone] = await Promise.all([
       prNumber && ghToken ? this.fetchPRDetails(repoPath, prNumber, ghToken) : null,
       prNumber && ghToken ? this.fetchPRReviews(repoPath, prNumber, ghToken) : [],
       prNumber && ghToken ? this.fetchPRComments(repoPath, prNumber, ghToken) : [],
       prNumber && ghToken ? this.fetchPRDiff(repoPath, prNumber, ghToken) : "",
       this.fetchLinearComments(ticket.ticketUUID).catch(() => []),
+      ghToken ? this.fetchDefinitionOfDone(repoPath, ghToken).catch(() => null) : null,
     ]);
 
     // If PR details fetch failed, return error indicator
@@ -126,6 +127,7 @@ export class ContextAssembler {
       linearComments,
       copilotReviewComplete: copilotReview.reviewed,
       copilotComments: copilotReview.comments,
+      ...(definitionOfDone ? { definitionOfDone } : {}),
     };
   }
 
@@ -315,6 +317,27 @@ export class ContextAssembler {
     if (!res.ok) return [];
     const comments = await res.json() as Array<{ user: { login: string }; path: string; body: string }>;
     return comments.map(c => ({ user: c.user.login, path: c.path || "", body: c.body?.slice(0, 500) || "" }));
+  }
+
+  /**
+   * Fetch .claude/definition-of-done.md from the target repo via GitHub Contents API.
+   * Returns the file content as a string, or null if the file doesn't exist.
+   */
+  private async fetchDefinitionOfDone(repo: string, token: string): Promise<string | null> {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/contents/.claude/definition-of-done.md`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github.v3+json",
+          "User-Agent": "product-engineer-orchestrator",
+        },
+      },
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as { content?: string; encoding?: string };
+    if (!data.content) return null;
+    return Buffer.from(data.content, "base64").toString("utf-8").trim();
   }
 
   /**
