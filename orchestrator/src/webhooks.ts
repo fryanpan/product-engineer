@@ -249,6 +249,46 @@ linearWebhook.post("/", async (c) => {
     return c.json({ ok: true, ignored: true, reason: "action not relevant" });
   }
 
+  // Fetch comments for the issue so the agent has full context
+  let comments: Array<{ user: string; body: string; createdAt: string }> = [];
+  try {
+    const linearToken = c.env.LINEAR_APP_TOKEN;
+    if (linearToken) {
+      const commentsResult = await linearGraphQL(
+        linearToken,
+        `query($issueId: String!) {
+          issue(id: $issueId) {
+            comments {
+              nodes {
+                body
+                user { name }
+                createdAt
+              }
+            }
+          }
+        }`,
+        { issueId: payload.data.id },
+      );
+      const commentsData = commentsResult.data as {
+        issue?: {
+          comments?: {
+            nodes?: Array<{ body: string; user: { name: string }; createdAt: string }>;
+          };
+        };
+      };
+      if (commentsData.issue?.comments?.nodes) {
+        comments = commentsData.issue.comments.nodes.map((c) => ({
+          user: c.user.name,
+          body: c.body,
+          createdAt: c.createdAt,
+        }));
+      }
+    }
+  } catch (err) {
+    console.error("[Linear] Failed to fetch comments for ticket:", err);
+    // Continue without comments rather than failing the webhook
+  }
+
   await forwardToOrchestrator(c.env, {
     type: "ticket_created",
     source: "linear",
@@ -261,6 +301,7 @@ linearWebhook.post("/", async (c) => {
       description: payload.data.description || "",
       priority: payload.data.priority,
       labels: payload.data.labelIds || [],
+      comments,
     },
   });
 
