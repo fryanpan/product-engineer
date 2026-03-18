@@ -3015,7 +3015,7 @@ export class Orchestrator extends Container<Bindings> {
 
   private async updateSlackMessage(channel: string, ts: string, blocks: unknown[]): Promise<void> {
     try {
-      await fetch("https://slack.com/api/chat.update", {
+      const res = await fetch("https://slack.com/api/chat.update", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${this.getSlackBotToken()}`,
@@ -3023,6 +3023,10 @@ export class Orchestrator extends Container<Bindings> {
         },
         body: JSON.stringify({ channel, ts, blocks }),
       });
+      const body = await res.json<{ ok: boolean; error?: string }>();
+      if (!body.ok) {
+        console.error(`[Orchestrator] Slack chat.update failed: ${body.error}`);
+      }
     } catch (err) {
       console.error("[Orchestrator] Failed to update Slack message:", err);
     }
