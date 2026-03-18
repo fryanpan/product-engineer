@@ -468,6 +468,44 @@ The orchestrator's ticket review decision engine (`orchestrator/src/prompts/tick
 
 ---
 
+## 2026-03-18 - BC-174: Incorrect merge gate decision on BC-172 (PR #93)
+
+**Context:** The merge gate incorrectly reported "0 files changed, 0 additions, 0 deletions" for PR #91 (BC-172), which actually had 5 files changed, 38 additions, 4 deletions. The LLM decided to send the PR back with "The PR contains no changes whatsoever", blocking legitimate work.
+
+**Root cause:**
+`fetchPRDetails` in `context-assembler.ts` returned `null` (likely transient GitHub API error, rate limit, or permission issue), and the code proceeded with default values of 0 for all PR stats. The LLM then made a decision based on bogus data.
+
+**What worked:**
+- Quick root cause identification by examining the PR via GitHub API (confirmed it had real changes)
+- Traced through context assembly → merge gate evaluation flow
+- Simple fix: return error indicator when PR fetch fails instead of proceeding with 0 values
+- Updated test to verify error response behavior
+- All 87 tests still pass (4 pre-existing failures unrelated)
+
+**What didn't:**
+- Original code had no error handling for `fetchPRDetails` failure — silently proceeded with bad data
+- No retry logic for transient API failures
+- Test was making real GitHub API calls with invalid token, which was brittle
+
+**Implementation:**
+- **context-assembler.ts:63-119**: When `fetchPRDetails` returns `null`, immediately return `{ error: "pr_fetch_failed", errorMessage: "...", pr_url: "..." }`
+- **orchestrator.ts:1297-1325**: Check for `context.error === "pr_fetch_failed"` before LLM call, post Slack message explaining the issue, return early
+- **context-assembler.test.ts:63-84**: Updated test to expect error response when GitHub API fails
+
+**Key insight:**
+When gathering context for LLM decisions, failing with clear error is better than proceeding with default/bogus values. The LLM can't know that 0 files changed is wrong — it trusts the data. Better to escalate to humans when data is unavailable than to make decisions on lies.
+
+**Future improvements:**
+- Add retry logic for transient GitHub API failures (exponential backoff)
+- Consider caching PR details to survive brief API outages
+- Add metrics for GitHub API error rates to detect patterns
+
+**Action:**
+- Monitor #product-engineer-decisions after deploy to verify Slack error messages appear when GitHub API fails
+- Consider adding GitHub API health check to dashboard
+
+---
+
 ## 2026-03-12 - BC-157 Session Retro
 
 **What worked:**

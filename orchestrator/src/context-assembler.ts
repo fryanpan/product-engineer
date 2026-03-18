@@ -83,6 +83,17 @@ export class ContextAssembler {
       this.fetchLinearComments(ticket.ticketUUID).catch(() => []),
     ]);
 
+    // If PR details fetch failed, return error indicator
+    // Don't proceed with bogus data (0 files changed) — let orchestrator escalate
+    if (!prDetails) {
+      console.error(`[ContextAssembler] PR details fetch failed for ${ticket.pr_url} — cannot evaluate merge gate`);
+      return {
+        error: "pr_fetch_failed",
+        errorMessage: "Failed to fetch PR details from GitHub API — may be transient network error, rate limit, or permission issue",
+        pr_url: ticket.pr_url,
+      };
+    }
+
     const headSha = (prDetails?.head as Record<string, unknown> | undefined)?.sha as string | undefined;
     const ciStatus = prNumber && ghToken
       ? await this.fetchCIStatus(repoPath, headSha, ghToken)
