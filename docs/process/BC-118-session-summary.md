@@ -128,7 +128,7 @@ No single PR would have solved the entire problem.
 
 ## Next Steps for User
 
-1. **Review PR #63** - https://github.com/fryanpan/product-engineer/pull/63
+1. **Review PR #63**
 2. **Merge and deploy** to production
 3. **Run cleanup:**
    ```bash

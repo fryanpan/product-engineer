@@ -16,7 +16,7 @@ describe("buildPrompt", () => {
     const task: TaskPayload = {
       type: "feedback",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       data: {
         id: "fb-001",
         text: "The dashboard is slow",
@@ -36,14 +36,14 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("https://example.com/dashboard");
     expect(prompt).toContain("(attached)");
     expect(prompt).toContain("fb-001");
-    expect(prompt).toContain("`fryanpan/health-tool`");
+    expect(prompt).toContain("`acme-org/sample-app`");
   });
 
   it("builds correct prompt for ticket tasks", async () => {
     const task: TaskPayload = {
       type: "ticket",
       product: "bike-tool",
-      repos: ["fryanpan/bike-tool"],
+      repos: ["acme-org/other-app"],
       data: {
         id: "issue-456",
         title: "Add route export feature",
@@ -63,14 +63,14 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("2"); // priority
     expect(prompt).toContain("feature, export");
     expect(prompt).toContain("issue-456");
-    expect(prompt).toContain("`fryanpan/bike-tool`");
+    expect(prompt).toContain("`acme-org/other-app`");
   });
 
   it("builds correct prompt for command tasks", async () => {
     const task: TaskPayload = {
       type: "command",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       data: {
         text: "refactor the auth module",
         user: "U12345",
@@ -92,7 +92,7 @@ describe("buildPrompt", () => {
     const singleRepo: TaskPayload = {
       type: "ticket",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       data: {
         id: "i1",
         title: "Test",
@@ -104,13 +104,13 @@ describe("buildPrompt", () => {
 
     const singleContent = await buildPrompt(singleRepo, MOCK_SLACK_TOKEN);
     const singlePrompt = extractText(singleContent);
-    expect(singlePrompt).toContain("`fryanpan/health-tool`");
+    expect(singlePrompt).toContain("`acme-org/sample-app`");
     expect(singlePrompt).toContain("The repo is already cloned");
 
     const multiRepo: TaskPayload = {
       type: "ticket",
       product: "health-tool",
-      repos: ["fryanpan/health-tool", "fryanpan/health-tool-api"],
+      repos: ["acme-org/sample-app", "acme-org/sample-app-api"],
       data: {
         id: "i2",
         title: "Test multi",
@@ -122,8 +122,8 @@ describe("buildPrompt", () => {
 
     const multiContent = await buildPrompt(multiRepo, MOCK_SLACK_TOKEN);
     const multiPrompt = extractText(multiContent);
-    expect(multiPrompt).toContain("`fryanpan/health-tool`");
-    expect(multiPrompt).toContain("`fryanpan/health-tool-api`");
+    expect(multiPrompt).toContain("`acme-org/sample-app`");
+    expect(multiPrompt).toContain("`acme-org/sample-app-api`");
     expect(multiPrompt).toContain("The repos are already cloned");
   });
 
@@ -131,7 +131,7 @@ describe("buildPrompt", () => {
     const task: TaskPayload = {
       type: "feedback",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       data: {
         id: "fb-002",
         text: null,
@@ -158,7 +158,7 @@ describe("buildPrompt", () => {
     const task: TaskPayload = {
       type: "ticket",
       product: "bike-tool",
-      repos: ["fryanpan/bike-tool"],
+      repos: ["acme-org/other-app"],
       data: {
         id: "issue-789",
         title: "Simple fix",
@@ -180,7 +180,7 @@ describe("buildPrompt", () => {
     const task: TaskPayload = {
       type: "ticket",
       product: "test-app",
-      repos: ["fryanpan/test-app"],
+      repos: ["acme-org/test-app"],
       data: {
         id: "test-123",
         // title, description, priority, labels all missing
@@ -204,7 +204,7 @@ describe("buildPrompt", () => {
     const task: TaskPayload = {
       type: "command",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       data: {
         text: "<@U0AHE1T0SMV> What's the team id and project id?",
         user: "U0AH7G5GKNW",

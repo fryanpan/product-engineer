@@ -6,17 +6,17 @@
     "gateway_id": "YOUR_GATEWAY_SLUG"
   },
   "products": {
-    "health-tool": {
-      "repos": ["fryanpan/health-tool"],
-      "slack_channel": "#health-tool",
+    "sample-app": {
+      "repos": ["your-org/sample-app"],
+      "slack_channel": "#sample-app",
       "triggers": {
         "linear": {
           "enabled": true,
-          "project_name": "Health Tool"
+          "project_name": "Sample App"
         }
       },
       "secrets": {
-        "GITHUB_TOKEN": "FRYANPAN_ORG_GITHUB_TOKEN",
+        "GITHUB_TOKEN": "YOUR_ORG_GITHUB_TOKEN",
         "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY"
       }
     }

@@ -23,7 +23,7 @@ describe("DecisionEngine", () => {
       activeCount: 3,
       activeTickets: [{ id: "PE-40", status: "in_progress", product: "health-tool" }],
       productName: "health-tool",
-      repos: "bryanchan/health-tool",
+      repos: "acme-org/sample-app",
       linearComments: [],
       slackThread: [],
     });

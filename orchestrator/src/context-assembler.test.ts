@@ -23,7 +23,7 @@ describe("ContextAssembler", () => {
       priority: 3,
       labels: ["bug"],
       product: "health-tool",
-      repos: ["bryanchan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackThreadTs: null,
       slackChannel: null,
     });
@@ -34,7 +34,7 @@ describe("ContextAssembler", () => {
     expect(ctx.priority).toBe("Normal");
     expect(ctx.labels).toBe("bug");
     expect(ctx.productName).toBe("health-tool");
-    expect(ctx.repos).toBe("bryanchan/health-tool");
+    expect(ctx.repos).toBe("acme-org/sample-app");
     expect(ctx.activeTickets).toBeArray();
     expect(ctx.activeCount).toBe(0);
     expect(ctx.linearComments).toBeArray();
@@ -75,7 +75,7 @@ describe("ContextAssembler", () => {
       product: "health-tool",
       pr_url: "https://github.com/org/repo/pull/1",
       branch: "ticket/abc-123",
-      repo: "bryanchan/health-tool",
+      repo: "acme-org/sample-app",
     });
 
     expect(ctx.identifier).toBe("PE-42");

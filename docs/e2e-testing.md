@@ -18,6 +18,7 @@ export API_KEY="your-api-key"
 export SLACK_BOT_TOKEN="xoxb-..."  # Staging Slack app token
 export LINEAR_API_KEY="lin_api_..."
 export GITHUB_TOKEN="ghp_..."  # Or GH_TOKEN
+export WORKER_URL="https://your-worker.workers.dev"
 ```
 
 ## Smoke Test
@@ -93,7 +94,7 @@ bun run scripts/e2e-staging-test.ts --help
 
 ### Bug Classes Covered
 
-This test catches the class of bugs found in the Mar 9-10 session:
+This test catches the class of bugs found during development:
 
 | Bug Class | How Tested |
 |-----------|------------|
@@ -105,13 +106,13 @@ This test catches the class of bugs found in the Mar 9-10 session:
 
 ### Environment Overrides
 
-Override defaults for testing against production (rare — only after risky changes):
+Override defaults for testing against different environments:
 
 ```bash
-STAGING_URL=https://product-engineer.fryansoftware.workers.dev \
+WORKER_URL=https://your-worker.workers.dev \
 SLACK_CHANNEL=C0... \
 LINEAR_TEAM_ID=... \
-STAGING_REPO=fryanpan/some-other-repo \
+STAGING_REPO=your-org/some-repo \
 bun run scripts/e2e-staging-test.ts
 ```
 
@@ -121,13 +122,13 @@ The full E2E test creates real artifacts:
 - Linear ticket (closed after merge)
 - Slack thread (permanent)
 - GitHub branch (deleted after merge)
-- Merged commit (permanent in `staging-test-app`)
+- Merged commit (permanent in staging repo)
 
 To fully clean up after a test:
 
 ```bash
-# Reset staging-test-app main branch (dangerous!)
-cd /path/to/staging-test-app
+# Reset staging repo main branch (dangerous!)
+cd /path/to/staging-repo
 git reset --hard HEAD~1
 git push --force origin main
 
@@ -164,7 +165,7 @@ Common issues:
 Check decision log:
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  https://product-engineer-stg.fryanpan.workers.dev/api/orchestrator/decisions
+  "$WORKER_URL/api/orchestrator/decisions"
 ```
 
 ### Test completes but cleanup needed
@@ -172,5 +173,5 @@ curl -H "X-API-Key: $API_KEY" \
 Kill any stuck agents:
 ```bash
 curl -X POST -H "X-API-Key: $API_KEY" \
-  https://product-engineer-stg.fryanpan.workers.dev/api/orchestrator/cleanup-inactive
+  "$WORKER_URL/api/orchestrator/cleanup-inactive"
 ```
