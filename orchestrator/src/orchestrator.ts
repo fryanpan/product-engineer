@@ -2955,7 +2955,21 @@ export class Orchestrator extends Container<Bindings> {
 
     // Handle modal submission for detailed feedback
     if (payload.type === "view_submission" && payload.view) {
-      const decisionId = payload.view.private_metadata || "";
+      let decisionId = "";
+      let channel: string | null = null;
+      let messageTs: string | null = null;
+      let originalSection: unknown = null;
+
+      try {
+        const meta = JSON.parse(payload.view.private_metadata || "{}");
+        decisionId = meta.decisionId || "";
+        channel = meta.channel || null;
+        messageTs = meta.messageTs || null;
+        originalSection = meta.originalSection || null;
+      } catch {
+        decisionId = payload.view.private_metadata || "";
+      }
+
       const values = payload.view.state.values;
       const feedbackChoice = values.feedback_choice?.feedback_radio?.selected_option?.value as "good" | "bad" | undefined;
       const details = values.feedback_details?.details_input?.value || null;
@@ -2975,9 +2989,22 @@ export class Orchestrator extends Container<Bindings> {
           feedbackChoice,
           details,
           userId,
-          null,
+          messageTs,
         );
         console.log(`[Orchestrator] Decision feedback (modal): ${feedbackChoice} for ${decisionId} from user ${userId} with details`);
+
+        // Update the original message to show confirmation
+        if (channel && messageTs && originalSection) {
+          const label = feedbackChoice === "good" ? "✓ Marked as *correct*" : "✗ Marked as *incorrect*";
+          const detailsSuffix = details ? `\n> ${details}` : "";
+          await this.updateSlackMessage(channel, messageTs, [
+            originalSection,
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `${label} by <@${userId}>${detailsSuffix}` }],
+            },
+          ]);
+        }
       }
 
       return Response.json({ response_action: "clear" });
