@@ -6,7 +6,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {
         GITHUB_TOKEN: "HEALTH_TOOL_GITHUB_TOKEN",
@@ -23,7 +23,7 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.GITHUB_TOKEN).toBe("ghp_abc123");
     expect(vars.ANTHROPIC_API_KEY).toBe("sk-ant-xyz");
     expect(vars.PRODUCT).toBe("health-tool");
-    expect(vars.REPOS).toBe(JSON.stringify(["fryanpan/health-tool"]));
+    expect(vars.REPOS).toBe(JSON.stringify(["acme-org/sample-app"]));
     expect(vars.TICKET_UUID).toBe("LIN-123");
     expect(vars.SLACK_CHANNEL).toBe("#health-tool");
     expect(vars.SLACK_BOT_TOKEN).toBe("xoxb-slack");
@@ -34,7 +34,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };
@@ -50,7 +50,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {
         GITHUB_TOKEN: "HEALTH_TOOL_GITHUB_TOKEN",
@@ -69,7 +69,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {
         GITHUB_TOKEN: "MISSING_BINDING",
@@ -86,7 +86,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {
         GITHUB_TOKEN: "MISSING_TOKEN",
@@ -102,7 +102,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };
@@ -122,7 +122,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       slackThreadTs: "1234567890.123456",
       secrets: {},
@@ -137,7 +137,7 @@ describe("resolveAgentEnvVars", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };
@@ -153,7 +153,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };
@@ -173,7 +173,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };
@@ -187,7 +187,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };
@@ -203,7 +203,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };
@@ -223,7 +223,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
     const config = {
       ticketUUID: "LIN-123",
       product: "health-tool",
-      repos: ["fryanpan/health-tool"],
+      repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
       secrets: {},
     };

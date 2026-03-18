@@ -1,12 +1,39 @@
-# Product Engineer Prototype
+# Product Engineer
 
 Autonomous agent that turns tickets into shipped code.
 
+## What This Is
+
+Product Engineer is an **LLM decision engine** — a system for handing off engineering decisions to AI and tuning how well it makes those decisions over time.
+
+The core insight: most engineering work involves a series of decisions (what to build, how to implement, when to ask for help, whether to merge). This system makes those decisions explicit, routes them to LLMs, and creates feedback loops to improve decision quality.
+
+### Key Decisions the LLM Makes
+
+| Decision Point | Options | Where It's Defined |
+|----------------|---------|-------------------|
+| **Ticket triage** | Start work, ask questions, mark duplicate, queue | `orchestrator/src/prompts/ticket-review.mustache` |
+| **Implementation** | What files to change, how to structure code | `.claude/skills/product-engineer/SKILL.md` |
+| **When to ask humans** | Reversible → autonomous, irreversible → ask | `.claude/skills/product-engineer/SKILL.md` |
+| **Merge evaluation** | Auto-merge, escalate, send back for revision | `orchestrator/src/prompts/merge-decision.mustache` |
+
+### How You Tune It
+
+- **Decision logic lives in English**, not code — change a threshold by editing markdown
+- **Add decision types** by creating new skill files or mustache templates
+- **Review decisions** via the audit log (`decision_log` table) and Slack threads
+- **Aggregate learnings** across projects with `/aggregate` and `/cross-project-review`
+
+## Design Philosophy
+
+This is a small, understandable repo that does something ambitious.
+
+- **Slim core** — ~1k-line orchestrator, ~600-line agent server. Everything else is English skills.
+- **English over code** — agent behavior is defined in `SKILL.md` files, not TypeScript logic. Changing how the agent works means editing markdown.
+- **Ride rapidly improving components** — Claude Agent SDK, Cloudflare Containers, and Claude itself are evolving fast. Depend on them instead of reimplementing.
+- **No cruft** — every abstraction earns its place. If a component can be deleted without breaking anything, delete it.
+
 ## Goals
-
-A product engineer agent that turns tickets, feedback, and natural language requests into shipped code — with human involvement only at the moments when it matters.
-
-The main goals of this are:
 
 * **Faster delivery of value, with less hands-on time**
   * Minutes to deliver simple changes
@@ -83,15 +110,6 @@ graph TD
 5. **All LLM traffic** routes through [Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md) for monitoring, cost tracking, and error visibility
 6. **Transcripts** are stored in R2 for debugging and audit
 
-## Design Philosophy
-
-The pitch: this is a small, understandable repo that does something ambitious.
-
-- **Slim core** — ~1k-line orchestrator, ~600-line agent server. Everything else is English skills.
-- **English over code** — agent behavior is defined in `SKILL.md` files, not TypeScript logic. Changing how the agent works means editing markdown.
-- **Ride rapidly improving components** — Claude Agent SDK, Cloudflare Containers, and Claude itself are evolving fast. Depend on them instead of reimplementing.
-- **No cruft** — every abstraction earns its place. If a component can be deleted without breaking anything, delete it.
-
 ## Getting Started
 
 **Prerequisites:** [Cloudflare account](https://dash.cloudflare.com/sign-up), [Anthropic API key](https://console.anthropic.com/), Slack workspace, Linear workspace.
@@ -167,4 +185,4 @@ See `.claude/skills/` for the full list and details.
 
 ## License
 
-[Unlicense](LICENSE) (public domain)
+[MIT License](LICENSE) — requires attribution, otherwise permissive.

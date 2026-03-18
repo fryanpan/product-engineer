@@ -66,7 +66,7 @@ wrangler secret put CONTEXT7_API_KEY      # Context7 API key (optional — works
 
 ### Per-organization GitHub tokens
 
-Products from the same GitHub organization can share a single token. Use org-level tokens (e.g., `FRYANPAN_ORG_GITHUB_TOKEN`) for all repos in that org.
+Products from the same GitHub organization can share a single token. Use org-level tokens (e.g., `YOUR_ORG_GITHUB_TOKEN`) for all repos in that org.
 
 ```bash
 # Example: if all your products are in the "your-org" GitHub org:
