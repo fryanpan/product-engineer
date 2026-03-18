@@ -2567,12 +2567,24 @@ export class Orchestrator extends Container<Bindings> {
     // Strip the @mention from the text to get the raw request
     const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
 
-    // Generate a concise title from the request (first sentence or first 80 chars)
-    const title = rawText
-      ? (rawText.length <= 80
-        ? rawText
-        : rawText.split(/[.!?\n]/)[0].slice(0, 80).trim() || rawText.slice(0, 80).trim())
-      : "Slack request (no description)";
+    // Generate a concise title from the request
+    // Use first sentence (up to 200 chars) or truncate at 200 chars if no sentence boundary
+    let title: string;
+    if (!rawText) {
+      title = "Slack request (no description)";
+    } else if (rawText.length <= 200) {
+      title = rawText;
+    } else {
+      // Try to find first sentence boundary within first 200 chars
+      const firstSentence = rawText.slice(0, 200).match(/^[^.!?\n]+[.!?\n]/);
+      if (firstSentence && firstSentence[0].length > 20) {
+        // Use first sentence if it's reasonable length (>20 chars)
+        title = firstSentence[0].trim();
+      } else {
+        // Otherwise truncate at 200 chars
+        title = rawText.slice(0, 200).trim() + "...";
+      }
+    }
 
     // Look up the Linear project ID by name
     const projectRes = await fetch("https://api.linear.app/graphql", {
