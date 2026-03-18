@@ -24,6 +24,13 @@ Technical discoveries that should persist across sessions.
 - `bypassPermissions` mode fails when running as root. The SDK checks `process.getuid()` and refuses. Run containers as a non-root user.
 - `settingSources: ["project"]` loads CLAUDE.md, all `alwaysApply: true` rules from `.claude/rules/`, and skills from `.claude/skills/` in the target repo. Interactive-only alwaysApply rules (asking for feedback, offering retros, watching for frustration) silently waste agent context tokens on every turn. Fix the target repos' rules to be headless-compatible rather than disabling settingSources.
 
+## Agent SDK (Plugins in Headless Mode)
+- `settingSources: ["project"]` loads CLAUDE.md, rules, and skills from the repo, but does NOT load `enabledPlugins` from `.claude/settings.json`. Plugins must be passed explicitly via the `plugins` query option.
+- The SDK `plugins` option only supports `{ type: "local", path: "..." }` — no marketplace resolution. The agent must clone marketplace repos and resolve paths itself.
+- `claude plugin install` requires the full CLI with OAuth login — not usable in headless containers. Instead, shallow-clone the marketplace GitHub repo directly (`anthropics/claude-plugins-official`).
+- Marketplace plugins live in `plugins/<name>/` or `external_plugins/<name>/` in the marketplace repo — each has `.claude-plugin/plugin.json`.
+- Plugin loading should be non-fatal: if cloning fails, the agent continues without plugin skills.
+
 ## Docker / Container Deployment
 - Docker build context paths matter when the Dockerfile is in a subdirectory. Use `context: .` in wrangler.jsonc and adjust COPY paths accordingly.
 - Always run agent containers as non-root. Create a user in the Dockerfile: `RUN useradd -m agent && USER agent`.
