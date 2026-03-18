@@ -76,6 +76,7 @@ async function fetchSlackFiles(
 export async function buildPrompt(
   task: TaskPayload,
   slackBotToken: string,
+  additionalPrompt?: string,
 ): Promise<MessageContent> {
   const header = Mustache.render(initialTemplate, {
     product: task.product,
@@ -85,6 +86,7 @@ export async function buildPrompt(
       task.repos.length > 1
         ? "The repos are already cloned into /workspace/. Work across them as needed."
         : "The repo is already cloned into /workspace/.",
+    additionalPrompt: additionalPrompt || "",
   });
 
   // If task has files (from Slack), fetch and append images

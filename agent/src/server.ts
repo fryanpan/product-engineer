@@ -736,7 +736,7 @@ app.post("/event", async (c) => {
         config.ticketTitle = ticketData.title;
       }
 
-      const prompt = await buildPrompt(taskPayload, config.slackBotToken);
+      const prompt = await buildPrompt(taskPayload, config.slackBotToken, config.additionalPrompt);
       await startSession(prompt);
       // Drain any events buffered while the container was unreachable
       drainBufferedEvents();

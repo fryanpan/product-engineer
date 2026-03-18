@@ -15,6 +15,8 @@ export interface ProductConfig {
     slack?: { enabled: boolean };
   };
   secrets: Record<string, string>;
+  agent_secrets?: Record<string, string>; // Additional secrets exposed only to this product's agents
+  agent_prompt?: string; // Additional instructions added to agent prompt for this product
 }
 
 export interface CloudflareAIGateway {

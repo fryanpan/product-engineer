@@ -31,6 +31,32 @@
         "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
       }
     },
+    "product-engineer": {
+      "repos": ["your-org/product-engineer"],
+      "slack_channel": "#product-engineer",
+      "slack_channel_id": "C000000PROD",
+      "triggers": {
+        "linear": {
+          "enabled": true,
+          "project_name": "Product Engineer"
+        },
+        "slack": { "enabled": true }
+      },
+      "secrets": {
+        "GITHUB_TOKEN": "PRODUCT_ENGINEER_GITHUB_TOKEN",
+        "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+        "LINEAR_APP_TOKEN": "LINEAR_APP_TOKEN",
+        "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+        "NOTION_TOKEN": "NOTION_TOKEN",
+        "SENTRY_ACCESS_TOKEN": "SENTRY_ACCESS_TOKEN",
+        "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+      },
+      "agent_secrets": {
+        "WORKER_URL": "WORKER_URL",
+        "API_KEY": "API_KEY"
+      },
+      "agent_prompt": "## Admin Access\n\nYou have admin access to the Product Engineer orchestrator for testing and development.\n\n**Environment variables:**\n- `WORKER_URL` - Base URL for admin API\n- `API_KEY` - Authentication token\n\n**Example API calls:**\n```bash\ncurl -H \"X-API-Key: $API_KEY\" $WORKER_URL/api/products\n```"
+    },
     "my-other-app": {
       "repos": ["your-org/my-other-app"],
       "slack_channel": "#my-other-app",

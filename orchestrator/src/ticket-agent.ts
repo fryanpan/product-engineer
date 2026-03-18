@@ -26,6 +26,8 @@ export function resolveAgentEnvVars(
     CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
     // Model selection (sonnet, opus, haiku)
     MODEL: config.model || "",
+    // Product-specific additional prompt
+    ADDITIONAL_PROMPT: config.additionalPrompt || "",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {

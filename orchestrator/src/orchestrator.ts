@@ -1127,14 +1127,21 @@ export class Orchestrator extends Container<Bindings> {
         ).toArray() as Array<{ value: string }>;
         const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
 
+        // Merge agent_secrets into secrets for this product
+        const mergedSecrets = { ...productConfig.secrets };
+        if (productConfig.agent_secrets) {
+          Object.assign(mergedSecrets, productConfig.agent_secrets);
+        }
+
         const spawnConfig: SpawnConfig = {
           product: event.product,
           repos: productConfig.repos,
           slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
           slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined,
-          secrets: productConfig.secrets,
+          secrets: mergedSecrets,
           gatewayConfig,
           model,
+          additionalPrompt: productConfig.agent_prompt,
         };
 
         try {

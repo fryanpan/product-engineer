@@ -102,6 +102,7 @@ export interface AgentConfig {
   ticketIdentifier?: string;  // e.g., "BC-84"
   ticketTitle?: string;        // Brief title for display
   model?: string;              // Claude model to use (sonnet, opus, haiku)
+  additionalPrompt?: string;   // Product-specific instructions
 }
 
 export function loadConfig(): AgentConfig {
@@ -126,5 +127,6 @@ export function loadConfig(): AgentConfig {
     ticketIdentifier: process.env.TICKET_IDENTIFIER || undefined,
     ticketTitle: process.env.TICKET_TITLE || undefined,
     model: process.env.MODEL || undefined,
+    additionalPrompt: process.env.ADDITIONAL_PROMPT || undefined,
   };
 }

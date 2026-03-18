@@ -25,6 +25,7 @@ export interface SpawnConfig {
   secrets: Record<string, string>;
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
   model?: string;
+  additionalPrompt?: string;
 }
 
 interface SqlResult {
@@ -188,6 +189,7 @@ export class AgentManager {
           secrets: config.secrets,
           gatewayConfig: config.gatewayConfig,
           model: config.model,
+          additionalPrompt: config.additionalPrompt,
         }),
       }));
 
