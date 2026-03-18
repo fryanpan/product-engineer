@@ -2831,6 +2831,19 @@ export class Orchestrator extends Container<Bindings> {
           payload.message?.ts || null,
         );
         console.log(`[Orchestrator] Decision feedback (button): good for ${decisionId} from user ${userId}`);
+
+        // Replace buttons with confirmation
+        if (payload.channel?.id && payload.message?.ts && payload.message?.blocks) {
+          const originalSection = payload.message.blocks[0];
+          await this.updateSlackMessage(payload.channel.id, payload.message.ts, [
+            originalSection,
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `✓ Marked as *correct* by <@${userId}>` }],
+            },
+          ]);
+        }
+
         return Response.json({ ok: true });
       }
 
@@ -2850,6 +2863,19 @@ export class Orchestrator extends Container<Bindings> {
           payload.message?.ts || null,
         );
         console.log(`[Orchestrator] Decision feedback (button): bad for ${decisionId} from user ${userId}`);
+
+        // Replace buttons with confirmation
+        if (payload.channel?.id && payload.message?.ts && payload.message?.blocks) {
+          const originalSection = payload.message.blocks[0];
+          await this.updateSlackMessage(payload.channel.id, payload.message.ts, [
+            originalSection,
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `✗ Marked as *incorrect* by <@${userId}>` }],
+            },
+          ]);
+        }
+
         return Response.json({ ok: true });
       }
 
