@@ -2880,53 +2880,52 @@ export class Orchestrator extends Container<Bindings> {
       }
 
       if (action.action_id === "decision_feedback_details" && payload.trigger_id) {
-        // Open a modal for detailed feedback
+        // Encode message context so modal submission can update the original message
+        const metadata = JSON.stringify({
+          decisionId,
+          channel: payload.channel?.id || null,
+          messageTs: payload.message?.ts || null,
+          originalSection: payload.message?.blocks?.[0] || null,
+        });
+
         const modalView = {
           type: "modal",
           callback_id: "decision_feedback_modal",
-          private_metadata: decisionId,
+          private_metadata: metadata,
           title: { type: "plain_text", text: "Decision Feedback" },
           submit: { type: "plain_text", text: "Submit" },
           close: { type: "plain_text", text: "Cancel" },
           blocks: [
             {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: "Was this decision correct?",
-              },
-            },
-            {
-              type: "actions",
+              type: "input",
               block_id: "feedback_choice",
-              elements: [
-                {
-                  type: "radio_buttons",
-                  action_id: "feedback_radio",
-                  options: [
-                    {
-                      text: { type: "plain_text", text: "✓ Correct" },
-                      value: "good",
-                    },
-                    {
-                      text: { type: "plain_text", text: "✗ Incorrect" },
-                      value: "bad",
-                    },
-                  ],
-                },
-              ],
+              label: { type: "plain_text", text: "Was this decision correct?" },
+              element: {
+                type: "radio_buttons",
+                action_id: "feedback_radio",
+                options: [
+                  {
+                    text: { type: "plain_text", text: "✓ Correct" },
+                    value: "good",
+                  },
+                  {
+                    text: { type: "plain_text", text: "✗ Incorrect" },
+                    value: "bad",
+                  },
+                ],
+              },
             },
             {
               type: "input",
               block_id: "feedback_details",
-              label: { type: "plain_text", text: "Additional context (optional)" },
+              label: { type: "plain_text", text: "Additional context" },
               element: {
                 type: "plain_text_input",
                 action_id: "details_input",
                 multiline: true,
                 placeholder: {
                   type: "plain_text",
-                  text: "Provide more details about what was right or wrong with this decision...",
+                  text: "What was right or wrong about this decision...",
                 },
               },
               optional: true,
@@ -2934,7 +2933,6 @@ export class Orchestrator extends Container<Bindings> {
           ],
         };
 
-        // Open the modal
         try {
           await fetch("https://slack.com/api/views.open", {
             method: "POST",
