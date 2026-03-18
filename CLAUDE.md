@@ -65,9 +65,18 @@ Singleton Durable Object that owns all coordination:
 Container class — one instance per ticket, lives up to 2 hours:
 - Runs a persistent HTTP server that receives events from the Orchestrator DO
 - Wraps the Agent SDK with `settingSources: ["project"]` to load product repo CLAUDE.md and skills
+- Loads plugins from the target repo's `.claude/settings.json` (`enabledPlugins`) — see Plugin Loading below
 - Follows the `product-engineer` skill for decision-making (reversible actions = autonomous, irreversible = batch and ask)
 - Communicates via Slack (`notify_slack`, `ask_question` tools)
 - Handles full ticket lifecycle: creation, implementation, PR, review, revision, merge
+
+### Plugin Loading (`agent/src/plugins.ts`)
+After cloning the target repo, the agent reads `.claude/settings.json` to discover `enabledPlugins` (e.g., `code-review@claude-plugins-official`). Marketplace repos are shallow-cloned to `/tmp/marketplaces/` in parallel, and each plugin directory is resolved and passed to the Agent SDK via `plugins: [{ type: "local", path: "..." }]`. This enables the agent to use plugin skills like `/simplify`, `/code-review`, etc.
+
+- `settingSources: ["project"]` does NOT load plugins — they must be passed explicitly
+- Marketplace clones use `--depth 1 --single-branch` for speed (~2-3s)
+- Plugin loading is non-fatal — if cloning fails, the agent continues without plugins
+- Plugins in `plugins/<name>/` and `external_plugins/<name>/` are both supported
 
 ### Product Registry (Admin API)
 Products are stored in the Orchestrator DO's SQLite database, managed via the admin API (`GET/POST/PUT/DELETE /api/products`). Each product maps to repos, secrets, Slack channels, and trigger configuration. See `/setup-product` or `/add-project` skills for how to register new products. Legacy `orchestrator/src/registry.json` is a seed template only.
