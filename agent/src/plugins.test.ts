@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { parseEnabledPlugins, resolvePluginPaths } from "./plugins";
+import { parseEnabledPlugins } from "./plugins";
 
 describe("parseEnabledPlugins", () => {
   it("extracts enabled plugins (true only, skips false)", () => {
@@ -37,43 +37,20 @@ describe("parseEnabledPlugins", () => {
       { name: "standalone-plugin", marketplace: null },
     ]);
   });
-});
 
-describe("resolvePluginPaths", () => {
-  it("resolves plugins to correct marketplace paths", () => {
-    const plugins = [
-      { name: "my-plugin", marketplace: "claude-plugins-official" },
-      { name: "other-plugin", marketplace: "claude-plugins-official" },
-    ];
+  it("ignores non-boolean values", () => {
+    const settings = {
+      enabledPlugins: {
+        "good@marketplace": true,
+        "stringy@marketplace": "true",
+        "zero@marketplace": 0,
+      },
+    };
 
-    const result = resolvePluginPaths(plugins, "/tmp/clones");
+    const result = parseEnabledPlugins(settings);
 
     expect(result).toEqual([
-      {
-        type: "local",
-        path: "/tmp/clones/claude-plugins-official/plugins/my-plugin",
-      },
-      {
-        type: "local",
-        path: "/tmp/clones/claude-plugins-official/plugins/other-plugin",
-      },
+      { name: "good", marketplace: "marketplace" },
     ]);
-  });
-
-  it("skips plugins without a known marketplace", () => {
-    const plugins = [
-      { name: "my-plugin", marketplace: "unknown-marketplace" },
-      { name: "standalone", marketplace: null },
-    ];
-
-    const result = resolvePluginPaths(plugins, "/tmp/clones");
-
-    expect(result).toEqual([]);
-  });
-
-  it("returns empty array for empty input", () => {
-    const result = resolvePluginPaths([], "/tmp/clones");
-
-    expect(result).toEqual([]);
   });
 });

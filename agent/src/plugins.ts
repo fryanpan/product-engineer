@@ -2,8 +2,9 @@
  * Plugin resolution for headless agent sessions.
  *
  * Reads enabledPlugins from a target repo's .claude/settings.json,
- * clones the marketplace repo(s), and resolves plugin directory paths
- * for the Agent SDK `plugins` option.
+ * clones the marketplace repo(s), reads marketplace.json to discover
+ * plugin sources (local dirs or external git URLs), clones as needed,
+ * and resolves plugin directory paths for the Agent SDK `plugins` option.
  */
 
 export interface PluginRef {
@@ -16,6 +17,12 @@ export interface PluginPath {
   path: string;
 }
 
+/** Marketplace plugin entry from marketplace.json */
+interface MarketplaceEntry {
+  name: string;
+  source: string | { source: string; url: string };
+}
+
 /** Known marketplace short names to full GitHub repo paths. */
 const KNOWN_MARKETPLACES: Record<string, string> = {
   "claude-plugins-official": "anthropics/claude-plugins-official",
@@ -26,14 +33,14 @@ const KNOWN_MARKETPLACES: Record<string, string> = {
  * Extracts entries where value is `true`, parses "name@marketplace" format.
  */
 export function parseEnabledPlugins(
-  settings: Record<string, unknown>
+  settings: Record<string, unknown>,
 ): PluginRef[] {
   const enabled = settings.enabledPlugins;
   if (!enabled || typeof enabled !== "object") return [];
 
   const result: PluginRef[] = [];
   for (const [key, value] of Object.entries(
-    enabled as Record<string, unknown>
+    enabled as Record<string, unknown>,
   )) {
     if (value !== true) continue;
 
@@ -51,69 +58,126 @@ export function parseEnabledPlugins(
 }
 
 /**
- * Map PluginRef[] to PluginPath[] by constructing paths within cloned marketplace dirs.
- * Skips plugins without a known marketplace.
+ * Shallow-clone a git repo. Returns true on success, false on failure.
  */
-export function resolvePluginPaths(
-  plugins: PluginRef[],
-  cloneDir: string
-): PluginPath[] {
-  const result: PluginPath[] = [];
-  for (const plugin of plugins) {
-    if (!plugin.marketplace || !KNOWN_MARKETPLACES[plugin.marketplace])
-      continue;
-    result.push({
-      type: "local",
-      path: `${cloneDir}/${plugin.marketplace}/plugins/${plugin.name}`,
-    });
+async function shallowClone(repoUrl: string, targetDir: string): Promise<boolean> {
+  const markerFile = Bun.file(`${targetDir}/.git/HEAD`);
+  if (await markerFile.exists()) return true;
+
+  console.log(`[Plugins] Shallow-cloning ${repoUrl} → ${targetDir}`);
+  const proc = Bun.spawn([
+    "git", "clone", "--depth", "1", "--single-branch",
+    repoUrl, targetDir,
+  ]);
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    const stderr = proc.stderr ? await new Response(proc.stderr).text() : "unknown error";
+    console.error(`[Plugins] Failed to clone ${repoUrl}: ${stderr}`);
+    return false;
   }
-  return result;
+  console.log(`[Plugins] Cloned ${repoUrl} successfully`);
+  return true;
 }
 
 /**
- * Shallow-clone each unique marketplace repo in parallel.
+ * Read marketplace.json from a cloned marketplace repo and build a map
+ * of plugin name → source info.
  */
-export async function cloneMarketplaces(
+async function readMarketplaceIndex(
+  marketplaceDir: string,
+): Promise<Map<string, MarketplaceEntry>> {
+  const index = new Map<string, MarketplaceEntry>();
+  const manifestPath = `${marketplaceDir}/.claude-plugin/marketplace.json`;
+  const file = Bun.file(manifestPath);
+  if (!(await file.exists())) return index;
+
+  try {
+    const manifest = await file.json();
+    const plugins = manifest.plugins as MarketplaceEntry[] | undefined;
+    if (!plugins) return index;
+    for (const entry of plugins) {
+      index.set(entry.name, entry);
+    }
+  } catch (err) {
+    console.warn(`[Plugins] Failed to parse marketplace.json: ${err}`);
+  }
+  return index;
+}
+
+/**
+ * Clone marketplace repos and URL-sourced plugins in parallel.
+ * Returns a map of plugin name → resolved local path.
+ */
+export async function cloneAndResolvePlugins(
   plugins: PluginRef[],
   cloneDir: string,
-): Promise<void> {
-  const marketplaces = new Set<string>();
+): Promise<Map<string, string>> {
+  const resolved = new Map<string, string>();
+
+  // Group plugins by marketplace
+  const byMarketplace = new Map<string, PluginRef[]>();
   for (const plugin of plugins) {
-    if (plugin.marketplace && KNOWN_MARKETPLACES[plugin.marketplace]) {
-      marketplaces.add(plugin.marketplace);
+    if (!plugin.marketplace || !KNOWN_MARKETPLACES[plugin.marketplace]) continue;
+    const list = byMarketplace.get(plugin.marketplace) || [];
+    list.push(plugin);
+    byMarketplace.set(plugin.marketplace, list);
+  }
+
+  // Phase 1: Clone marketplace repos in parallel
+  const marketplaceClones = [...byMarketplace.keys()].map(async (marketplace) => {
+    const repoPath = KNOWN_MARKETPLACES[marketplace];
+    const targetDir = `${cloneDir}/${marketplace}`;
+    const ok = await shallowClone(`https://github.com/${repoPath}.git`, targetDir);
+    return { marketplace, targetDir, ok };
+  });
+  const cloneResults = await Promise.all(marketplaceClones);
+
+  // Phase 2: Read marketplace.json indexes, identify URL-sourced plugins
+  const urlClones: Promise<void>[] = [];
+
+  for (const { marketplace, targetDir, ok } of cloneResults) {
+    if (!ok) continue;
+    const pluginsNeeded = byMarketplace.get(marketplace) || [];
+    const index = await readMarketplaceIndex(targetDir);
+
+    for (const plugin of pluginsNeeded) {
+      const entry = index.get(plugin.name);
+
+      if (!entry) {
+        console.warn(`[Plugins] Plugin "${plugin.name}" not found in ${marketplace} marketplace.json`);
+        continue;
+      }
+
+      const source = entry.source;
+
+      if (typeof source === "string") {
+        // Local source — resolve relative to marketplace dir
+        // source is like "./plugins/code-review" or "./external_plugins/context7"
+        const localPath = `${targetDir}/${source.replace(/^\.\//, "")}`;
+        resolved.set(plugin.name, localPath);
+      } else if (source && typeof source === "object" && source.url) {
+        // URL source — need to clone separately
+        const pluginDir = `${cloneDir}/url-plugins/${plugin.name}`;
+        urlClones.push(
+          shallowClone(source.url, pluginDir).then((ok) => {
+            if (ok) resolved.set(plugin.name, pluginDir);
+          }),
+        );
+      }
     }
   }
 
-  if (marketplaces.size === 0) return;
+  // Phase 3: Clone URL-sourced plugins in parallel
+  if (urlClones.length > 0) {
+    await Promise.all(urlClones);
+  }
 
-  await Promise.all(
-    [...marketplaces].map(async (marketplace) => {
-      const repoPath = KNOWN_MARKETPLACES[marketplace];
-      const targetDir = `${cloneDir}/${marketplace}`;
-
-      // Skip if already cloned (e.g., container restart)
-      const markerFile = Bun.file(`${targetDir}/.git/HEAD`);
-      if (await markerFile.exists()) return;
-
-      console.log(`[Plugins] Shallow-cloning ${repoPath} → ${targetDir}`);
-      const proc = Bun.spawn([
-        "git", "clone", "--depth", "1", "--single-branch",
-        `https://github.com/${repoPath}.git`,
-        targetDir,
-      ]);
-      const exitCode = await proc.exited;
-      if (exitCode !== 0) {
-        const stderr = proc.stderr ? await new Response(proc.stderr).text() : "unknown error";
-        console.error(`[Plugins] Failed to clone ${repoPath}: ${stderr}`);
-        throw new Error(`Failed to clone marketplace ${marketplace}: exit ${exitCode}`);
-      }
-      console.log(`[Plugins] Cloned ${marketplace} successfully`);
-    }),
-  );
+  return resolved;
 }
 
 /**
- * High-level orchestrator: reads settings, clones marketplaces, resolves plugin paths.
+ * High-level orchestrator: reads settings, clones marketplaces + URL-sourced plugins,
+ * resolves and validates plugin paths for the Agent SDK.
  * Non-fatal — returns [] on any error.
  */
 export async function loadPlugins(repoDir: string): Promise<PluginPath[]> {
@@ -135,30 +199,20 @@ export async function loadPlugins(repoDir: string): Promise<PluginPath[]> {
     console.log(`[Plugins] Found ${plugins.length} enabled plugins: ${plugins.map((p) => `${p.name}@${p.marketplace}`).join(", ")}`);
 
     const cloneDir = "/tmp/marketplaces";
-    await cloneMarketplaces(plugins, cloneDir);
+    const resolved = await cloneAndResolvePlugins(plugins, cloneDir);
 
-    const paths = resolvePluginPaths(plugins, cloneDir);
-
-    // Validate each path — check plugins/ first, fall back to external_plugins/
+    // Validate each resolved path has a plugin manifest
     const validated: PluginPath[] = [];
-    for (const p of paths) {
-      const pluginJson = Bun.file(`${p.path}/.claude-plugin/plugin.json`);
+    for (const [name, path] of resolved) {
+      const pluginJson = Bun.file(`${path}/.claude-plugin/plugin.json`);
       if (await pluginJson.exists()) {
-        validated.push(p);
-        continue;
-      }
-
-      // Fall back: swap plugins/ for external_plugins/
-      const fallbackPath = p.path.replace("/plugins/", "/external_plugins/");
-      const fallbackJson = Bun.file(`${fallbackPath}/.claude-plugin/plugin.json`);
-      if (await fallbackJson.exists()) {
-        validated.push({ type: "local", path: fallbackPath });
+        validated.push({ type: "local", path });
       } else {
-        console.warn(`[Plugins] Plugin dir not found: ${p.path} (also checked external_plugins/)`);
+        console.warn(`[Plugins] Plugin "${name}" at ${path} missing .claude-plugin/plugin.json — skipping`);
       }
     }
 
-    console.log(`[Plugins] Resolved ${validated.length} plugin paths`);
+    console.log(`[Plugins] Resolved ${validated.length}/${plugins.length} plugin paths`);
     return validated;
   } catch (err) {
     console.error("[Plugins] Plugin loading failed:", err);
