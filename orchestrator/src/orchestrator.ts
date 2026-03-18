@@ -2072,12 +2072,13 @@ export class Orchestrator extends Container<Bindings> {
   private getSystemStatus(): Response {
     // Get active agents
     const activeAgents = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid, product, status, agent_message, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
+      `SELECT ticket_uuid, ticket_id, product, status, agent_message, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
        FROM tickets
        WHERE agent_active = 1
        ORDER BY updated_at DESC`,
     ).toArray() as Array<{
       ticket_uuid: string;
+      ticket_id: string | null;
       product: string;
       status: string;
       agent_message: string | null;
@@ -2092,7 +2093,7 @@ export class Orchestrator extends Container<Bindings> {
 
     // Get recent completed tickets (last 24 hours)
     const recentCompleted = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid, product, status, updated_at, pr_url
+      `SELECT ticket_uuid, ticket_id, product, status, updated_at, pr_url
        FROM tickets
        WHERE agent_active = 0
          AND (julianday('now') - julianday(updated_at)) * 24 < 24
@@ -2100,6 +2101,7 @@ export class Orchestrator extends Container<Bindings> {
        LIMIT 10`,
     ).toArray() as Array<{
       ticket_uuid: string;
+      ticket_id: string | null;
       product: string;
       status: string;
       updated_at: string;
@@ -2137,6 +2139,7 @@ export class Orchestrator extends Container<Bindings> {
       const statusData = (await this.getSystemStatus().json()) as {
         activeAgents: Array<{
           ticket_uuid: string;
+          ticket_id: string | null;
           product: string;
           status: string;
           agent_message: string | null;
@@ -2150,6 +2153,7 @@ export class Orchestrator extends Container<Bindings> {
         }>;
         recentCompleted: Array<{
           ticket_uuid: string;
+          ticket_id: string | null;
           product: string;
           status: string;
           updated_at: string;
@@ -2188,8 +2192,9 @@ export class Orchestrator extends Container<Bindings> {
             : "❓";
           const statusEmoji = this.getStatusEmoji(agent.status);
           const timeSinceUpdate = this.getTimeAgo(agent.updated_at);
+          const ticketDisplay = agent.ticket_id || agent.ticket_uuid;
 
-          message += `${healthEmoji} ${statusEmoji} \`${agent.ticket_uuid}\` (${agent.product})\n`;
+          message += `${healthEmoji} ${statusEmoji} \`${ticketDisplay}\` (${agent.product})\n`;
           const phaseInfo = agent.agent_message ? ` (${agent.agent_message})` : "";
           message += `   Status: ${agent.status}${phaseInfo} · Updated: ${timeSinceUpdate}\n`;
           if (agent.pr_url) {
@@ -2223,7 +2228,8 @@ export class Orchestrator extends Container<Bindings> {
         for (const ticket of statusData.recentCompleted.slice(0, 5)) {
           const statusEmoji = this.getStatusEmoji(ticket.status);
           const timeAgo = this.getTimeAgo(ticket.updated_at);
-          message += `${statusEmoji} \`${ticket.ticket_uuid}\` (${ticket.product}) - ${timeAgo}\n`;
+          const ticketDisplay = ticket.ticket_id || ticket.ticket_uuid;
+          message += `${statusEmoji} \`${ticketDisplay}\` (${ticket.product}) - ${timeAgo}\n`;
           if (ticket.pr_url) {
             message += `   ${ticket.pr_url}\n`;
           }

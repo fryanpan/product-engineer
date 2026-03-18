@@ -12,6 +12,8 @@ export function resolveAgentEnvVars(
   const vars: Record<string, string> = {
     PRODUCT: config.product,
     TICKET_UUID: config.ticketUUID,
+    TICKET_IDENTIFIER: config.ticketId || "",
+    TICKET_TITLE: config.ticketTitle || "",
     REPOS: JSON.stringify(config.repos),
     SLACK_CHANNEL: config.slackChannel,
     SLACK_THREAD_TS: config.slackThreadTs || "", // Populated from database or event

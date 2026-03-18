@@ -58,6 +58,8 @@ export interface TicketRecord {
 
 export interface TicketAgentConfig {
   ticketUUID: string;
+  ticketId?: string; // Human-readable ID (e.g., "BC-172")
+  ticketTitle?: string; // Brief title for display
   product: string;
   repos: string[];
   slackChannel: string;
