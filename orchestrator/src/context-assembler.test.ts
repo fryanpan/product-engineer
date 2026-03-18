@@ -60,12 +60,12 @@ describe("ContextAssembler", () => {
     }
   });
 
-  it("assembles merge gate context with correct shape", async () => {
+  it("returns error when PR fetch fails (invalid token)", async () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
       slackBotToken: "xoxb-test",
       linearAppToken: "lin_test",
-      githubTokens: { "health-tool": "ghp_test" },
+      githubTokens: { "health-tool": "ghp_test" }, // Invalid token will cause API to fail
     });
 
     const ctx = await assembler.forMergeGate({
@@ -78,9 +78,10 @@ describe("ContextAssembler", () => {
       repo: "acme-org/sample-app",
     });
 
-    expect(ctx.identifier).toBe("PE-42");
+    // Should return error indicator instead of bogus data
+    expect(ctx.error).toBe("pr_fetch_failed");
+    expect(ctx.errorMessage).toContain("Failed to fetch PR details");
     expect(ctx.pr_url).toBe("https://github.com/org/repo/pull/1");
-    expect(ctx.branch).toBe("ticket/abc-123");
   });
 
   it("assembles supervisor context", async () => {

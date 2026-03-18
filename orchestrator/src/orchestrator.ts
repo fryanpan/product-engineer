@@ -1304,6 +1304,26 @@ export class Orchestrator extends Container<Bindings> {
       repo: productConfig.repos[0],
     });
 
+    // If PR fetch failed, escalate immediately instead of proceeding with bogus data
+    if (context.error === "pr_fetch_failed") {
+      console.error(`[Orchestrator] PR fetch failed for ${ticketUUID}, escalating to human`);
+      if (ticketRow.slack_channel && ticketRow.slack_thread_ts) {
+        await fetch("https://slack.com/api/chat.postMessage", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            channel: ticketRow.slack_channel,
+            text: `⚠️ *Merge Gate — API Error*\n${ticketRow.pr_url}\n*Reason:* ${context.errorMessage}\n\nThis is likely a transient GitHub API issue. You can manually re-trigger the merge gate by pushing a new commit or commenting on the PR.`,
+            thread_ts: ticketRow.slack_thread_ts,
+          }),
+        });
+      }
+      return;
+    }
+
     // --- Wait for CI and/or Copilot review before proceeding ---
     // Retry logic: CI and Copilot share a retry counter with separate phases.
     // Phase "ci" = waiting for CI. Phase "copilot" = waiting for Copilot review.
