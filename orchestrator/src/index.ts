@@ -99,6 +99,36 @@ app.post("/api/internal/slack-event", async (c) => {
   }));
 });
 
+// Slack interactivity endpoint — handles button clicks, modal submissions, etc.
+app.post("/api/webhooks/slack/interactive", async (c) => {
+  const body = await c.req.text();
+  const params = new URLSearchParams(body);
+  const payload = JSON.parse(params.get("payload") || "{}");
+
+  // Handle button actions
+  if (payload.type === "block_actions") {
+    const orchestrator = getOrchestrator(c.env);
+    return orchestrator.fetch(new Request("http://internal/slack-interactive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
+  }
+
+  // Handle modal submissions
+  if (payload.type === "view_submission") {
+    const orchestrator = getOrchestrator(c.env);
+    return orchestrator.fetch(new Request("http://internal/slack-interactive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
+  }
+
+  // Acknowledge other interaction types
+  return c.json({ ok: true });
+});
+
 // Internal: status updates from agent containers
 app.post("/api/internal/status", async (c) => {
   const key = c.req.header("X-Internal-Key");
