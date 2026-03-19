@@ -129,6 +129,22 @@ app.post("/api/webhooks/slack/interactive", async (c) => {
   return c.json({ ok: true });
 });
 
+// Internal: interactive payloads from Socket Mode companion container
+app.post("/api/internal/slack-interactive", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.SLACK_APP_TOKEN)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const payload = await c.req.json();
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/slack-interactive", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+});
+
 // Internal: status updates from agent containers
 app.post("/api/internal/status", async (c) => {
   const key = c.req.header("X-Internal-Key");

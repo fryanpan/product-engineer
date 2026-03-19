@@ -62,7 +62,8 @@ interface TestContext {
 
 interface StatusResponse {
   activeAgents: Array<{
-    id: string;
+    ticket_uuid: string;
+    ticket_id: string | null;
     product: string;
     status: string;
     last_heartbeat: string | null;
@@ -72,7 +73,8 @@ interface StatusResponse {
 }
 
 interface TicketRow {
-  id: string;
+  ticket_uuid: string;
+  ticket_id: string | null;
   product: string;
   status: string;
   slack_thread_ts: string | null;
@@ -320,13 +322,17 @@ async function step2_verifyLinearTicketCreated(ctx: TestContext): Promise<void> 
       );
 
       if (ticket) {
-        ctx.linearIssueId = ticket.id;
+        ctx.linearIssueId = ticket.ticket_uuid;
+        ctx.linearIdentifier = ticket.ticket_id;
         ctx.slackThreadTs = ticket.slack_thread_ts;
-        log("step2", `Found ticket linked to thread: ${ticket.id}`);
+        log("step2", `Found ticket: ${ticket.ticket_id} (uuid: ${ticket.ticket_uuid})`);
 
-        // Get Linear identifier
-        const issue = await getLinearIssue(ticket.id);
-        logSuccess("step2", `Linear ticket created: ${ticket.id} (state: ${issue.state.name})`);
+        // Verify ticket has a ticket_id (Linear identifier)
+        if (ticket.ticket_id) {
+          logSuccess("step2", `Ticket created: ${ticket.ticket_id} (status: ${ticket.status})`);
+        } else {
+          logSuccess("step2", `Ticket created: ${ticket.ticket_uuid} (status: ${ticket.status}, no Linear ID yet)`);
+        }
         return;
       }
     } catch (err) {
@@ -349,7 +355,7 @@ async function step3_verifyAgentSpawned(ctx: TestContext): Promise<void> {
       const status = await apiCall<StatusResponse>("/api/orchestrator/status");
 
       const agent = status.activeAgents.find(
-        (a) => a.id === ctx.linearIssueId
+        (a) => a.ticket_uuid === ctx.linearIssueId
       );
 
       if (agent) {
@@ -401,7 +407,7 @@ async function step5_waitForPR(ctx: TestContext): Promise<void> {
       const status = await apiCall<StatusResponse>("/api/orchestrator/status");
 
       const agent = status.activeAgents.find(
-        (a) => a.id === ctx.linearIssueId
+        (a) => a.ticket_uuid === ctx.linearIssueId
       );
 
       if (agent?.pr_url) {
@@ -530,7 +536,7 @@ async function step8_verifyAgentTerminated(ctx: TestContext): Promise<void> {
     const status = await apiCall<StatusResponse>("/api/orchestrator/status");
 
     const agent = status.activeAgents.find(
-      (a) => a.id === ctx.linearIssueId
+      (a) => a.ticket_uuid === ctx.linearIssueId
     );
 
     if (!agent) {

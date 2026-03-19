@@ -50,7 +50,27 @@ if (slackAppToken) {
     } catch (err) {
       console.error("[Orchestrator Container] Failed to forward Slack event:", err);
     }
-  }, botUserId);
+  }, botUserId, async (payload) => {
+    try {
+      const interactiveType = payload.type || "unknown";
+      console.log(`[Orchestrator Container] Interactive payload: ${interactiveType}`);
+      const workerUrl = process.env.WORKER_URL;
+      if (!workerUrl) {
+        console.error("[Orchestrator Container] WORKER_URL not set — cannot forward interactive payload");
+        return;
+      }
+      await fetch(`${workerUrl}/api/internal/slack-interactive`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Key": process.env.SLACK_APP_TOKEN || "",
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      console.error("[Orchestrator Container] Failed to forward interactive payload:", err);
+    }
+  });
 
   socket.connect().catch((err) => {
     console.error("[Orchestrator Container] Failed to start Socket Mode:", err);

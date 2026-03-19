@@ -2885,7 +2885,8 @@ Respond with ONLY the JSON object, no other text.`,
       type: string;
       user: { id: string };
       actions?: Array<{ action_id: string; value: string }>;
-      message?: { ts: string };
+      channel?: { id: string };
+      message?: { ts: string; blocks?: unknown[] };
       view?: {
         id: string;
         state: {
@@ -2918,6 +2919,19 @@ Respond with ONLY the JSON object, no other text.`,
           payload.message?.ts || null,
         );
         console.log(`[Orchestrator] Decision feedback (button): good for ${decisionId} from user ${userId}`);
+
+        // Replace buttons with confirmation
+        if (payload.channel?.id && payload.message?.ts && payload.message?.blocks) {
+          const originalSection = payload.message.blocks[0];
+          await this.updateSlackMessage(payload.channel.id, payload.message.ts, [
+            originalSection,
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `✓ Marked as *correct* by <@${userId}>` }],
+            },
+          ]);
+        }
+
         return Response.json({ ok: true });
       }
 
@@ -2937,57 +2951,69 @@ Respond with ONLY the JSON object, no other text.`,
           payload.message?.ts || null,
         );
         console.log(`[Orchestrator] Decision feedback (button): bad for ${decisionId} from user ${userId}`);
+
+        // Replace buttons with confirmation
+        if (payload.channel?.id && payload.message?.ts && payload.message?.blocks) {
+          const originalSection = payload.message.blocks[0];
+          await this.updateSlackMessage(payload.channel.id, payload.message.ts, [
+            originalSection,
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `✗ Marked as *incorrect* by <@${userId}>` }],
+            },
+          ]);
+        }
+
         return Response.json({ ok: true });
       }
 
       if (action.action_id === "decision_feedback_details" && payload.trigger_id) {
-        // Open a modal for detailed feedback
+        // Encode message context so modal submission can update the original message
+        const metadata = JSON.stringify({
+          decisionId,
+          channel: payload.channel?.id || null,
+          messageTs: payload.message?.ts || null,
+          originalSection: payload.message?.blocks?.[0] || null,
+        });
+
         const modalView = {
           type: "modal",
           callback_id: "decision_feedback_modal",
-          private_metadata: decisionId,
+          private_metadata: metadata,
           title: { type: "plain_text", text: "Decision Feedback" },
           submit: { type: "plain_text", text: "Submit" },
           close: { type: "plain_text", text: "Cancel" },
           blocks: [
             {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: "Was this decision correct?",
-              },
-            },
-            {
-              type: "actions",
+              type: "input",
               block_id: "feedback_choice",
-              elements: [
-                {
-                  type: "radio_buttons",
-                  action_id: "feedback_radio",
-                  options: [
-                    {
-                      text: { type: "plain_text", text: "✓ Correct" },
-                      value: "good",
-                    },
-                    {
-                      text: { type: "plain_text", text: "✗ Incorrect" },
-                      value: "bad",
-                    },
-                  ],
-                },
-              ],
+              label: { type: "plain_text", text: "Was this decision correct?" },
+              element: {
+                type: "radio_buttons",
+                action_id: "feedback_radio",
+                options: [
+                  {
+                    text: { type: "plain_text", text: "✓ Correct" },
+                    value: "good",
+                  },
+                  {
+                    text: { type: "plain_text", text: "✗ Incorrect" },
+                    value: "bad",
+                  },
+                ],
+              },
             },
             {
               type: "input",
               block_id: "feedback_details",
-              label: { type: "plain_text", text: "Additional context (optional)" },
+              label: { type: "plain_text", text: "Additional context" },
               element: {
                 type: "plain_text_input",
                 action_id: "details_input",
                 multiline: true,
                 placeholder: {
                   type: "plain_text",
-                  text: "Provide more details about what was right or wrong with this decision...",
+                  text: "What was right or wrong about this decision...",
                 },
               },
               optional: true,
@@ -2995,7 +3021,6 @@ Respond with ONLY the JSON object, no other text.`,
           ],
         };
 
-        // Open the modal
         try {
           await fetch("https://slack.com/api/views.open", {
             method: "POST",
@@ -3018,7 +3043,21 @@ Respond with ONLY the JSON object, no other text.`,
 
     // Handle modal submission for detailed feedback
     if (payload.type === "view_submission" && payload.view) {
-      const decisionId = payload.view.private_metadata || "";
+      let decisionId = "";
+      let channel: string | null = null;
+      let messageTs: string | null = null;
+      let originalSection: unknown = null;
+
+      try {
+        const meta = JSON.parse(payload.view.private_metadata || "{}");
+        decisionId = meta.decisionId || "";
+        channel = meta.channel || null;
+        messageTs = meta.messageTs || null;
+        originalSection = meta.originalSection || null;
+      } catch {
+        decisionId = payload.view.private_metadata || "";
+      }
+
       const values = payload.view.state.values;
       const feedbackChoice = values.feedback_choice?.feedback_radio?.selected_option?.value as "good" | "bad" | undefined;
       const details = values.feedback_details?.details_input?.value || null;
@@ -3038,15 +3077,47 @@ Respond with ONLY the JSON object, no other text.`,
           feedbackChoice,
           details,
           userId,
-          null,
+          messageTs,
         );
         console.log(`[Orchestrator] Decision feedback (modal): ${feedbackChoice} for ${decisionId} from user ${userId} with details`);
+
+        // Update the original message to show confirmation
+        if (channel && messageTs && originalSection) {
+          const label = feedbackChoice === "good" ? "✓ Marked as *correct*" : "✗ Marked as *incorrect*";
+          const detailsSuffix = details ? `\n> ${details}` : "";
+          await this.updateSlackMessage(channel, messageTs, [
+            originalSection,
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `${label} by <@${userId}>${detailsSuffix}` }],
+            },
+          ]);
+        }
       }
 
       return Response.json({ response_action: "clear" });
     }
 
     return Response.json({ ok: true });
+  }
+
+  private async updateSlackMessage(channel: string, ts: string, blocks: unknown[]): Promise<void> {
+    try {
+      const res = await fetch("https://slack.com/api/chat.update", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.getSlackBotToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ channel, ts, blocks }),
+      });
+      const body = await res.json<{ ok: boolean; error?: string }>();
+      if (!body.ok) {
+        console.error(`[Orchestrator] Slack chat.update failed: ${body.error}`);
+      }
+    } catch (err) {
+      console.error("[Orchestrator] Failed to update Slack message:", err);
+    }
   }
 
   // --- Metrics endpoints ---
