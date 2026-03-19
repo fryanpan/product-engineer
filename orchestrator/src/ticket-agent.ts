@@ -28,6 +28,8 @@ export function resolveAgentEnvVars(
     CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
     // Model selection (sonnet, opus, haiku)
     MODEL: config.model || "",
+    PRODUCT_TYPE: config.productType || "",
+    SESSION_TIMEOUT_HOURS: config.sessionTimeoutHours ? String(config.sessionTimeoutHours) : "",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { resolveAgentEnvVars } from "./ticket-agent";
+import type { TicketAgentConfig } from "./types";
 
 describe("resolveAgentEnvVars", () => {
   test("resolves secrets from env bindings", () => {
@@ -237,5 +238,43 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
     expect(vars.ANTHROPIC_BASE_URL).toBe(
       "https://gateway.ai.cloudflare.com/v1/abc%2F123/gateway%20name/anthropic"
     );
+  });
+});
+
+describe("resolveAgentEnvVars — research product", () => {
+  test("passes PRODUCT_TYPE and SESSION_TIMEOUT_HOURS for research product", () => {
+    const config: TicketAgentConfig = {
+      ticketUUID: "test-research-123",
+      product: "boos-research",
+      repos: [],
+      slackChannel: "C_BOOS_RESEARCH",
+      secrets: {},
+      productType: "research",
+      sessionTimeoutHours: 4,
+    };
+    const vars = resolveAgentEnvVars(config, {
+      SLACK_BOT_TOKEN: "xoxb-test",
+      WORKER_URL: "https://test.workers.dev",
+      API_KEY: "test-key",
+    });
+    expect(vars.PRODUCT_TYPE).toBe("research");
+    expect(vars.SESSION_TIMEOUT_HOURS).toBe("4");
+    expect(vars.REPOS).toBe("[]");
+  });
+
+  test("PRODUCT_TYPE is empty string when not set (coding default)", () => {
+    const config: TicketAgentConfig = {
+      ticketUUID: "test-coding-456",
+      product: "test-app",
+      repos: ["org/repo"],
+      slackChannel: "C_APP",
+      secrets: {},
+    };
+    const vars = resolveAgentEnvVars(config, {
+      SLACK_BOT_TOKEN: "xoxb-test",
+      WORKER_URL: "https://test.workers.dev",
+    });
+    expect(vars.PRODUCT_TYPE).toBe("");
+    expect(vars.SESSION_TIMEOUT_HOURS).toBe("");
   });
 });

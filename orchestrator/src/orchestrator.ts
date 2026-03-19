@@ -2891,6 +2891,8 @@ export class Orchestrator extends Container<Bindings> {
       slackThreadTs,
       secrets: productConfig.secrets,
       gatewayConfig,
+      productType: productConfig.product_type,
+      sessionTimeoutHours: isResearchProduct(productConfig) ? 4 : undefined,
     };
 
     // Build the initial Slack event payload for the agent
