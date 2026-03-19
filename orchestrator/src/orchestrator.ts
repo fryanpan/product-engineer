@@ -40,6 +40,21 @@ export function buildTicketEvent(
   };
 }
 
+// Pure helper — exported for testing
+export function isResearchProduct(config: ProductConfig): boolean {
+  return config.product_type === "research";
+}
+
+// Pure helper — exported for testing
+// Empty or undefined allowedUsers means all users are allowed.
+export function shouldAllowSlackUser(
+  allowedUsers: string[] | undefined,
+  userId: string,
+): boolean {
+  if (!allowedUsers || allowedUsers.length === 0) return true;
+  return allowedUsers.includes(userId);
+}
+
 export class Orchestrator extends Container<Bindings> {
   defaultPort = 3000;
   // No sleepAfter — always on
