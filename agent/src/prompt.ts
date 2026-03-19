@@ -137,8 +137,12 @@ function formatTicket(data: TicketData): string {
   if (data.comments && data.comments.length > 0) {
     parts.push(`\n**Comments (${data.comments.length}):**`);
     for (const comment of data.comments) {
-      const timestamp = new Date(comment.createdAt).toLocaleString();
-      parts.push(`\n---\n**${comment.user}** (${timestamp}):\n<user_input>\n${comment.body}\n</user_input>`);
+      const timestamp = new Date(comment.createdAt).toISOString();
+      // Escape XML sentinel strings to prevent prompt structure breakage
+      const sanitizedBody = comment.body
+        .replace(/<\/user_input>/gi, "&lt;/user_input&gt;")
+        .replace(/<user_input>/gi, "&lt;user_input&gt;");
+      parts.push(`\n---\n**${comment.user}** (${timestamp}):\n<user_input>\n${sanitizedBody}\n</user_input>`);
     }
   }
 

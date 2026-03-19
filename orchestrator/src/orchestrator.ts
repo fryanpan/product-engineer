@@ -252,6 +252,84 @@ export class Orchestrator extends Container<Bindings> {
     return (this.env.LINEAR_APP_TOKEN as string) || "";
   }
 
+  /** Use LLM to generate a structured ticket title and description from a Slack message. */
+  private async generateTicketSummary(
+    rawText: string,
+    product: string,
+    slackUser: string,
+  ): Promise<{ title: string; description: string }> {
+    if (!rawText) {
+      return { title: "Slack request (no description)", description: `**Slack request from <@${slackUser}>**` };
+    }
+
+    const apiKey = (this.env.ANTHROPIC_API_KEY as string) || "";
+    if (!apiKey) {
+      throw new Error("No ANTHROPIC_API_KEY configured");
+    }
+
+    // Check for AI Gateway config
+    const gatewayRows = this.ctx.storage.sql.exec(
+      "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+    ).toArray() as Array<{ value: string }>;
+    const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
+    const baseUrl = gatewayConfig
+      ? `https://gateway.ai.cloudflare.com/v1/${gatewayConfig.account_id}/${gatewayConfig.gateway_id}/anthropic`
+      : "https://api.anthropic.com";
+
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        messages: [{
+          role: "user",
+          content: `You are generating a Linear ticket from a Slack message for the "${product}" product.
+
+Given this Slack message:
+<message>
+${rawText}
+</message>
+
+Generate a JSON object with:
+- "title": A concise ticket title (imperative form, max 120 chars). Capture WHAT the request is.
+- "description": A well-structured ticket description that captures WHY the user is asking (their goal) and any relevant context from the message. Include the original Slack message as a quote block for reference. Format with markdown.
+
+Respond with ONLY the JSON object, no other text.`,
+        }],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Anthropic API error ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      content: Array<{ type: string; text: string }>;
+    };
+    const textBlock = data.content.find((b) => b.type === "text");
+    if (!textBlock) throw new Error("No text in Anthropic response");
+
+    // Parse JSON from response, handling potential markdown code fences
+    let jsonText = textBlock.text.trim();
+    const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) jsonText = fenceMatch[1].trim();
+
+    const parsed = JSON.parse(jsonText) as { title: string; description: string };
+
+    // Ensure title isn't too long
+    const title = parsed.title.length > 200 ? parsed.title.slice(0, 197) + "..." : parsed.title;
+
+    return {
+      title,
+      description: parsed.description || `**Slack request from <@${slackUser}>:**\n\n${rawText}`,
+    };
+  }
+
   /** Get the Slack bot token from env. */
   private getSlackBotToken(): string {
     return (this.env.SLACK_BOT_TOKEN as string) || "";
@@ -2567,23 +2645,21 @@ export class Orchestrator extends Container<Bindings> {
     // Strip the @mention from the text to get the raw request
     const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
 
-    // Generate a concise title from the request
-    // Use first sentence (up to 200 chars) or truncate at 200 chars if no sentence boundary
+    // Use LLM to generate a structured title and description from the Slack message
     let title: string;
-    if (!rawText) {
-      title = "Slack request (no description)";
-    } else if (rawText.length <= 200) {
-      title = rawText;
-    } else {
-      // Try to find first sentence boundary within first 200 chars
-      const firstSentence = rawText.slice(0, 200).match(/^[^.!?\n]+[.!?\n]/);
-      if (firstSentence && firstSentence[0].length > 20) {
-        // Use first sentence if it's reasonable length (>20 chars)
-        title = firstSentence[0].trim();
-      } else {
-        // Otherwise truncate at 200 chars
-        title = rawText.slice(0, 200).trim() + "...";
-      }
+    let description: string;
+    try {
+      const generated = await this.generateTicketSummary(rawText, product, slackEvent.user);
+      title = generated.title;
+      description = generated.description;
+    } catch (err) {
+      console.error("[Orchestrator] LLM title generation failed, using fallback:", err);
+      // Fallback: normalize whitespace and truncate
+      const normalized = rawText.replace(/\s+/g, " ").trim();
+      title = normalized
+        ? (normalized.length <= 200 ? normalized : normalized.slice(0, 197) + "...")
+        : "Slack request (no description)";
+      description = `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`;
     }
 
     // Look up the Linear project ID by name
@@ -2639,7 +2715,7 @@ export class Orchestrator extends Container<Bindings> {
           input: {
             teamId,
             title,
-            description: `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`,
+            description,
             ...(projectId && { projectId }),
             ...(appUserId && { assigneeId: appUserId }),
           },

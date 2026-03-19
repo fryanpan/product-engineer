@@ -272,14 +272,16 @@ linearWebhook.post("/", async (c) => {
       const commentsData = commentsResult.data as {
         issue?: {
           comments?: {
-            nodes?: Array<{ body: string; user: { name: string }; createdAt: string }>;
+            nodes?: Array<{ body: string; user?: { name: string } | null; createdAt: string }>;
           };
         };
       };
       if (commentsData.issue?.comments?.nodes) {
-        comments = commentsData.issue.comments.nodes.map((c) => ({
-          user: c.user.name,
-          body: c.body,
+        // Cap to most recent 10 comments, truncate bodies to 500 chars (per ContextAssembler precedent)
+        const nodes = commentsData.issue.comments.nodes.slice(-10);
+        comments = nodes.map((c) => ({
+          user: c.user?.name ?? "Unknown",
+          body: c.body.length > 500 ? c.body.slice(0, 500) + "..." : c.body,
           createdAt: c.createdAt,
         }));
       }

@@ -330,18 +330,6 @@ dashboardRouter.get("/api/metrics", requireAuth(), async (c) => {
   }
 });
 
-// Get recent decisions (protected)
-dashboardRouter.get("/api/decisions", requireAuth(), async (c) => {
-  // TODO: Implement decision log query
-  return c.json([]);
-});
-
-// Submit decision feedback (protected)
-dashboardRouter.post("/api/decision-feedback", requireAuth(), async (c) => {
-  // TODO: Implement decision feedback storage
-  return c.json({ ok: true });
-});
-
 // Kill individual agent (protected)
 dashboardRouter.post("/api/agents/:ticketUUID/kill", requireAuth(), async (c) => {
   const ticketUUID = c.req.param("ticketUUID");
@@ -380,22 +368,33 @@ dashboardRouter.post("/api/agents/shutdown-all", requireAuth(), async (c) => {
 
     // Get all active tickets
     const res = await orchestrator.fetch(new Request("http://internal/tickets"));
+    if (!res.ok) {
+      return c.json({ error: "Failed to fetch tickets" }, 500);
+    }
     const data = await res.json() as { tickets: any[] };
     const activeTickets = data.tickets.filter((t: any) => t.agent_active === 1);
 
-    // Kill each one
+    // Kill each one, tracking failures
+    const failures: string[] = [];
     for (const ticket of activeTickets) {
-      await orchestrator.fetch(new Request("http://internal/ticket/status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticketUUID: ticket.ticket_uuid,
-          status: "deferred",
-        }),
-      }));
+      try {
+        const killRes = await orchestrator.fetch(new Request("http://internal/ticket/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ticketUUID: ticket.ticket_uuid,
+            status: "deferred",
+          }),
+        }));
+        if (!killRes.ok) {
+          failures.push(ticket.ticket_uuid);
+        }
+      } catch {
+        failures.push(ticket.ticket_uuid);
+      }
     }
 
-    return c.json({ ok: true, total: activeTickets.length });
+    return c.json({ ok: true, total: activeTickets.length, failed: failures });
   } catch (error) {
     console.error("[Dashboard] Failed to shutdown all agents:", error);
     return c.json({ error: String(error) }, 500);
