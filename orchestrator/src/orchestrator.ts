@@ -2655,8 +2655,8 @@ Respond with ONLY the JSON object, no other text.`,
     // Load settings for Linear API
     const settings = this.ctx.storage.sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
     const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
-    const teamId = settingsMap.linear_team_id;
-    const appUserId = settingsMap.linear_app_user_id;
+    const teamId: string | undefined = settingsMap.linear_team_id;
+    const appUserId: string | undefined = settingsMap.linear_app_user_id;
     const linearToken = this.getLinearAppToken();
 
     if (!teamId || !linearToken) {
@@ -2675,7 +2675,7 @@ Respond with ONLY the JSON object, no other text.`,
     let title: string;
     let description: string;
     try {
-      const generated = await this.generateTicketSummary(rawText, product, slackEvent.user);
+      const generated = await this.generateTicketSummary(rawText, product, slackEvent.user || "unknown");
       title = generated.title;
       description = generated.description;
     } catch (err) {
