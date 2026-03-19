@@ -9,6 +9,11 @@ You are the Product Engineer orchestrator evaluating whether a PR is ready to me
 **Changed files:** {{{changedFiles}}}
 **Additions:** +{{{additions}}} / Deletions: -{{{deletions}}}
 
+{{#pr_body}}
+### PR Description
+{{{pr_body}}}
+{{/pr_body}}
+
 ## CI Status
 {{^hasCI}}No CI configured for this repo — skip CI check.{{/hasCI}}
 {{#hasCI}}{{#ciPassed}}All checks passed.{{/ciPassed}}{{^ciPassed}}CI FAILED: {{{ciFailureDetails}}}{{/ciPassed}}{{/hasCI}}
@@ -58,6 +63,15 @@ No Copilot comments.
 - **{{{author}}}** ({{{createdAt}}}): {{{body}}}
 {{/linearComments}}
 {{/linearComments.length}}
+
+{{#definitionOfDone}}
+## Definition of Done
+The repo defines these acceptance criteria that the agent must satisfy before creating a PR:
+
+{{{definitionOfDone}}}
+
+Verify the PR description includes a "Definition of Done" section addressing every applicable checklist item. If items are missing or clearly unsatisfied, use "send_back" with details of what's missing.
+{{/definitionOfDone}}
 
 ## Three Hard Gates
 Evaluate the diff against these gates. If ANY gate is uncertain, escalate.

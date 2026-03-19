@@ -1,3 +1,44 @@
+## 2026-03-18 - Agent plugin loading support (PR #94 + 7 cross-repo PRs)
+
+### Time Breakdown
+| Started | Phase | Hands-On Time | Agent Time | Problems |
+|---------|-------|--------------|------------|----------|
+| Mar 18 11:43am | Research & design (SDK investigation, approach) | ██████ 30m | ██ 15m | |
+| Mar 18 11:56am | Implementation (plugins.ts, server.ts, docs) | ██ 10m | ████ 35m | |
+| Mar 18 12:30pm | Plugin audit & cross-repo PRs | ██ 10m | ████ 40m | API 529 errors (2x) |
+| Mar 18 2:20pm | URL-sourced plugin handling | █ 5m | █ 10m | Assumed superpowers was in marketplace dir |
+| Mar 18 2:36pm | Merge PRs + staging deploy | █ 5m | ██████ 55m | Docker not running, premature merge to main |
+| Mar 18 4:48pm | Staging verification | █ 5m | ████ 35m | Incomplete transcripts, stuck agent |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~8 hours |
+| Hands-on | ~65 min (14%) |
+| Automated agent time | ~190 min (40%) |
+| Idle/away | ~225 min (47%) |
+| Retro analysis time | ~10 min |
+
+### Key Observations
+- Research-first approach (8 turns of Q&A) was efficient — converged on design in ~15 min
+- Parallel PR creation across 7 repos completed in ~1 min wall clock via background agents
+- Staging verification was the biggest time sink (~2.5h) due to Docker startup, transcript gaps, and a stuck agent
+- API 529 errors caused ~1.5h idle; agent didn't auto-retry, user had to re-prompt
+- Merged to main before staging verification — should deploy from branch instead
+
+### Feedback
+**What worked:** Interactive research phase, parallel cross-repo PRs, clear plugin audit analysis
+**What didn't:** Required multiple prompts to get plugin analysis started (529 errors + no auto-retry); premature merge to main before staging
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| CLAUDE.md missing marketplace.json and URL-sourced plugin details | CLAUDE.md | Updated Plugin Loading section with two-phase resolution |
+| learnings.md missing marketplace.json discovery detail | Docs | Added bullet about marketplace.json as plugin index |
+| Merged to main before staging verification | Feedback memory | Saved: deploy to staging from branch, don't merge first |
+
+---
+
 ## 2026-03-12 - BC-157: Deduplicate merge gate decisions (PR #80)
 
 **Context:** Merge gate was generating repetitive, identical decisions for the same PR state. Multiple triggers (CI webhook, PR status update, supervisor, Copilot retries) all called `evaluateMergeGate()` without checking if the PR had actually changed since the last decision.
@@ -48,6 +89,36 @@ The problem wasn't in any single trigger path - it was the lack of a shared dedu
 - **orchestrator/src/orchestrator.ts**: Added `handleSlackInteractive()` to process button clicks and modal submissions, `getSlackBotToken()` helper
 - **orchestrator/src/index.ts**: Added `/api/webhooks/slack/interactive` endpoint to receive Slack interactivity payloads
 - **orchestrator/src/decision-engine.test.ts**: Added test validating Block Kit structure and button configuration
+
+---
+
+## 2026-03-19 - BC-177 Dashboard Setup Completion
+
+**Context:** Dashboard code (auth, UI, API routes) and AI Gateway integration are already complete and deployed. Task asked to "finish dashboard setup" with API/Worker URL credentials available for automation, but said "don't ask questions."
+
+**What worked:**
+- Clear separation between "already complete" (code) and "needs configuration" (credentials) helped frame the task
+- Creating both automated (script) and manual (docs) paths gives users flexibility
+- Using existing API endpoints (`/api/settings/cloudflare_ai_gateway`) for programmatic configuration was the right choice
+- Comprehensive documentation structure: status overview → quick start → detailed guide → troubleshooting
+- Created `scripts/complete-dashboard-setup.sh` - interactive script that guides setup and can configure AI Gateway via API
+- Created `docs/dashboard-completion-guide.md` - detailed manual setup guide with troubleshooting
+- Created `DASHBOARD-STATUS.md` - single source of truth for "what's done, what's left"
+
+**What didn't:**
+- Initial task description said "don't ask questions" but didn't provide necessary credentials (Google OAuth, AI Gateway). This created an impossible situation where I could automate configuration via API but couldn't create the external resources (OAuth client, gateway) that generate those credentials.
+- The line between "automation" and "manual steps" is clear: anything requiring interactive web UIs (Google Console, Cloudflare Dashboard) cannot be scripted without browser automation, which is out of scope.
+
+**Action:**
+- When dashboard/auth tasks come up in future, immediately identify which parts are code (can be fully automated) vs. external service setup (requires user action)
+- For setup tasks, always create both an interactive script AND comprehensive documentation - users have different preferences
+- Document the automation boundary clearly: "Here's what the script can do, here's what you must do manually"
+- Status documents (`DASHBOARD-STATUS.md`) should be standard for complex multi-step setup tasks
+
+**What I delivered:**
+- Automated: Configuration via API, status checking, guided setup script
+- Manual steps documented: Google OAuth setup, AI Gateway creation, secret management
+- Verification: Commands to check current state and confirm successful setup
 
 **Key insight:**
 Using Block Kit action buttons instead of reactions moves the feedback mechanism from implicit (user must know about reactions) to explicit (buttons are right there). The modal pattern for detailed feedback keeps the simple case (just clicking correct/incorrect) one tap, while making the detailed case accessible without requiring knowledge of thread replies.
@@ -465,6 +536,44 @@ The orchestrator's ticket review decision engine (`orchestrator/src/prompts/tick
 - Monitor ticket review decisions in #product-engineer-decisions after deploy
 - If agents still ask unnecessary questions during implementation (via `ask_question` tool), add similar strengthening to the product-engineer skill
 - Consider adding metrics tracking question-asking rate to measure improvement
+
+---
+
+## 2026-03-18 - BC-174: Incorrect merge gate decision on BC-172 (PR #93)
+
+**Context:** The merge gate incorrectly reported "0 files changed, 0 additions, 0 deletions" for PR #91 (BC-172), which actually had 5 files changed, 38 additions, 4 deletions. The LLM decided to send the PR back with "The PR contains no changes whatsoever", blocking legitimate work.
+
+**Root cause:**
+`fetchPRDetails` in `context-assembler.ts` returned `null` (likely transient GitHub API error, rate limit, or permission issue), and the code proceeded with default values of 0 for all PR stats. The LLM then made a decision based on bogus data.
+
+**What worked:**
+- Quick root cause identification by examining the PR via GitHub API (confirmed it had real changes)
+- Traced through context assembly → merge gate evaluation flow
+- Simple fix: return error indicator when PR fetch fails instead of proceeding with 0 values
+- Updated test to verify error response behavior
+- All 87 tests still pass (4 pre-existing failures unrelated)
+
+**What didn't:**
+- Original code had no error handling for `fetchPRDetails` failure — silently proceeded with bad data
+- No retry logic for transient API failures
+- Test was making real GitHub API calls with invalid token, which was brittle
+
+**Implementation:**
+- **context-assembler.ts:63-119**: When `fetchPRDetails` returns `null`, immediately return `{ error: "pr_fetch_failed", errorMessage: "...", pr_url: "..." }`
+- **orchestrator.ts:1297-1325**: Check for `context.error === "pr_fetch_failed"` before LLM call, post Slack message explaining the issue, return early
+- **context-assembler.test.ts:63-84**: Updated test to expect error response when GitHub API fails
+
+**Key insight:**
+When gathering context for LLM decisions, failing with clear error is better than proceeding with default/bogus values. The LLM can't know that 0 files changed is wrong — it trusts the data. Better to escalate to humans when data is unavailable than to make decisions on lies.
+
+**Future improvements:**
+- Add retry logic for transient GitHub API failures (exponential backoff)
+- Consider caching PR details to survive brief API outages
+- Add metrics for GitHub API error rates to detect patterns
+
+**Action:**
+- Monitor #product-engineer-decisions after deploy to verify Slack error messages appear when GitHub API fails
+- Consider adding GitHub API health check to dashboard
 
 ---
 

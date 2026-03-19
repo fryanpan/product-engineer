@@ -34,6 +34,8 @@ Compare projects against `templates/` and push approved updates via GitHub PRs.
    - Rules: `templates/rules/*.md`
    - Docs: `templates/docs/CLAUDE.md.tmpl`
    - Settings: `templates/claude-settings.json`
+   - Definition of Done: `templates/definition-of-done.md` → `.claude/definition-of-done.md`
+     - **Only push if the target repo does not already have `.claude/definition-of-done.md`.** Each repo customizes their own conditional sections, so never overwrite an existing file.
 
 5. **Read the project's current setup**:
    - `.claude/rules/` — list all rules, read each

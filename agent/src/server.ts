@@ -17,6 +17,7 @@ import { loadConfig, type TaskPayload, type TicketEvent, type MessageContent } f
 import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt, buildResumePrompt } from "./prompt";
 import { buildMcpServers } from "./mcp";
+import { loadPlugins, type PluginPath } from "./plugins";
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
@@ -365,6 +366,7 @@ async function drainBufferedEvents() {
 let sessionActive = false;
 let messageYielder: ((msg: SDKUserMessage) => void) | null = null;
 let repoCloned = false;
+let loadedPlugins: PluginPath[] = [];
 let sessionStatus = "idle";
 let lastToolCall = "";
 let lastAssistantText = "";
@@ -459,6 +461,19 @@ async function cloneRepos() {
   process.chdir(`/workspace/${primaryRepo}`);
   console.log(`[Agent] Working directory: /workspace/${primaryRepo}`);
 
+  // Load plugins from the target repo's .claude/settings.json
+  phoneHome("loading_plugins");
+  try {
+    loadedPlugins = await loadPlugins(`/workspace/${primaryRepo}`);
+    if (loadedPlugins.length > 0) {
+      phoneHome(`plugins_loaded count=${loadedPlugins.length} names=${loadedPlugins.map(p => p.path.split("/").pop()).join(",")}`);
+    }
+  } catch (err) {
+    console.error("[Agent] Plugin loading failed (non-fatal):", err);
+    phoneHome("plugins_failed");
+    // Continue without plugins — agent can still work, just missing plugin skills
+  }
+
   repoCloned = true;
 }
 
@@ -511,15 +526,18 @@ async function startSession(initialPrompt: MessageContent) {
 
   // Build query options
   // settingSources: ["project"] loads CLAUDE.md, .claude/rules/ (alwaysApply), and
-  // .claude/skills/ from the target repo. To keep context lean, target repos should
-  // only use alwaysApply rules that are headless-compatible (no interactive prompts,
-  // no TodoWrite, no plan mode). See templates/ for headless-optimized templates.
+  // .claude/skills/ from the target repo. Plugins are loaded separately via loadPlugins()
+  // in cloneRepos() — settingSources does NOT resolve enabledPlugins from settings.json.
+  // To keep context lean, target repos should only use alwaysApply rules that are
+  // headless-compatible (no interactive prompts, no TodoWrite, no plan mode).
+  // See templates/ for headless-optimized templates.
   const queryOptions: any = {
     systemPrompt: { type: "preset", preset: "claude_code" },
     settingSources: ["project"],
     maxTurns: 200,
     permissionMode: "bypassPermissions",
     mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
+    ...(loadedPlugins.length > 0 ? { plugins: loadedPlugins } : {}),
     // Force node runtime — cli.js is a Node bundle, Bun may have compat issues
     executable: "node",
     stderr: (data: string) => {
