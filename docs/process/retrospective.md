@@ -1,3 +1,44 @@
+## 2026-03-18 - Agent plugin loading support (PR #94 + 7 cross-repo PRs)
+
+### Time Breakdown
+| Started | Phase | Hands-On Time | Agent Time | Problems |
+|---------|-------|--------------|------------|----------|
+| Mar 18 11:43am | Research & design (SDK investigation, approach) | ██████ 30m | ██ 15m | |
+| Mar 18 11:56am | Implementation (plugins.ts, server.ts, docs) | ██ 10m | ████ 35m | |
+| Mar 18 12:30pm | Plugin audit & cross-repo PRs | ██ 10m | ████ 40m | API 529 errors (2x) |
+| Mar 18 2:20pm | URL-sourced plugin handling | █ 5m | █ 10m | Assumed superpowers was in marketplace dir |
+| Mar 18 2:36pm | Merge PRs + staging deploy | █ 5m | ██████ 55m | Docker not running, premature merge to main |
+| Mar 18 4:48pm | Staging verification | █ 5m | ████ 35m | Incomplete transcripts, stuck agent |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~8 hours |
+| Hands-on | ~65 min (14%) |
+| Automated agent time | ~190 min (40%) |
+| Idle/away | ~225 min (47%) |
+| Retro analysis time | ~10 min |
+
+### Key Observations
+- Research-first approach (8 turns of Q&A) was efficient — converged on design in ~15 min
+- Parallel PR creation across 7 repos completed in ~1 min wall clock via background agents
+- Staging verification was the biggest time sink (~2.5h) due to Docker startup, transcript gaps, and a stuck agent
+- API 529 errors caused ~1.5h idle; agent didn't auto-retry, user had to re-prompt
+- Merged to main before staging verification — should deploy from branch instead
+
+### Feedback
+**What worked:** Interactive research phase, parallel cross-repo PRs, clear plugin audit analysis
+**What didn't:** Required multiple prompts to get plugin analysis started (529 errors + no auto-retry); premature merge to main before staging
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| CLAUDE.md missing marketplace.json and URL-sourced plugin details | CLAUDE.md | Updated Plugin Loading section with two-phase resolution |
+| learnings.md missing marketplace.json discovery detail | Docs | Added bullet about marketplace.json as plugin index |
+| Merged to main before staging verification | Feedback memory | Saved: deploy to staging from branch, don't merge first |
+
+---
+
 ## 2026-03-12 - BC-157: Deduplicate merge gate decisions (PR #80)
 
 **Context:** Merge gate was generating repetitive, identical decisions for the same PR state. Multiple triggers (CI webhook, PR status update, supervisor, Copilot retries) all called `evaluateMergeGate()` without checking if the PR had actually changed since the last decision.
