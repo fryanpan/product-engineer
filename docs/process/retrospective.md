@@ -49,6 +49,36 @@ The problem wasn't in any single trigger path - it was the lack of a shared dedu
 - **orchestrator/src/index.ts**: Added `/api/webhooks/slack/interactive` endpoint to receive Slack interactivity payloads
 - **orchestrator/src/decision-engine.test.ts**: Added test validating Block Kit structure and button configuration
 
+---
+
+## 2026-03-19 - BC-177 Dashboard Setup Completion
+
+**Context:** Dashboard code (auth, UI, API routes) and AI Gateway integration are already complete and deployed. Task asked to "finish dashboard setup" with API/Worker URL credentials available for automation, but said "don't ask questions."
+
+**What worked:**
+- Clear separation between "already complete" (code) and "needs configuration" (credentials) helped frame the task
+- Creating both automated (script) and manual (docs) paths gives users flexibility
+- Using existing API endpoints (`/api/settings/cloudflare_ai_gateway`) for programmatic configuration was the right choice
+- Comprehensive documentation structure: status overview → quick start → detailed guide → troubleshooting
+- Created `scripts/complete-dashboard-setup.sh` - interactive script that guides setup and can configure AI Gateway via API
+- Created `docs/dashboard-completion-guide.md` - detailed manual setup guide with troubleshooting
+- Created `DASHBOARD-STATUS.md` - single source of truth for "what's done, what's left"
+
+**What didn't:**
+- Initial task description said "don't ask questions" but didn't provide necessary credentials (Google OAuth, AI Gateway). This created an impossible situation where I could automate configuration via API but couldn't create the external resources (OAuth client, gateway) that generate those credentials.
+- The line between "automation" and "manual steps" is clear: anything requiring interactive web UIs (Google Console, Cloudflare Dashboard) cannot be scripted without browser automation, which is out of scope.
+
+**Action:**
+- When dashboard/auth tasks come up in future, immediately identify which parts are code (can be fully automated) vs. external service setup (requires user action)
+- For setup tasks, always create both an interactive script AND comprehensive documentation - users have different preferences
+- Document the automation boundary clearly: "Here's what the script can do, here's what you must do manually"
+- Status documents (`DASHBOARD-STATUS.md`) should be standard for complex multi-step setup tasks
+
+**What I delivered:**
+- Automated: Configuration via API, status checking, guided setup script
+- Manual steps documented: Google OAuth setup, AI Gateway creation, secret management
+- Verification: Commands to check current state and confirm successful setup
+
 **Key insight:**
 Using Block Kit action buttons instead of reactions moves the feedback mechanism from implicit (user must know about reactions) to explicit (buttons are right there). The modal pattern for detailed feedback keeps the simple case (just clicking correct/incorrect) one tap, while making the detailed case accessible without requiring knowledge of thread replies.
 
