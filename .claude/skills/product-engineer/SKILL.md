@@ -60,8 +60,7 @@ Examples: database schema changes, API contract changes, deleting data, architec
    - If ANY item cannot be satisfied → call `ask_question` explaining what's blocking. Do NOT create the PR.
    - Add a `## Definition of Done` section to the PR description with each applicable item, a checkmark marker, and brief evidence (e.g., "All tests pass — `bun test`: 47 passed, 0 failed").
 8. In **one turn**: commit, push, create PR, update status to `pr_open`, and notify Slack with the PR link.
-9. Do a brief retro — save findings to `docs/process/retrospective.md`, commit and push to PR branch.
-10. Update status to `pr_open`. The orchestrator handles merge decisions — you're done after PR creation.
+9. Do a brief retro — save findings to `docs/process/retrospective.md`, commit and push to PR branch. The orchestrator handles merge decisions — you're done after PR creation.
 
 ### On receiving a PR review or comment
 

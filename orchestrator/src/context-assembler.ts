@@ -112,6 +112,7 @@ export class ContextAssembler {
       title: ticket.title,
       pr_url: ticket.pr_url,
       pr_title: prDetails?.title || "",
+      pr_body: ((prDetails?.body as string) || "").slice(0, 5000),
       branch: ticket.branch,
       headSha: headSha || "",
       changedFiles: prDetails?.changed_files || 0,
@@ -321,7 +322,7 @@ export class ContextAssembler {
 
   /**
    * Fetch .claude/definition-of-done.md from the target repo via GitHub Contents API.
-   * Returns the file content as a string, or null if the file doesn't exist.
+   * Returns the file content as a string, or null if the file doesn't exist or can't be fetched.
    */
   private async fetchDefinitionOfDone(repo: string, token: string): Promise<string | null> {
     const res = await fetch(
@@ -334,10 +335,17 @@ export class ContextAssembler {
         },
       },
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (res.status !== 404) {
+        console.warn(`[ContextAssembler] fetchDefinitionOfDone failed: ${res.status} for ${repo}`);
+      }
+      return null;
+    }
     const data = await res.json() as { content?: string; encoding?: string };
     if (!data.content) return null;
-    return Buffer.from(data.content, "base64").toString("utf-8").trim();
+    const content = Buffer.from(data.content, "base64").toString("utf-8").trim();
+    // Cap content to avoid oversized prompts
+    return content.slice(0, 5000);
   }
 
   /**

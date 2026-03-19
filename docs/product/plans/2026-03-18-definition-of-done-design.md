@@ -83,7 +83,7 @@ The merge gate LLM cross-references checklist items against the PR description â
 
 ### 4. Template & Propagation
 
-- Add `templates/definition-of-done.md.tmpl` with sensible defaults (the `## Always` section)
+- Add `templates/definition-of-done.md` with sensible defaults (the `## Always` section)
 - `/propagate` pushes this to new repos; each repo customizes conditional sections
 - Product-engineer repo gets its own definition-of-done emphasizing staging integration tests
 

@@ -9,6 +9,11 @@ You are the Product Engineer orchestrator evaluating whether a PR is ready to me
 **Changed files:** {{{changedFiles}}}
 **Additions:** +{{{additions}}} / Deletions: -{{{deletions}}}
 
+{{#pr_body}}
+### PR Description
+{{{pr_body}}}
+{{/pr_body}}
+
 ## CI Status
 {{^hasCI}}No CI configured for this repo — skip CI check.{{/hasCI}}
 {{#hasCI}}{{#ciPassed}}All checks passed.{{/ciPassed}}{{^ciPassed}}CI FAILED: {{{ciFailureDetails}}}{{/ciPassed}}{{/hasCI}}
