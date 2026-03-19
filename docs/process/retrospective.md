@@ -1,3 +1,35 @@
+## 2026-03-19 - Empty Ticket Test: Documentation Gap Discovery
+
+**Context:** Received an empty ticket (no title, description, or ID) as a test of whether I would investigate the codebase before asking questions. This followed the BC-165 fix that strengthened ticket review to reduce unnecessary question-asking.
+
+**What worked:**
+- Immediately pivoted from asking to investigating when called out
+- Found a real issue: tests failing with "Cannot find package" errors
+- Root cause analysis: dependencies declared but not installed, README missing setup steps
+- All 130 tests pass after `bun install` — confirmed no actual code bugs
+
+**What didn't work:**
+- Initial response was to ask for clarification instead of investigating first
+- Should have checked for failing tests, TODOs, or documentation gaps before asking anything
+
+**Key insight:**
+- Even "empty" tickets can surface real problems through investigation
+- The README's Development section assumed dependencies were installed but never documented that step
+- This would confuse new contributors or cause CI issues in fresh environments
+
+**Action taken:**
+- Added explicit `bun install` steps to README Development section (PR #97)
+- Documented learning: always investigate before asking, even for ambiguous tickets
+
+**Investigation checklist for unclear tickets:**
+1. Check recent commits for context
+2. Run tests to find failures
+3. Search for TODOs/FIXMEs in code
+4. Look for documentation gaps
+5. Only ask questions if investigation reveals genuine ambiguity about WHAT to do
+
+---
+
 ## 2026-03-12 - BC-157: Deduplicate merge gate decisions (PR #80)
 
 **Context:** Merge gate was generating repetitive, identical decisions for the same PR state. Multiple triggers (CI webhook, PR status update, supervisor, Copilot retries) all called `evaluateMergeGate()` without checking if the PR had actually changed since the last decision.
