@@ -123,9 +123,28 @@ export function createTools(config: AgentConfig) {
 
   const askQuestion = tool(
     "ask_question",
-    "Post a clarifying question to the Slack channel. Use this when a task is ambiguous and you need more information. The user's reply will arrive as a new event.",
+    "Post a clarifying question to the Slack channel. Use this when a task is ambiguous and you need more information. The user's reply will arrive as a new event. IMPORTANT: Only call this tool ONCE per question session - do not ask multiple questions in rapid succession.",
     { question: z.string().describe("The question to ask the user via Slack") },
-    ({ question }) => postToSlack(`*Agent question:*\n${question}`, config),
+    async ({ question }) => {
+      // Update status to "needs_info" first to prevent multiple question prompts
+      try {
+        await fetch(`${config.workerUrl}/api/internal/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": config.apiKey,
+          },
+          body: JSON.stringify({
+            ticketUUID: config.ticketUUID,
+            status: "needs_info",
+          }),
+        });
+      } catch (err) {
+        console.warn("[Agent] Failed to update status to needs_info:", err);
+      }
+
+      return postToSlack(`*Agent question:*\n${question}`, config);
+    },
   );
 
   const updateTaskStatus = tool(
@@ -142,7 +161,6 @@ export function createTools(config: AgentConfig) {
           "closed",
           "deferred",
           "failed",
-          "asking",
         ])
         .describe("The new status for this task"),
       reason: z
@@ -191,7 +209,6 @@ export function createTools(config: AgentConfig) {
         closed: "Done",
         deferred: "Canceled",
         failed: "Canceled",
-        asking: "In Progress",
       };
 
       const linearState = linearStateMap[status] || "In Progress";

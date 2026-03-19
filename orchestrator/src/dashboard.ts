@@ -252,28 +252,93 @@ dashboardRouter.get("/user", requireAuth(), async (c) => {
   });
 });
 
+// List all active agents (protected)
+dashboardRouter.get("/api/agents", requireAuth(), async (c) => {
+  try {
+    const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
+    const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
+    const res = await orchestrator.fetch(new Request("http://internal/tickets"));
+
+    if (!res.ok) {
+      return c.json({ error: "Failed to fetch tickets" }, 500);
+    }
+
+    const data = await res.json() as { tickets: any[] };
+
+    // Filter to active agents only (agent_active = 1)
+    const activeAgents = data.tickets
+      .filter((t: any) => t.agent_active === 1)
+      .map((t: any) => ({
+        id: t.ticket_id || t.ticket_uuid,
+        product: t.product,
+        status: t.status,
+        slack_thread_ts: t.slack_thread_ts,
+        slack_channel: t.slack_channel,
+        pr_url: t.pr_url,
+        updated_at: t.updated_at,
+        last_heartbeat: t.last_heartbeat,
+      }));
+
+    return c.json({ agents: activeAgents });
+  } catch (error) {
+    console.error("[Dashboard] Failed to list agents:", error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Get metrics summary (protected)
+dashboardRouter.get("/api/metrics", requireAuth(), async (c) => {
+  try {
+    const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
+    const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
+    const res = await orchestrator.fetch(new Request("http://internal/tickets"));
+
+    if (!res.ok) {
+      return c.json({ error: "Failed to fetch metrics" }, 500);
+    }
+
+    const data = await res.json() as { tickets: any[] };
+    const tickets = data.tickets;
+
+    // Calculate metrics
+    const totalTickets = tickets.length;
+    const merged = tickets.filter((t: any) => t.status === "merged").length;
+    const failed = tickets.filter((t: any) => t.status === "failed").length;
+    const automergeRate = totalTickets > 0 ? `${Math.round((merged / totalTickets) * 100)}%` : "0%";
+    const failureRate = totalTickets > 0 ? `${Math.round((failed / totalTickets) * 100)}%` : "0%";
+
+    // TODO: Add cost and decision accuracy metrics when available
+    return c.json({
+      summary: {
+        totalTickets,
+        automergeRate,
+        failureRate,
+        multiRevisionRate: "0%", // TODO: calculate from revision count
+      },
+      costs: {
+        average: "0.00",
+        daily: [],
+      },
+      decisions: {
+        accuracy: "N/A",
+        withFeedback: 0,
+      },
+    });
+  } catch (error) {
+    console.error("[Dashboard] Failed to fetch metrics:", error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
 // Kill individual agent (protected)
-dashboardRouter.post("/kill-agent/:ticketUUID", requireAuth(), async (c) => {
+dashboardRouter.post("/api/agents/:ticketUUID/kill", requireAuth(), async (c) => {
   const ticketUUID = c.req.param("ticketUUID");
   const session = c.get("session") as Session;
 
   console.log(`[Dashboard] User ${session.email} killing agent ${ticketUUID}`);
 
   try {
-    // Get the TicketAgent DO
-    const id = c.env.TICKET_AGENT.idFromName(ticketUUID);
-    const agent = c.env.TICKET_AGENT.get(id);
-
-    // Mark as terminal and shut down
-    const res = await agent.fetch(new Request("http://internal/mark-terminal", {
-      method: "POST",
-    }));
-
-    if (!res.ok) {
-      return c.json({ error: "Failed to kill agent" }, 500);
-    }
-
-    // Also mark as inactive in orchestrator
+    // Mark as inactive in orchestrator
     const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
     const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
     await orchestrator.fetch(new Request("http://internal/ticket/status", {
@@ -288,6 +353,50 @@ dashboardRouter.post("/kill-agent/:ticketUUID", requireAuth(), async (c) => {
     return c.json({ ok: true });
   } catch (error) {
     console.error("[Dashboard] Failed to kill agent:", error);
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Kill all active agents (protected)
+dashboardRouter.post("/api/agents/shutdown-all", requireAuth(), async (c) => {
+  const session = c.get("session") as Session;
+  console.log(`[Dashboard] User ${session.email} requesting shutdown of all agents`);
+
+  try {
+    const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
+    const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
+
+    // Get all active tickets
+    const res = await orchestrator.fetch(new Request("http://internal/tickets"));
+    if (!res.ok) {
+      return c.json({ error: "Failed to fetch tickets" }, 500);
+    }
+    const data = await res.json() as { tickets: any[] };
+    const activeTickets = data.tickets.filter((t: any) => t.agent_active === 1);
+
+    // Kill each one, tracking failures
+    const failures: string[] = [];
+    for (const ticket of activeTickets) {
+      try {
+        const killRes = await orchestrator.fetch(new Request("http://internal/ticket/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ticketUUID: ticket.ticket_uuid,
+            status: "deferred",
+          }),
+        }));
+        if (!killRes.ok) {
+          failures.push(ticket.ticket_uuid);
+        }
+      } catch {
+        failures.push(ticket.ticket_uuid);
+      }
+    }
+
+    return c.json({ ok: true, total: activeTickets.length, failed: failures });
+  } catch (error) {
+    console.error("[Dashboard] Failed to shutdown all agents:", error);
     return c.json({ error: String(error) }, 500);
   }
 });

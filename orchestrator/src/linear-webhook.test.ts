@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { Hono } from "hono";
 import { linearWebhook } from "./webhooks";
 import type { Bindings } from "./types";
@@ -93,11 +93,45 @@ async function postWebhook(app: ReturnType<typeof makeApp>, body: unknown, env: 
   );
 }
 
+// Mock global fetch for Linear GraphQL comment fetching
+let originalFetch: typeof globalThis.fetch;
+let fetchSpy: ReturnType<typeof spyOn>;
+
 describe("linear webhook handler", () => {
   beforeEach(() => {
     sentEvents = [];
     clearRegistryCache();
     mockOrchestratorStub = createMockOrchestratorWithEvents(TEST_REGISTRY);
+
+    // Intercept fetch calls to Linear GraphQL API to prevent real HTTP calls
+    originalFetch = globalThis.fetch;
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      if (url === "https://api.linear.app/graphql" && init?.body) {
+        const body = JSON.parse(init.body as string);
+        // Mock comment query responses
+        if (body.query?.includes("comments")) {
+          return Response.json({
+            data: {
+              issue: {
+                comments: {
+                  nodes: [
+                    { body: "First comment", user: { name: "Alice" }, createdAt: "2026-03-01T10:00:00.000Z" },
+                    { body: "Second comment", user: null, createdAt: "2026-03-01T11:00:00.000Z" },
+                  ],
+                },
+              },
+            },
+          });
+        }
+      }
+      // Pass through other fetch calls
+      return originalFetch(input as RequestInfo, init);
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
   });
 
   it("ignores non-Issue/non-Comment events", async () => {
@@ -571,6 +605,37 @@ describe("linear webhook handler", () => {
     expect(json2.ignored).toBe(true);
     expect(json2.reason).toBe("action not relevant");
     expect(sentEvents).toHaveLength(0);
+  });
+
+  it("includes comments in forwarded ticket_created event", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    const res = await postWebhook(app, {
+      action: "create",
+      type: "Issue",
+      data: {
+        id: "issue-with-comments",
+        identifier: "HT-50",
+        title: "Issue with comments",
+        description: "Test comments",
+        priority: 1,
+        teamId: TEST_REGISTRY.linear_team_id,
+        labelIds: [],
+        project: { id: "p1", name: "Test App" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    expect(sentEvents).toHaveLength(1);
+    const event = sentEvents[0] as Record<string, unknown>;
+    const payload = event.payload as Record<string, unknown>;
+    const comments = payload.comments as Array<{ user: string; body: string; createdAt: string }>;
+    expect(comments).toHaveLength(2);
+    expect(comments[0].user).toBe("Alice");
+    expect(comments[0].body).toBe("First comment");
+    // Null user should fall back to "Unknown"
+    expect(comments[1].user).toBe("Unknown");
   });
 
   it("ignores issues from unknown Linear projects", async () => {
