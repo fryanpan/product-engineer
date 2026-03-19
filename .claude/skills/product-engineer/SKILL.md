@@ -53,9 +53,14 @@ Examples: database schema changes, API contract changes, deleting data, architec
 4. Implement. Keep changes minimal — only what the task requires.
 5. Run tests. Fix anything you broke.
 6. **Self-review** your diff: Does it match the request? Any bugs, missed edge cases, security issues?
-7. In **one turn**: commit, push, create PR, update status to `pr_open`, and notify Slack with the PR link.
-8. Do a brief retro — save findings to `docs/process/retrospective.md`, commit and push to PR branch.
-9. Update status to `pr_open`. The orchestrator handles merge decisions — you're done after PR creation.
+7. **Definition of Done check.** Read `.claude/definition-of-done.md` from the repo root (if it exists).
+   - Evaluate every `## Always` item.
+   - Evaluate every `## When: <condition>` section where the condition matches your changes.
+   - For each item: satisfy it (run the command, do the review) or confirm it's already satisfied.
+   - If ANY item cannot be satisfied → call `ask_question` explaining what's blocking. Do NOT create the PR.
+   - Add a `## Definition of Done` section to the PR description with each applicable item, a checkmark marker, and brief evidence (e.g., "All tests pass — `bun test`: 47 passed, 0 failed").
+8. In **one turn**: commit, push, create PR, update status to `pr_open`, and notify Slack with the PR link.
+9. Do a brief retro — save findings to `docs/process/retrospective.md`, commit and push to PR branch. The orchestrator handles merge decisions — you're done after PR creation.
 
 ### On receiving a PR review or comment
 

@@ -122,6 +122,112 @@ describe("ContextAssembler", () => {
     expect(ctx.agentRunning).toBe("yes");
   });
 
+  it("includes definitionOfDone in merge gate context when file exists", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/contents/.claude/definition-of-done.md")) {
+        const content = Buffer.from("## Always\n- [ ] Tests pass").toString("base64");
+        return new Response(JSON.stringify({ content, encoding: "base64" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (urlStr.includes("/pulls/") && !urlStr.includes("/reviews") && !urlStr.includes("/comments")) {
+        if (init?.headers && (init.headers as Record<string, string>)["Accept"]?.includes("diff")) {
+          return new Response("diff content", { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          title: "Test PR", changed_files: 1, additions: 10, deletions: 2,
+          head: { sha: "abc123" }, mergeable: true, mergeable_state: "clean",
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (urlStr.includes("/reviews") || urlStr.includes("/comments")) {
+        return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (urlStr.includes("/status")) {
+        return new Response(JSON.stringify({ state: "success", total_count: 1, statuses: [] }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      }
+      return originalFetch(url, init);
+    };
+
+    try {
+      const assembler = new ContextAssembler({
+        sqlExec: mockSqlExec as any,
+        slackBotToken: "xoxb-test",
+        linearAppToken: "lin_test",
+        githubTokens: { "test-product": "ghp_test" },
+      });
+
+      const ctx = await assembler.forMergeGate({
+        ticketUUID: "abc-123",
+        identifier: "PE-42",
+        title: "Fix button",
+        product: "test-product",
+        pr_url: "https://github.com/org/repo/pull/1",
+        branch: "ticket/abc-123",
+        repo: "org/repo",
+      });
+
+      expect(ctx.definitionOfDone).toBe("## Always\n- [ ] Tests pass");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("returns no definitionOfDone when file does not exist", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/contents/.claude/definition-of-done.md")) {
+        return new Response("Not Found", { status: 404 });
+      }
+      if (urlStr.includes("/pulls/") && !urlStr.includes("/reviews") && !urlStr.includes("/comments")) {
+        if (init?.headers && (init.headers as Record<string, string>)["Accept"]?.includes("diff")) {
+          return new Response("diff", { status: 200 });
+        }
+        return new Response(JSON.stringify({
+          title: "PR", changed_files: 1, additions: 1, deletions: 0,
+          head: { sha: "def456" }, mergeable: true, mergeable_state: "clean",
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (urlStr.includes("/reviews") || urlStr.includes("/comments")) {
+        return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (urlStr.includes("/status")) {
+        return new Response(JSON.stringify({ state: "success", total_count: 1, statuses: [] }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      }
+      return originalFetch(url, init);
+    };
+
+    try {
+      const assembler = new ContextAssembler({
+        sqlExec: mockSqlExec as any,
+        slackBotToken: "xoxb-test",
+        linearAppToken: "lin_test",
+        githubTokens: { "test-product": "ghp_test" },
+      });
+
+      const ctx = await assembler.forMergeGate({
+        ticketUUID: "abc-123",
+        identifier: "PE-42",
+        title: "Fix button",
+        product: "test-product",
+        pr_url: "https://github.com/org/repo/pull/1",
+        branch: "ticket/abc-123",
+        repo: "org/repo",
+      });
+
+      expect(ctx.definitionOfDone).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("falls back to uuid when identifier is null", async () => {
     const assembler = new ContextAssembler({
       sqlExec: mockSqlExec as any,
