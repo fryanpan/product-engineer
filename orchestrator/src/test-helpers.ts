@@ -90,5 +90,22 @@ export const TEST_REGISTRY: MockRegistryData = {
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
       },
     },
+    "boos-research": {
+      repos: [],
+      slack_channel: "#boos-research",
+      slack_channel_id: "C_BOOS_RESEARCH",
+      product_type: "research",
+      slack_trigger_mode: "any_message",
+      allowed_slack_users: [],
+      notion: { root_page_id: "notion-root-page-id" },
+      triggers: {
+        linear: { enabled: false, project_name: "" },
+        slack: { enabled: true },
+      },
+      secrets: {
+        NOTION_TOKEN: "NOTION_TOKEN",
+        ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+      },
+    },
   },
 };

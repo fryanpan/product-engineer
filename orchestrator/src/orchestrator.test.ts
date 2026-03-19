@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
+import { buildTicketEvent, resolveProductFromChannel, isResearchProduct, shouldAllowSlackUser } from "./orchestrator";
 import { TEST_REGISTRY } from "./test-helpers";
 import type { ProductConfig } from "./registry";
 
@@ -76,6 +76,72 @@ describe("resolveProductFromChannel", () => {
 
   test("returns null for empty string", () => {
     expect(resolveProductFromChannel(products, "")).toBeNull();
+  });
+});
+
+describe("isResearchProduct", () => {
+  test("returns true for research product type", () => {
+    const config: ProductConfig = { product_type: "research", repos: [], slack_channel: "#r", triggers: {}, secrets: {} };
+    expect(isResearchProduct(config)).toBe(true);
+  });
+
+  test("returns false for coding product type", () => {
+    const config: ProductConfig = { product_type: "coding", repos: ["org/r"], slack_channel: "#r", triggers: {}, secrets: {} };
+    expect(isResearchProduct(config)).toBe(false);
+  });
+
+  test("returns false when product_type is undefined (default = coding)", () => {
+    const config: ProductConfig = { repos: ["org/r"], slack_channel: "#r", triggers: {}, secrets: {} };
+    expect(isResearchProduct(config)).toBe(false);
+  });
+});
+
+describe("shouldAllowSlackUser", () => {
+  test("returns true when allowed_slack_users is empty array (all users allowed)", () => {
+    expect(shouldAllowSlackUser([], "U_ANYONE")).toBe(true);
+  });
+
+  test("returns true when allowed_slack_users is undefined", () => {
+    expect(shouldAllowSlackUser(undefined, "U_ANYONE")).toBe(true);
+  });
+
+  test("returns true when user is in allowed list", () => {
+    expect(shouldAllowSlackUser(["U_BRYAN", "U_JOANNA"], "U_BRYAN")).toBe(true);
+    expect(shouldAllowSlackUser(["U_BRYAN", "U_JOANNA"], "U_JOANNA")).toBe(true);
+  });
+
+  test("returns false when user is not in allowed list", () => {
+    expect(shouldAllowSlackUser(["U_BRYAN", "U_JOANNA"], "U_STRANGER")).toBe(false);
+  });
+});
+
+describe("resolveProductFromChannel — research product", () => {
+  test("resolves boos-research from channel ID", () => {
+    const products = TEST_REGISTRY.products as Record<string, ProductConfig>;
+    expect(resolveProductFromChannel(products, "C_BOOS_RESEARCH")).toBe("boos-research");
+  });
+
+  test("isResearchProduct returns true for boos-research config", () => {
+    const products = TEST_REGISTRY.products as Record<string, ProductConfig>;
+    expect(isResearchProduct(products["boos-research"] as ProductConfig)).toBe(true);
+    expect(isResearchProduct(products["test-app"] as ProductConfig)).toBe(false);
+  });
+});
+
+describe("handleResearchSlackMessage routing", () => {
+  // Test that isLinearEnabled logic is correct
+  test("research product has no linear enabled", () => {
+    const products = TEST_REGISTRY.products as Record<string, ProductConfig>;
+    const researchConfig = products["boos-research"] as ProductConfig;
+    const isLinearEnabled = researchConfig.triggers?.linear?.enabled !== false && !!researchConfig.triggers?.linear?.project_name;
+    expect(isLinearEnabled).toBe(false);
+  });
+
+  test("coding product has linear enabled", () => {
+    const products = TEST_REGISTRY.products as Record<string, ProductConfig>;
+    const codingConfig = products["test-app"] as ProductConfig;
+    const isLinearEnabled = codingConfig.triggers?.linear?.enabled !== false && !!codingConfig.triggers?.linear?.project_name;
+    expect(isLinearEnabled).toBe(true);
   });
 });
 

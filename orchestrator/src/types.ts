@@ -67,6 +67,8 @@ export interface TicketAgentConfig {
   secrets: Record<string, string>; // logical name → binding name
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
   model?: string; // Claude model to use (e.g., "sonnet", "opus", "haiku")
+  productType?: string;          // "research" | "coding" — forwarded as PRODUCT_TYPE env var
+  sessionTimeoutHours?: number;  // Override session timeout — forwarded as SESSION_TIMEOUT_HOURS
 }
 
 // Decision engine types

@@ -25,6 +25,8 @@ export interface SpawnConfig {
   secrets: Record<string, string>;
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
   model?: string;
+  productType?: string;
+  sessionTimeoutHours?: number;
 }
 
 interface SqlResult {
@@ -190,6 +192,8 @@ export class AgentManager {
           secrets: config.secrets,
           gatewayConfig: config.gatewayConfig,
           model: config.model,
+          productType: config.productType,
+          sessionTimeoutHours: config.sessionTimeoutHours,
         }),
       }));
 

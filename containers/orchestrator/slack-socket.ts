@@ -94,11 +94,16 @@ export class SlackSocket {
             // Only forward thread replies (not top-level messages, edits, joins, etc.)
             this.onEvent(slackEvent);
           } else if (slackEvent.type === "message" && !slackEvent.thread_ts && !slackEvent.subtype) {
-            // Check for slash commands in top-level messages
+            // Forward all top-level non-bot messages to the orchestrator.
+            // The orchestrator decides whether to act based on the product's slack_trigger_mode:
+            // - "mention" mode (default): orchestrator ignores non-mention messages for coding products
+            // - "any_message" mode: orchestrator creates an agent for research products
+            // Slash commands get a special marker for the orchestrator to detect.
             const text = slackEvent.text?.trim() || "";
             if (/(^|\s)\/agent-status(\s|$)/.test(text)) {
-              // Mark as slash command for special handling
               this.onEvent({ ...slackEvent, slash_command: "agent-status" });
+            } else {
+              this.onEvent(slackEvent);
             }
           }
         }

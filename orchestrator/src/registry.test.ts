@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, test, expect, beforeEach } from "bun:test";
+import type { ProductConfig } from "./registry";
 import {
   getLinearAppUserId,
   getAIGatewayConfig,
@@ -132,6 +133,52 @@ describe("Registry with DO backend", () => {
       expect(config).not.toBeNull();
       expect(config!.account_id).toBe("test-account-id");
       expect(config!.gateway_id).toBe("test-gateway-id");
+    });
+  });
+
+  describe("ProductConfig research product type", () => {
+    test("research product has product_type field", () => {
+      const config: ProductConfig = {
+        repos: [],
+        slack_channel: "#boos-research",
+        slack_channel_id: "C_BOOS_RESEARCH",
+        product_type: "research",
+        slack_trigger_mode: "any_message",
+        allowed_slack_users: ["U_BRYAN", "U_JOANNA"],
+        notion: { root_page_id: "abc123" },
+        triggers: {
+          linear: { enabled: false, project_name: "" },
+          slack: { enabled: true },
+        },
+        secrets: {
+          NOTION_TOKEN: "NOTION_TOKEN",
+          ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+        },
+      };
+      expect(config.product_type).toBe("research");
+      expect(config.slack_trigger_mode).toBe("any_message");
+      expect(config.repos).toHaveLength(0);
+    });
+
+    test("coding product works without new fields (backwards compatible)", () => {
+      const config: ProductConfig = {
+        repos: ["org/repo"],
+        slack_channel: "#dev",
+        triggers: { linear: { enabled: true, project_name: "Dev" } },
+        secrets: {},
+      };
+      expect(config.product_type).toBeUndefined();
+      expect(config.slack_trigger_mode).toBeUndefined();
+      expect(config.notion).toBeUndefined();
+    });
+
+    test("boos-research product in TEST_REGISTRY is valid research product", () => {
+      const products = TEST_REGISTRY.products;
+      const boos = products["boos-research"];
+      expect(boos).toBeDefined();
+      expect(boos.product_type).toBe("research");
+      expect(boos.repos).toHaveLength(0);
+      expect(boos.triggers?.linear?.enabled).toBe(false);
     });
   });
 

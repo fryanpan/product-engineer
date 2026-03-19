@@ -9,6 +9,17 @@ export interface ProductConfig {
   repos: string[];
   slack_channel: string;
   slack_channel_id?: string;
+  /** "coding" (default) runs the git/PR/Linear workflow. "research" skips PR/Linear. */
+  product_type?: "coding" | "research";
+  /** "mention" (default) requires @-mention to trigger. "any_message" creates an agent per top-level message. */
+  slack_trigger_mode?: "mention" | "any_message";
+  /** Slack user IDs allowed to trigger agents. Empty array or undefined = all users allowed. */
+  allowed_slack_users?: string[];
+  /** Notion workspace config for research products */
+  notion?: {
+    root_page_id?: string;
+    memory_database_id?: string;
+  };
   triggers: {
     feedback?: { enabled: boolean; callback_url?: string };
     linear?: { enabled: boolean; project_name: string };

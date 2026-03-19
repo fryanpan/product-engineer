@@ -103,6 +103,8 @@ export interface AgentConfig {
   ticketIdentifier?: string;  // e.g., "BC-84"
   ticketTitle?: string;        // Brief title for display
   model?: string;              // Claude model to use (sonnet, opus, haiku)
+  sessionTimeoutHours?: number;  // Override default 2h session timeout. Research products use 4h.
+  productType?: string;          // "research" | "coding" — controls prompt template and behavior
 }
 
 export function loadConfig(): AgentConfig {
@@ -117,7 +119,7 @@ export function loadConfig(): AgentConfig {
     product: required("PRODUCT"),
     repos: JSON.parse(required("REPOS")),
     anthropicApiKey: required("ANTHROPIC_API_KEY"),
-    githubToken: required("GITHUB_TOKEN"),
+    githubToken: process.env.GITHUB_TOKEN || "",  // Optional for research products (no git ops)
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackChannel: process.env.SLACK_CHANNEL || "#general",
     slackThreadTs: process.env.SLACK_THREAD_TS || "",
@@ -127,5 +129,9 @@ export function loadConfig(): AgentConfig {
     ticketIdentifier: process.env.TICKET_IDENTIFIER || undefined,
     ticketTitle: process.env.TICKET_TITLE || undefined,
     model: process.env.MODEL || undefined,
+    sessionTimeoutHours: process.env.SESSION_TIMEOUT_HOURS
+      ? parseFloat(process.env.SESSION_TIMEOUT_HOURS)
+      : undefined,
+    productType: process.env.PRODUCT_TYPE || undefined,
   };
 }

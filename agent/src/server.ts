@@ -8,6 +8,7 @@
 
 import * as Sentry from "@sentry/bun";
 import { Hono } from "hono";
+import { writeFileSync } from "fs";
 import {
   query,
   createSdkMcpServer,
@@ -44,6 +45,18 @@ console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 
 const config = loadConfig();
 console.log(`[Agent] Config loaded: ticket=${config.ticketUUID} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"}`);
+
+// Write Google Calendar OAuth credentials to disk so google-calendar-mcp can read them.
+// The credentials JSON is passed as GOOGLE_CALENDAR_CREDENTIALS env var (Cloudflare secret).
+const gcalCredsJson = process.env.GOOGLE_CALENDAR_CREDENTIALS;
+if (gcalCredsJson) {
+  try {
+    writeFileSync("/tmp/google-calendar-credentials.json", gcalCredsJson);
+    console.log("[Agent] Google Calendar credentials written to /tmp/google-calendar-credentials.json");
+  } catch (err) {
+    console.error("[Agent] Failed to write Google Calendar credentials (non-fatal):", err);
+  }
+}
 
 // Phone-home: heartbeat + log message to the orchestrator.
 // Every call updates last_heartbeat. The message is for observability only — the
@@ -262,8 +275,11 @@ const heartbeatInterval = setInterval(() => {
 
 // Session timeout watchdog: exit if session runs too long or becomes idle
 // This prevents containers from staying alive indefinitely waiting for Slack replies
-const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours wall-clock (safety net)
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes without messages — ephemeral agents exit fast
+// Session timeout — configurable via SESSION_TIMEOUT_HOURS env var (default: 2h)
+// Research products use 4h; coding products use 2h
+const SESSION_TIMEOUT_MS = (config.sessionTimeoutHours ?? 2) * 60 * 60 * 1000;
+// Idle timeout: 30 min for all products (research tasks may have natural pauses)
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const timeoutWatchdog = setInterval(() => {
   if (!sessionActive && sessionStatus === "idle") return; // Not started yet
 
@@ -453,25 +469,33 @@ async function cloneRepos() {
     phoneHome(`clone_done repo=${repoName}`);
   }));
 
-  // Set working directory to the first repo so Agent SDK tools operate on it
-  const primaryRepo = config.repos[0].split("/").pop()!;
-  if (!/^[a-zA-Z0-9._-]+$/.test(primaryRepo)) {
-    throw new Error(`Invalid repo name: ${primaryRepo}`);
-  }
-  process.chdir(`/workspace/${primaryRepo}`);
-  console.log(`[Agent] Working directory: /workspace/${primaryRepo}`);
-
-  // Load plugins from the target repo's .claude/settings.json
-  phoneHome("loading_plugins");
-  try {
-    loadedPlugins = await loadPlugins(`/workspace/${primaryRepo}`);
-    if (loadedPlugins.length > 0) {
-      phoneHome(`plugins_loaded count=${loadedPlugins.length} names=${loadedPlugins.map(p => p.path.split("/").pop()).join(",")}`);
+  // Set working directory and load plugins
+  // For research products with no repos, use /workspace as base (no plugin loading)
+  if (config.repos.length > 0) {
+    const primaryRepo = config.repos[0].split("/").pop()!;
+    if (!/^[a-zA-Z0-9._-]+$/.test(primaryRepo)) {
+      throw new Error(`Invalid repo name: ${primaryRepo}`);
     }
-  } catch (err) {
-    console.error("[Agent] Plugin loading failed (non-fatal):", err);
-    phoneHome("plugins_failed");
-    // Continue without plugins — agent can still work, just missing plugin skills
+    process.chdir(`/workspace/${primaryRepo}`);
+    console.log(`[Agent] Working directory: /workspace/${primaryRepo}`);
+
+    // Load plugins from the target repo's .claude/settings.json
+    phoneHome("loading_plugins");
+    try {
+      loadedPlugins = await loadPlugins(`/workspace/${primaryRepo}`);
+      if (loadedPlugins.length > 0) {
+        phoneHome(`plugins_loaded count=${loadedPlugins.length} names=${loadedPlugins.map(p => p.path.split("/").pop()).join(",")}`);
+      }
+    } catch (err) {
+      console.error("[Agent] Plugin loading failed (non-fatal):", err);
+      phoneHome("plugins_failed");
+      // Continue without plugins — agent can still work, just missing plugin skills
+    }
+  } else {
+    // Research product — no repos. Use /workspace as the base directory.
+    process.chdir("/workspace");
+    console.log("[Agent] No repos configured (research product) — using /workspace as base directory");
+    phoneHome("research_mode_no_repos");
   }
 
   repoCloned = true;
@@ -754,7 +778,7 @@ app.post("/event", async (c) => {
         config.ticketTitle = ticketData.title;
       }
 
-      const prompt = await buildPrompt(taskPayload, config.slackBotToken);
+      const prompt = await buildPrompt(taskPayload, config.slackBotToken, config.productType);
       await startSession(prompt);
       // Drain any events buffered while the container was unreachable
       drainBufferedEvents();
