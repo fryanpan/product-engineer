@@ -151,6 +151,10 @@ cd orchestrator && npx wrangler deploy
 ## Development
 
 ```bash
+# Install dependencies (required before running tests)
+cd orchestrator && bun install
+cd ../agent && bun install
+
 # Run orchestrator tests
 cd orchestrator && bun test
 
