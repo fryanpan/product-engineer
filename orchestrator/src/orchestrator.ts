@@ -2530,31 +2530,28 @@ export class Orchestrator extends Container<Bindings> {
       }
     }
 
+    // Load all products from database (used below for both non-mention guard and main resolution)
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT slug, config FROM products",
+    ).toArray() as Array<{ slug: string; config: string }>;
+
+    const products = productRows.reduce((acc, row) => {
+      try { acc[row.slug] = JSON.parse(row.config); } catch {}
+      return acc;
+    }, {} as Record<string, ProductConfig>);
+
     // For non-mention top-level messages: check if this is a research channel with any_message mode
     if (slackEvent.type !== "app_mention") {
-      // Load products to check if this channel has any_message mode enabled
-      const checkRows = this.ctx.storage.sql.exec(
-        "SELECT slug, config FROM products",
-      ).toArray() as Array<{ slug: string; config: string }>;
-      const checkProducts = checkRows.reduce((acc, row) => {
-        try { acc[row.slug] = JSON.parse(row.config); } catch {}
-        return acc;
-      }, {} as Record<string, ProductConfig>);
-
-      const checkProduct = resolveProductFromChannel(checkProducts, slackEvent.channel || "");
+      const checkProduct = resolveProductFromChannel(products, slackEvent.channel || "");
       if (!checkProduct) {
         // Unknown channel — silently ignore
         return Response.json({ ok: true, ignored: true, reason: "unknown channel" });
       }
 
-      const checkConfig = checkProducts[checkProduct];
+      const checkConfig = products[checkProduct];
       if (checkConfig.slack_trigger_mode !== "any_message") {
-        // Coding product — only respond to @mentions
-        await this.postSlackError(
-          slackEvent.channel || "",
-          slackEvent.ts || "",
-          `ℹ️ I only respond to direct mentions (@product-engineer).\n\nPlease mention me to start a new task.`
-        );
+        // Coding product — only respond to @mentions. Silently ignore top-level messages.
+        // (Previously the socket layer filtered these out; now it forwards all messages for research support.)
         return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
       }
 
@@ -2568,15 +2565,6 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     // New mention — resolve product from channel
-    // Load all products from database
-    const productRows = this.ctx.storage.sql.exec(
-      "SELECT slug, config FROM products",
-    ).toArray() as Array<{ slug: string; config: string }>;
-
-    const products = productRows.reduce((acc, row) => {
-      acc[row.slug] = JSON.parse(row.config);
-      return acc;
-    }, {} as Record<string, ProductConfig>);
 
     const product = resolveProductFromChannel(products, slackEvent.channel || "");
     if (!product) {
@@ -2883,7 +2871,8 @@ export class Orchestrator extends Container<Bindings> {
       this.agentManager.updateStatus(ticketUUID, { status: "reviewing" });
       this.agentManager.updateStatus(ticketUUID, { status: "queued" });
     } catch (err) {
-      console.warn(`[Orchestrator] Status transition error for ${ticketUUID}: ${err}`);
+      console.error(`[Orchestrator] Status transition failed for research ticket ${ticketUUID}: ${err}`);
+      return Response.json({ error: `Status transition failed: ${String(err)}` }, { status: 500 });
     }
 
     // Resolve AI gateway config
