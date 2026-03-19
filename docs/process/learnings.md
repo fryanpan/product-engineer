@@ -28,7 +28,7 @@ Technical discoveries that should persist across sessions.
 - `settingSources: ["project"]` loads CLAUDE.md, rules, and skills from the repo, but does NOT load `enabledPlugins` from `.claude/settings.json`. Plugins must be passed explicitly via the `plugins` query option.
 - The SDK `plugins` option only supports `{ type: "local", path: "..." }` — no marketplace resolution. The agent must clone marketplace repos and resolve paths itself.
 - `claude plugin install` requires the full CLI with OAuth login — not usable in headless containers. Instead, shallow-clone the marketplace GitHub repo directly (`anthropics/claude-plugins-official`).
-- Marketplace plugins live in `plugins/<name>/` or `external_plugins/<name>/` in the marketplace repo — each has `.claude-plugin/plugin.json`.
+- Marketplace repos use `.claude-plugin/marketplace.json` as the plugin index. URL-sourced entries (where `source` is an object with a `url` field, e.g., superpowers from `obra/superpowers`) require a separate git clone — they aren't bundled in the marketplace repo itself.
 - Plugin loading should be non-fatal: if cloning fails, the agent continues without plugin skills.
 
 ## Docker / Container Deployment
