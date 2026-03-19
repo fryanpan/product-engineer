@@ -2530,17 +2530,41 @@ export class Orchestrator extends Container<Bindings> {
       }
     }
 
-    // Only create tickets from app_mention events
+    // For non-mention top-level messages: check if this is a research channel with any_message mode
     if (slackEvent.type !== "app_mention") {
-      // This shouldn't happen (Socket Mode only forwards app_mention and thread messages),
-      // but if it does, let the user know
-      await this.postSlackError(
-        slackEvent.channel || "",
-        slackEvent.ts || "",
-        `ℹ️ I only respond to direct mentions (@product-engineer).\n\n` +
-        `Please mention me to start a new task.`
-      );
-      return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
+      // Load products to check if this channel has any_message mode enabled
+      const checkRows = this.ctx.storage.sql.exec(
+        "SELECT slug, config FROM products",
+      ).toArray() as Array<{ slug: string; config: string }>;
+      const checkProducts = checkRows.reduce((acc, row) => {
+        try { acc[row.slug] = JSON.parse(row.config); } catch {}
+        return acc;
+      }, {} as Record<string, ProductConfig>);
+
+      const checkProduct = resolveProductFromChannel(checkProducts, slackEvent.channel || "");
+      if (!checkProduct) {
+        // Unknown channel — silently ignore
+        return Response.json({ ok: true, ignored: true, reason: "unknown channel" });
+      }
+
+      const checkConfig = checkProducts[checkProduct];
+      if (checkConfig.slack_trigger_mode !== "any_message") {
+        // Coding product — only respond to @mentions
+        await this.postSlackError(
+          slackEvent.channel || "",
+          slackEvent.ts || "",
+          `ℹ️ I only respond to direct mentions (@product-engineer).\n\nPlease mention me to start a new task.`
+        );
+        return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
+      }
+
+      // Check allowed users for research product
+      if (!shouldAllowSlackUser(checkConfig.allowed_slack_users, slackEvent.user || "")) {
+        console.log(`[Orchestrator] User ${slackEvent.user} not in allowed list for ${checkProduct} — ignoring`);
+        return Response.json({ ok: true, ignored: true, reason: "user not allowed" });
+      }
+
+      // Research product any_message mode — fall through to product resolution + direct spawn below
     }
 
     // New mention — resolve product from channel
@@ -2580,13 +2604,11 @@ export class Orchestrator extends Container<Bindings> {
     // The Linear webhook will handle ticket creation → agent spawning.
     const productConfig = products[product];
     const projectName = productConfig.triggers?.linear?.project_name;
-    if (!projectName) {
-      await this.postSlackError(
-        slackEvent.channel || "",
-        slackThreadTs || "",
-        `❌ No Linear project configured for this product. Cannot create ticket.`,
-      );
-      return Response.json({ error: "no linear project for product" }, { status: 400 });
+    const isLinearEnabled = productConfig.triggers?.linear?.enabled !== false && !!projectName;
+
+    if (!isLinearEnabled) {
+      // No Linear integration — spawn agent directly (research products and any product without Linear)
+      return this.handleResearchSlackMessage(slackEvent, product, productConfig);
     }
 
     // Load settings for Linear API
@@ -2805,6 +2827,109 @@ export class Orchestrator extends Container<Bindings> {
       .catch(err => console.error("[Orchestrator] Direct ticket review failed:", err));
 
     return Response.json({ ok: true, linearIssue: issue.identifier });
+  }
+
+  /**
+   * Handle a Slack message for a research product — spawn agent directly, no Linear ticket.
+   * Called when product has no Linear integration (triggers.linear.enabled === false or no project_name).
+   */
+  private async handleResearchSlackMessage(
+    slackEvent: {
+      type: string;
+      text?: string;
+      user?: string;
+      channel?: string;
+      thread_ts?: string;
+      ts?: string;
+    },
+    product: string,
+    productConfig: ProductConfig,
+  ): Promise<Response> {
+    const slackThreadTs = slackEvent.ts; // New top-level message ts becomes the thread anchor
+    const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+    const title = rawText ? rawText.slice(0, 80) : "Research request";
+
+    // Create ticket keyed on the Slack message ts (unique per message, stable across re-deliveries)
+    const ticketUUID = sanitizeTicketUUID(slackEvent.ts || `slack-${Date.now()}`);
+
+    // Check if ticket already exists and is active — dedup on re-delivery
+    const existing = this.agentManager.getTicket(ticketUUID);
+    if (existing && !this.agentManager.isTerminal(ticketUUID)) {
+      console.log(`[Orchestrator] Research ticket ${ticketUUID} already exists (status=${existing.status}) — skipping duplicate`);
+      return Response.json({ ok: true, ticketUUID, duplicate: true });
+    }
+
+    // Create the ticket
+    try {
+      this.agentManager.createTicket({
+        ticketUUID,
+        product,
+        slackThreadTs,
+        slackChannel: slackEvent.channel,
+        title,
+      });
+    } catch (err) {
+      // If ticket already exists (race condition), treat as duplicate
+      const existingAfterErr = this.agentManager.getTicket(ticketUUID);
+      if (existingAfterErr && !this.agentManager.isTerminal(ticketUUID)) {
+        return Response.json({ ok: true, ticketUUID, duplicate: true });
+      }
+      console.error(`[Orchestrator] Failed to create research ticket ${ticketUUID}:`, err);
+      return Response.json({ error: String(err) }, { status: 500 });
+    }
+
+    // Transition: created → reviewing → queued
+    try {
+      this.agentManager.updateStatus(ticketUUID, { status: "reviewing" });
+      this.agentManager.updateStatus(ticketUUID, { status: "queued" });
+    } catch (err) {
+      console.warn(`[Orchestrator] Status transition error for ${ticketUUID}: ${err}`);
+    }
+
+    // Resolve AI gateway config
+    let gatewayConfig: { account_id: string; gateway_id: string } | null = null;
+    try {
+      const gatewayRow = this.ctx.storage.sql.exec(
+        "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+      ).toArray()[0] as { value: string } | undefined;
+      gatewayConfig = gatewayRow ? JSON.parse(gatewayRow.value) : null;
+    } catch {}
+
+    const spawnConfig: SpawnConfig = {
+      product,
+      repos: productConfig.repos,
+      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel || "",
+      slackThreadTs,
+      secrets: productConfig.secrets,
+      gatewayConfig,
+    };
+
+    // Build the initial Slack event payload for the agent
+    const event: TicketEvent = {
+      type: "slack_mention",
+      source: "slack",
+      ticketUUID,
+      product,
+      payload: {
+        text: rawText,
+        user: slackEvent.user,
+        channel: slackEvent.channel,
+        thread_ts: slackThreadTs,
+      },
+      slackThreadTs,
+      slackChannel: slackEvent.channel,
+    };
+
+    try {
+      await this.agentManager.spawnAgent(ticketUUID, spawnConfig);
+      await this.agentManager.sendEvent(ticketUUID, event);
+      console.log(`[Orchestrator] Research agent spawned for ticket=${ticketUUID} product=${product}`);
+    } catch (err) {
+      console.error(`[Orchestrator] Failed to spawn research agent for ${ticketUUID}:`, err);
+      return Response.json({ error: String(err) }, { status: 500 });
+    }
+
+    return Response.json({ ok: true, ticketUUID });
   }
 
   private async handleSlackInteractive(request: Request): Promise<Response> {

@@ -128,6 +128,23 @@ describe("resolveProductFromChannel — research product", () => {
   });
 });
 
+describe("handleResearchSlackMessage routing", () => {
+  // Test that isLinearEnabled logic is correct
+  test("research product has no linear enabled", () => {
+    const products = TEST_REGISTRY.products as Record<string, ProductConfig>;
+    const researchConfig = products["boos-research"] as ProductConfig;
+    const isLinearEnabled = researchConfig.triggers?.linear?.enabled !== false && !!researchConfig.triggers?.linear?.project_name;
+    expect(isLinearEnabled).toBe(false);
+  });
+
+  test("coding product has linear enabled", () => {
+    const products = TEST_REGISTRY.products as Record<string, ProductConfig>;
+    const codingConfig = products["test-app"] as ProductConfig;
+    const isLinearEnabled = codingConfig.triggers?.linear?.enabled !== false && !!codingConfig.triggers?.linear?.project_name;
+    expect(isLinearEnabled).toBe(true);
+  });
+});
+
 describe("agent monitoring", () => {
   test("calculates time difference for stuck agents correctly", () => {
     const now = new Date();
