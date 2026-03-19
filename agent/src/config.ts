@@ -118,7 +118,7 @@ export function loadConfig(): AgentConfig {
     product: required("PRODUCT"),
     repos: JSON.parse(required("REPOS")),
     anthropicApiKey: required("ANTHROPIC_API_KEY"),
-    githubToken: required("GITHUB_TOKEN"),
+    githubToken: process.env.GITHUB_TOKEN || "",  // Optional for research products (no git ops)
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackChannel: process.env.SLACK_CHANNEL || "#general",
     slackThreadTs: process.env.SLACK_THREAD_TS || "",

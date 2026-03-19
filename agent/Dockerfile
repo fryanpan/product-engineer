@@ -13,11 +13,14 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Pre-install MCP server packages globally to avoid npx download hangs in containers
+RUN npm install -g @notionhq/notion-mcp-server google-calendar-mcp
+
 # Non-root user — Claude Code refuses bypassPermissions as root
 RUN useradd -m -s /bin/bash agent
 RUN mkdir -p /workspace && chown agent:agent /workspace
 
-# Cache-bust: 2026-03-12-v2
+# Cache-bust: 2026-03-19-v1
 COPY . /app/
 WORKDIR /app
 RUN bun install

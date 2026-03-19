@@ -11,6 +11,7 @@
 
 import Mustache from "mustache";
 import initialTemplate from "./prompts/task-initial.mustache";
+import researchTemplate from "./prompts/task-research-initial.mustache";
 import resumeTemplate from "./prompts/task-resume.mustache";
 
 import type {
@@ -76,15 +77,19 @@ async function fetchSlackFiles(
 export async function buildPrompt(
   task: TaskPayload,
   slackBotToken: string,
+  productType?: string,
 ): Promise<MessageContent> {
-  const header = Mustache.render(initialTemplate, {
+  const template = productType === "research" ? researchTemplate : initialTemplate;
+  const header = Mustache.render(template, {
     product: task.product,
     taskDescription: formatTask(task),
     reposList: task.repos.map((r) => `- \`${r}\``).join("\n"),
     reposContext:
       task.repos.length > 1
         ? "The repos are already cloned into /workspace/. Work across them as needed."
-        : "The repo is already cloned into /workspace/.",
+        : task.repos.length === 1
+          ? "The repo is already cloned into /workspace/."
+          : "No repos — working in /workspace/.",
   });
 
   // If task has files (from Slack), fetch and append images

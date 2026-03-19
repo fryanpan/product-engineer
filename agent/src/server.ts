@@ -8,6 +8,7 @@
 
 import * as Sentry from "@sentry/bun";
 import { Hono } from "hono";
+import { writeFileSync } from "fs";
 import {
   query,
   createSdkMcpServer,
@@ -44,6 +45,18 @@ console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 
 const config = loadConfig();
 console.log(`[Agent] Config loaded: ticket=${config.ticketUUID} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"}`);
+
+// Write Google Calendar OAuth credentials to disk so google-calendar-mcp can read them.
+// The credentials JSON is passed as GOOGLE_CALENDAR_CREDENTIALS env var (Cloudflare secret).
+const gcalCredsJson = process.env.GOOGLE_CALENDAR_CREDENTIALS;
+if (gcalCredsJson) {
+  try {
+    writeFileSync("/tmp/google-calendar-credentials.json", gcalCredsJson);
+    console.log("[Agent] Google Calendar credentials written to /tmp/google-calendar-credentials.json");
+  } catch (err) {
+    console.error("[Agent] Failed to write Google Calendar credentials (non-fatal):", err);
+  }
+}
 
 // Phone-home: heartbeat + log message to the orchestrator.
 // Every call updates last_heartbeat. The message is for observability only — the
@@ -765,7 +778,7 @@ app.post("/event", async (c) => {
         config.ticketTitle = ticketData.title;
       }
 
-      const prompt = await buildPrompt(taskPayload, config.slackBotToken);
+      const prompt = await buildPrompt(taskPayload, config.slackBotToken, config.productType);
       await startSession(prompt);
       // Drain any events buffered while the container was unreachable
       drainBufferedEvents();

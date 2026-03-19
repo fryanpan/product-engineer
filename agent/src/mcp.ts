@@ -47,16 +47,31 @@ export function buildMcpServers(): Record<string, McpServerConfig> {
   }
   servers.context7 = context7;
 
-  // Notion — stdio via npx (disabled: npx download can hang in containers)
-  // TODO: Re-enable once we pre-install MCP server packages in the Dockerfile
-  // const notionToken = process.env.NOTION_TOKEN;
-  // if (notionToken) {
-  //   servers.notion = {
-  //     command: "npx",
-  //     args: ["-y", "@notionhq/notion-mcp-server"],
-  //     env: { NOTION_TOKEN: notionToken },
-  //   };
-  // }
+  // Notion — pre-installed binary, activated when NOTION_TOKEN is set
+  // @notionhq/notion-mcp-server is installed globally in the Dockerfile
+  const notionToken = process.env.NOTION_TOKEN;
+  if (notionToken) {
+    servers.notion = {
+      command: "notion-mcp-server",
+      env: {
+        OPENAPI_MCP_HEADERS: JSON.stringify({
+          Authorization: `Bearer ${notionToken}`,
+          "Notion-Version": "2022-06-28",
+        }),
+      },
+    };
+  }
+
+  // Google Calendar — pre-installed binary, activated when GOOGLE_CALENDAR_CREDENTIALS is set
+  // google-calendar-mcp is installed globally in the Dockerfile
+  // server.ts writes the JSON credentials to /tmp/google-calendar-credentials.json at startup
+  const gcalCreds = process.env.GOOGLE_CALENDAR_CREDENTIALS;
+  if (gcalCreds) {
+    servers.google_calendar = {
+      command: "google-calendar-mcp",
+      env: { GOOGLE_CALENDAR_CREDENTIALS_PATH: "/tmp/google-calendar-credentials.json" },
+    };
+  }
 
   // Sentry — stdio via npx (disabled: npx download can hang in containers)
   // TODO: Re-enable once we pre-install MCP server packages in the Dockerfile

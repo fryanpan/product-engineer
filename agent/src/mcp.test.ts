@@ -12,6 +12,7 @@ describe("buildMcpServers", () => {
     delete process.env.NOTION_TOKEN;
     delete process.env.SENTRY_ACCESS_TOKEN;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GOOGLE_CALENDAR_CREDENTIALS;
   });
 
   afterEach(() => {
@@ -54,9 +55,30 @@ describe("buildMcpServers", () => {
     });
   });
 
-  // Notion and Sentry stdio servers are disabled (npx hangs in containers).
-  // These tests are skipped until we pre-install MCP server packages in the Dockerfile.
-  it.skip("includes notion when NOTION_TOKEN is set", () => {});
+  it("includes notion when NOTION_TOKEN is set", () => {
+    process.env.NOTION_TOKEN = "ntn_test_key";
+
+    const servers = buildMcpServers();
+
+    expect(Object.keys(servers)).toContain("notion");
+    const notion = servers.notion as { command: string; env?: Record<string, string> };
+    expect(notion.command).toBe("notion-mcp-server");
+    expect(notion.env?.OPENAPI_MCP_HEADERS).toContain("Bearer ntn_test_key");
+    expect(notion.env?.OPENAPI_MCP_HEADERS).toContain("Notion-Version");
+  });
+
+  it("includes google_calendar when GOOGLE_CALENDAR_CREDENTIALS is set", () => {
+    process.env.GOOGLE_CALENDAR_CREDENTIALS = JSON.stringify({ client_id: "test", refresh_token: "tok" });
+
+    const servers = buildMcpServers();
+
+    expect(Object.keys(servers)).toContain("google_calendar");
+    const gcal = servers.google_calendar as { command: string; env?: Record<string, string> };
+    expect(gcal.command).toBe("google-calendar-mcp");
+    expect(gcal.env?.GOOGLE_CALENDAR_CREDENTIALS_PATH).toBe("/tmp/google-calendar-credentials.json");
+  });
+
+  // Sentry stdio server disabled (npx hangs in containers)
   it.skip("includes sentry when SENTRY_ACCESS_TOKEN is set", () => {});
   it.skip("includes sentry without ANTHROPIC_API_KEY in env", () => {});
 
@@ -69,7 +91,9 @@ describe("buildMcpServers", () => {
     const keys = Object.keys(servers);
     expect(keys).toContain("linear");
     expect(keys).toContain("context7");
-    expect(keys).toHaveLength(2);
+    // notion and google_calendar not set — only http servers
+    expect(keys).not.toContain("notion");
+    expect(keys).not.toContain("google_calendar");
   });
 
   it("produces correct types for http configs", () => {
@@ -88,6 +112,13 @@ describe("buildMcpServers", () => {
     expect(typeof context7.url).toBe("string");
   });
 
-  // Stdio config type tests skipped — Notion/Sentry disabled (npx hangs in containers)
-  it.skip("produces correct types for stdio configs", () => {});
+  it("produces correct types for stdio configs (notion)", () => {
+    process.env.NOTION_TOKEN = "ntn_key";
+
+    const servers = buildMcpServers();
+
+    const notion = servers.notion as { command?: string; args?: string[]; env?: Record<string, string> };
+    expect(typeof notion.command).toBe("string");
+    expect(notion.env).toBeDefined();
+  });
 });
