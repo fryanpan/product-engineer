@@ -25,6 +25,14 @@ interface SlackEnvelope {
       files?: SlackFile[];
       slash_command?: string;
     };
+    // Interactive payloads (button clicks, modal submissions) — delivered as envelope.type === "interactive"
+    type?: string;
+    user?: { id: string };
+    actions?: Array<{ action_id: string; value: string }>;
+    channel?: { id: string };
+    message?: { ts: string; blocks?: unknown[] };
+    trigger_id?: string;
+    view?: unknown;
   };
 }
 
@@ -32,6 +40,7 @@ export class SlackSocket {
   private appToken: string;
   private botUserId: string | null = null;
   private onEvent: (event: NonNullable<SlackEnvelope["payload"]>["event"] & {}) => void;
+  private onInteractive: ((payload: NonNullable<SlackEnvelope["payload"]>) => void) | null = null;
   private ws: WebSocket | null = null;
   private reconnectAttempts = 0;
   private maxReconnectDelay = 60_000;
@@ -40,10 +49,12 @@ export class SlackSocket {
     appToken: string,
     onEvent: (event: NonNullable<SlackEnvelope["payload"]>["event"] & {}) => void,
     botUserId?: string,
+    onInteractive?: (payload: NonNullable<SlackEnvelope["payload"]>) => void,
   ) {
     this.appToken = appToken;
     this.onEvent = onEvent;
     this.botUserId = botUserId || null;
+    this.onInteractive = onInteractive || null;
   }
 
   async connect(): Promise<void> {
@@ -71,6 +82,12 @@ export class SlackSocket {
 
         if (envelope.envelope_id) {
           this.ws?.send(JSON.stringify({ envelope_id: envelope.envelope_id }));
+        }
+
+        // Handle interactive payloads (button clicks, modal submissions)
+        if (envelope.type === "interactive" && envelope.payload && this.onInteractive) {
+          this.onInteractive(envelope.payload);
+          return;
         }
 
         const slackEvent = envelope.payload?.event;
