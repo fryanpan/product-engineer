@@ -353,6 +353,28 @@ export class ProjectAgent extends Container<Bindings> {
         return Response.json({ ok: true, service: "project-agent-do" });
       }
 
+      case "/restart": {
+        // Force restart the container with the latest image.
+        // Used after deploys to pick up new code.
+        const config = this.getConfig();
+        if (!config) {
+          return Response.json({ error: "No config — agent never initialized" }, { status: 400 });
+        }
+        console.log(`[ProjectAgent] Force restarting container for ${config.product}`);
+        try {
+          await this.startAndWaitForPorts({
+            ports: this.defaultPort,
+            startOptions: { envVars: this.envVars as Record<string, string> },
+          });
+          await this.replayBufferedEvents();
+          this.ctx.storage.setAlarm(Date.now() + 300_000);
+          return Response.json({ ok: true, status: "restarted" });
+        } catch (err) {
+          console.error(`[ProjectAgent] Restart failed:`, err);
+          return Response.json({ error: String(err) }, { status: 500 });
+        }
+      }
+
       case "/status": {
         try {
           return await this.containerFetch("http://localhost/status", {

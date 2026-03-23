@@ -464,6 +464,18 @@ app.post("/api/orchestrator/shutdown-all", async (c) => {
   }));
 });
 
+// Orchestrator: restart all ProjectAgent containers (pick up new code after deploy)
+app.post("/api/orchestrator/restart-project-agents", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const orchestrator = getOrchestrator(c.env);
+  return orchestrator.fetch(new Request("http://internal/restart-project-agents", {
+    method: "POST",
+  }));
+});
+
 // === Project Agent internal endpoints ===
 // Called by project agent containers to interact with the orchestrator
 

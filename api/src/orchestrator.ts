@@ -651,6 +651,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.cleanupInactiveAgents();
       case "/shutdown-all":
         return this.shutdownAllAgents();
+      case "/restart-project-agents":
+        return this.restartProjectAgents();
       case "/products":
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
@@ -1620,6 +1622,39 @@ export class Orchestrator extends Container<Bindings> {
       failed: results.length - successCount,
       results,
     });
+  }
+
+  /**
+   * Force restart all ProjectAgent containers to pick up new code after deploy.
+   */
+  private async restartProjectAgents(): Promise<Response> {
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT slug FROM products",
+    ).toArray() as Array<{ slug: string }>;
+
+    const products = [...productRows.map(r => r.slug), "__conductor__"];
+    const results: Array<{ product: string; success: boolean; error?: string }> = [];
+
+    for (const product of products) {
+      try {
+        const id = this.env.PROJECT_AGENT.idFromName(product);
+        const stub = this.env.PROJECT_AGENT.get(id);
+        const res = await stub.fetch(new Request("http://project-agent/restart", {
+          method: "POST",
+        }));
+        if (res.ok) {
+          results.push({ product, success: true });
+        } else {
+          const errText = await res.text().catch(() => "unknown");
+          results.push({ product, success: false, error: errText });
+        }
+      } catch (err) {
+        results.push({ product, success: false, error: String(err) });
+      }
+    }
+
+    console.log(`[Orchestrator] Restarted ${results.filter(r => r.success).length}/${results.length} ProjectAgents`);
+    return Response.json({ ok: true, results });
   }
 
   private listTickets(): Response {
