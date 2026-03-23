@@ -31,6 +31,7 @@ export interface TicketData {
   description: string;
   priority: number;
   labels: string[];
+  comments?: Array<{ user: string; body: string; createdAt: string }>;
 }
 
 export interface SlackFile {

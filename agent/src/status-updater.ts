@@ -30,6 +30,7 @@ const LINEAR_STATE_MAP: Record<string, string> = {
   deferred: "Canceled",
   failed: "Canceled",
   asking: "In Progress",
+  needs_info: "In Progress",
 };
 
 export class StatusUpdater {

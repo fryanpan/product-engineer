@@ -599,3 +599,26 @@ When gathering context for LLM decisions, failing with clear error is better tha
 - When building deduplication logic, enumerate all state dimensions that should trigger re-evaluation, not just the obvious one
 - User questions during code review are often more valuable than autonomous review
 - For merge/deploy automation, explicitly consider: "what happens when X changes but Y stays the same?"
+
+## 2026-03-18 - BC-173: Fix Linear bugs and dashboard
+
+**What worked:**
+- Systematic code exploration found all three root causes quickly
+- Reading actual Linear webhook payload structure revealed missing comments
+- Combining multiple related fixes in one PR for coherent review
+
+**What didn't:**
+- Initial ticket had no title/description, illustrating the bug we were fixing
+- Couldn't access Linear API during investigation (token not in env)
+- WebFetch failed on Linear (SPA rendering)
+
+**Learnings:**
+- Linear webhook only sends basic issue fields by default - comments must be fetched via separate GraphQL query
+- Agent prompt construction happens in agent/src/prompt.ts formatTicket() - this is where ticket data becomes visible to the agent
+- ask_question tool needs orchestrator state update to prevent rapid-fire duplicate calls
+- Title truncation at 80 chars was too aggressive, especially with punctuation-based sentence splitting
+
+**Action:**
+- Consider adding Linear comment sync as a recurring check (not just on webhook)
+- Add integration test that verifies agent receives ticket comments
+- Document the ticket data flow: Linear webhook → orchestrator → agent event → prompt builder
