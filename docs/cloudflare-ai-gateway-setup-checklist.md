@@ -44,7 +44,7 @@ Replace `YOUR_ACCOUNT_ID_HERE` and `YOUR_GATEWAY_ID_HERE` with the values from S
 ### 3. Deploy the Orchestrator
 
 ```bash
-cd orchestrator
+cd api
 bun run deploy
 ```
 

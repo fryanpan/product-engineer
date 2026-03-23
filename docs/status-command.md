@@ -56,7 +56,7 @@ Last 5 completed tickets from the past 24 hours, showing:
    - Adds `slash_command: "agent-status"` field to event
    - Forwards to Orchestrator DO
 
-2. **Orchestrator DO** (`orchestrator/src/orchestrator.ts`)
+2. **Orchestrator DO** (`api/src/orchestrator.ts`)
    - `handleSlackEvent()`: Routes slash commands
    - `getSystemStatus()`: Queries SQLite for agent data
    - `handleStatusCommand()`: Formats and posts Slack response
@@ -88,7 +88,7 @@ Stale agents (>30 min) are also listed separately with a warning.
 Run tests:
 
 ```bash
-cd orchestrator
+cd api
 bun test src/status-command.test.ts
 ```
 
@@ -100,6 +100,6 @@ Test in Slack:
 ## Related Files
 
 - `containers/orchestrator/slack-socket.ts` - Slash command detection
-- `orchestrator/src/orchestrator.ts` - Status query and response formatting
-- `orchestrator/src/status-command.test.ts` - Unit tests
+- `api/src/orchestrator.ts` - Status query and response formatting
+- `api/src/status-command.test.ts` - Unit tests
 - `agent/src/server.ts` - Heartbeat sending (line 247-265)

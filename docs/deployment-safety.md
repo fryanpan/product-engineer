@@ -11,10 +11,10 @@ This document describes how Product Engineer handles deployments without disrupt
 
 ## Architecture: Single Worker
 
-Product Engineer deploys as a **single worker** (`orchestrator/`) containing both the Orchestrator DO and TicketAgent DO classes:
+Product Engineer deploys as a **single worker** (`api/`) containing both the Orchestrator DO and TicketAgent DO classes:
 
 ```toml
-# orchestrator/wrangler.toml
+# api/wrangler.toml
 [durable_objects]
 bindings = [
   { name = "ORCHESTRATOR", class_name = "Orchestrator" },
@@ -131,7 +131,7 @@ setTimeout(async () => {
 **Implementation:**
 
 ```typescript
-// orchestrator/src/orchestrator.ts
+// api/src/orchestrator.ts
 override onStop(params: { exitCode: number; reason: string }) {
   console.error(`[Orchestrator] Container stopped: ${params.exitCode} ${params.reason}`);
   this.containerStarted = false; // Allow restart on next fetch
@@ -178,7 +178,7 @@ private async ensureContainerRunning() {
 **Implementation:**
 
 ```typescript
-// orchestrator/src/orchestrator.ts
+// api/src/orchestrator.ts
 private async handleStatusUpdate(request: Request) {
   // ...
   const terminalStates = ["merged", "closed", "deferred", "failed"];
@@ -212,7 +212,7 @@ private async routeToAgent(event: TicketEvent) {
 **Solution:** Webhook handler checks for terminal states before forwarding (on both `create` and `update` actions):
 
 ```typescript
-// orchestrator/src/webhooks.ts
+// api/src/webhooks.ts
 const TERMINAL_STATES = ["Done", "Canceled", "Cancelled"];
 const stateName = payload.data.state?.name ?? "";
 const isTerminal = TERMINAL_STATES.includes(stateName);
@@ -238,7 +238,7 @@ if (!shouldTrigger) {
 ### Deploy
 
 ```bash
-cd orchestrator
+cd api
 wrangler deploy
 ```
 
@@ -294,7 +294,7 @@ curl -H "X-API-Key: YOUR_KEY" \
 All secrets are set once on the single worker:
 
 ```bash
-cd orchestrator
+cd api
 wrangler secret put WORKER_URL             # Deployed Worker URL (e.g., https://product-engineer.your-subdomain.workers.dev)
 wrangler secret put SLACK_BOT_TOKEN
 wrangler secret put LINEAR_API_KEY
@@ -321,7 +321,7 @@ The Worker accepts the webhook, forwards it to the Orchestrator DO. If the conta
 
 ### How do I force a container to use new code?
 
-Deploy the worker: `cd orchestrator && wrangler deploy`. Cloudflare gradually replaces TicketAgent containers. The Orchestrator container restarts on next request.
+Deploy the worker: `cd api && wrangler deploy`. Cloudflare gradually replaces TicketAgent containers. The Orchestrator container restarts on next request.
 
 ### Can I deploy during a critical operation?
 
@@ -349,7 +349,7 @@ R2 is only used for transcript backup, not session persistence. If R2 is down, a
 
 1. Create a test ticket in Linear (e.g., "Create a hello world file")
 2. Watch the agent start work in Slack
-3. While the agent is working, run `cd orchestrator && wrangler deploy`
+3. While the agent is working, run `cd api && wrangler deploy`
 4. Observe that the agent continues without interruption
 5. Verify the agent completes the PR and reports success
 
@@ -357,7 +357,7 @@ R2 is only used for transcript backup, not session persistence. If R2 is down, a
 
 1. Create a test ticket
 2. Wait for the agent to start work and push at least one commit
-3. Deploy: `cd orchestrator && wrangler deploy`
+3. Deploy: `cd api && wrangler deploy`
 4. In `wrangler tail --name product-engineer`, look for `[Agent] Auto-resuming from branch: ...`
 5. Verify the agent continues working on the same branch with context preserved
 6. Check for `phoneHome("auto_resume")` in logs
@@ -373,9 +373,9 @@ R2 is only used for transcript backup, not session persistence. If R2 is down, a
 ### Automated Tests
 
 The deployment safety logic is tested via:
-- `orchestrator/src/orchestrator.test.ts` — unit tests for `buildTicketEvent`, `resolveProductFromChannel`
-- `orchestrator/src/linear-webhook.test.ts` — webhook handling including terminal state filtering (Done, Canceled, Cancelled), agent assignment triggers, and unknown project rejection
-- `orchestrator/src/ticket-agent.test.ts` — `resolveAgentEnvVars` includes required env vars
+- `api/src/orchestrator.test.ts` — unit tests for `buildTicketEvent`, `resolveProductFromChannel`
+- `api/src/linear-webhook.test.ts` — webhook handling including terminal state filtering (Done, Canceled, Cancelled), agent assignment triggers, and unknown project rejection
+- `api/src/ticket-agent.test.ts` — `resolveAgentEnvVars` includes required env vars
 - Manual smoke tests (above)
 
 Full integration tests require a deployed Cloudflare environment and are beyond the scope of the test suite.
@@ -400,4 +400,4 @@ Full integration tests require a deployed Cloudflare environment and are beyond 
 
 **Cause:** Secrets not set on the worker.
 
-**Fix:** Run `cd orchestrator && wrangler secret list` to check, then `wrangler secret put <NAME>` for any missing secrets.
+**Fix:** Run `cd api && wrangler secret list` to check, then `wrangler secret put <NAME>` for any missing secrets.

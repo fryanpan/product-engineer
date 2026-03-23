@@ -226,11 +226,11 @@ The following can be done programmatically with API access:
 | Detailed setup | `docs/dashboard-setup.md` |
 | AI Gateway docs | `docs/cloudflare-ai-gateway.md` |
 | User README | `README-DASHBOARD.md` |
-| Auth code | `orchestrator/src/auth.ts` |
-| Dashboard UI | `orchestrator/src/dashboard.html` |
-| Dashboard routes | `orchestrator/src/dashboard.ts` |
-| Main routes | `orchestrator/src/index.ts` |
-| Wrangler config | `orchestrator/wrangler.toml` |
+| Auth code | `api/src/auth.ts` |
+| Dashboard UI | `api/src/dashboard.html` |
+| Dashboard routes | `api/src/dashboard.ts` |
+| Main routes | `api/src/index.ts` |
+| Wrangler config | `api/wrangler.toml` |
 
 ---
 

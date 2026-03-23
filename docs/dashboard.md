@@ -28,7 +28,7 @@ Web-based dashboard for monitoring and managing active Product Engineer ticket a
 ### 2. Configure Secrets
 
 ```bash
-cd orchestrator
+cd api
 
 # Required
 wrangler secret put GOOGLE_CLIENT_ID
@@ -41,7 +41,7 @@ wrangler secret put GOOGLE_ALLOWED_DOMAIN
 ### 3. Deploy
 
 ```bash
-cd orchestrator
+cd api
 bun run deploy
 ```
 

@@ -33,7 +33,7 @@ The agent dashboard provides real-time monitoring and control of active ticket a
 ### 1. Create KV Namespace
 
 ```bash
-cd orchestrator
+cd api
 wrangler kv namespace create SESSIONS
 ```
 
@@ -61,7 +61,7 @@ id = "<YOUR_NAMESPACE_ID>"
 ### 3. Set Secrets
 
 ```bash
-cd orchestrator
+cd api
 
 # Google OAuth credentials
 wrangler secret put GOOGLE_CLIENT_ID

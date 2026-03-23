@@ -16,7 +16,7 @@ For deployment safety and zero-disruption updates, see [deployment-safety.md](./
 ## Step 1: Deploy
 
 ```bash
-cd orchestrator
+cd api
 wrangler deploy
 ```
 
@@ -28,13 +28,13 @@ First deploy may take several minutes for container image builds.
 
 ```bash
 # The orchestrator container uses this to forward Slack events
-cd orchestrator && wrangler secret put WORKER_URL   # e.g., https://product-engineer.your-subdomain.workers.dev
+cd api && wrangler secret put WORKER_URL   # e.g., https://product-engineer.your-subdomain.workers.dev
 ```
 
 ### Platform secrets
 
 ```bash
-cd orchestrator
+cd api
 
 # Auth
 wrangler secret put API_KEY              # Random string for internal API auth

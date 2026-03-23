@@ -218,7 +218,7 @@ cat <<'STEP'
   4. URL: https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/linear
   5. Events: check "Issues" (creates, updates)
   6. Secret: use the LINEAR_WEBHOOK_SECRET generated in step 1
-     (run: cd orchestrator && npx wrangler secret list  to verify it's set)
+     (run: cd api && npx wrangler secret list  to verify it's set)
   7. Click "Create webhook"
 
 STEP
@@ -252,7 +252,7 @@ cat <<'STEP'
   9. Copy the token (starts with github_pat_)
 
   Then set the secret:
-    cd orchestrator && npx wrangler secret put <PRODUCT>_GITHUB_TOKEN
+    cd api && npx wrangler secret put <PRODUCT>_GITHUB_TOKEN
 
 STEP
 echo ""
@@ -283,7 +283,7 @@ cat <<'STEP'
   3. Content type: application/json
   4. Secret: the GITHUB_WEBHOOK_SECRET generated in step 1
      (if you need the value, re-generate and update with:
-      openssl rand -hex 32 | tee /dev/stderr | cd orchestrator && npx wrangler secret put GITHUB_WEBHOOK_SECRET)
+      openssl rand -hex 32 | tee /dev/stderr | cd api && npx wrangler secret put GITHUB_WEBHOOK_SECRET)
   5. Which events? → "Let me select individual events":
      - Pull requests
      - Pull request reviews
@@ -459,8 +459,8 @@ else
   echo "  (could not detect GitHub repo from git remote — check manually)"
 fi
 
-DEPLOY_CMD="cd orchestrator && npx wrangler deploy"
-TAIL_CMD="cd orchestrator && npx wrangler tail"
+DEPLOY_CMD="cd api && npx wrangler deploy"
+TAIL_CMD="cd api && npx wrangler tail"
 if [ -n "$WRANGLER_ENV" ]; then
   DEPLOY_CMD="$DEPLOY_CMD --env $WRANGLER_ENV"
   TAIL_CMD="$TAIL_CMD --env $WRANGLER_ENV"

@@ -76,7 +76,7 @@ Seed or update the AI Gateway config via the admin API. If seeding from a JSON f
 ### 3. Deploy
 
 ```bash
-cd orchestrator
+cd api
 bun run deploy
 ```
 

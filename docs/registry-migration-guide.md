@@ -38,7 +38,7 @@ curl -H "X-API-Key: $API_KEY" https://your-worker.workers.dev/api/settings
 Set `WORKER_URL` as a Cloudflare secret:
 
 ```bash
-cd orchestrator && wrangler secret put WORKER_URL   # e.g., https://product-engineer.your-subdomain.workers.dev
+cd api && wrangler secret put WORKER_URL   # e.g., https://product-engineer.your-subdomain.workers.dev
 ```
 
 ### Step 4: Test

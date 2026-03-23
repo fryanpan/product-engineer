@@ -198,7 +198,7 @@ For each repo, verify:
 - Verify Linear project name exactly matches registry
 - Check Linear webhook is configured with correct URL and secret
 - Verify ticket is in the correct team (check `linear_team_id`)
-- Check orchestrator logs: `cd orchestrator && npx wrangler tail`
+- Check orchestrator logs: `cd api && npx wrangler tail`
 
 ### Agent doesn't respond in Slack
 

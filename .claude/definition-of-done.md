@@ -4,7 +4,7 @@ Checklist items the agent MUST satisfy before creating a PR.
 If any item cannot be satisfied, ask for help via Slack instead of creating the PR.
 
 ## Always
-- [ ] All existing tests pass (`cd orchestrator && bun test`, `cd agent && bun test`)
+- [ ] All existing tests pass (`cd api && bun test`, `cd agent && bun test`)
 - [ ] New code has test coverage for key logic and edge cases
 - [ ] Self-reviewed diff for bugs, security issues, and unintended changes
 - [ ] No secrets, API keys, personal project names, or repo URLs in committed code

@@ -107,11 +107,11 @@ Product Registry (SQLite)
   }
   │
   ▼
-orchestrator/src/registry.ts
+api/src/registry.ts
   getAIGatewayConfig() → { account_id, gateway_id }
   │
   ▼
-orchestrator/src/ticket-agent.ts
+api/src/ticket-agent.ts
   resolveAgentEnvVars()
   │
   │ Constructs URL:
