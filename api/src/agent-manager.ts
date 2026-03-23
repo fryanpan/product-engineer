@@ -1,4 +1,5 @@
-import { VALID_TRANSITIONS, TERMINAL_STATUSES, type TicketState, type TicketRecord } from "./types";
+import { TERMINAL_STATUSES, type TicketState, type TicketRecord } from "./types";
+import { applyTransition, isTerminal as isTerminalStatus } from "./state-machine";
 
 export interface CreateTicketParams {
   ticketUUID: string;
@@ -25,6 +26,8 @@ export interface SpawnConfig {
   secrets: Record<string, string>;
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
   model?: string;
+  mode?: "coding" | "research" | "flexible";
+  slackPersona?: { username: string; icon_emoji?: string; icon_url?: string };
 }
 
 interface SqlResult {
@@ -108,14 +111,19 @@ export class AgentManager {
       return ticket;
     }
 
-    // Validate state transition if status is changing
+    // Use the pure state machine for status transitions
+    let transitioned = ticket;
     if (update.status && update.status !== ticket.status) {
-      const currentState = ticket.status as TicketState;
-      const allowed = VALID_TRANSITIONS[currentState];
-      if (!allowed || !(allowed as readonly string[]).includes(update.status)) {
-        throw new Error(
-          `Invalid transition: ${currentState} → ${update.status} (allowed: ${(allowed || []).join(", ")})`
+      const result = applyTransition(ticket, update.status);
+      if (!result) {
+        console.warn(
+          `[AgentManager] Invalid transition: ${ticket.status} → ${update.status} for ${ticketUUID}`
         );
+        return ticket;
+      }
+      transitioned = result;
+      if (isTerminalStatus(update.status)) {
+        console.log(`[AgentManager] Terminal state ${update.status} for ${ticketUUID}`);
       }
     }
 
@@ -124,12 +132,12 @@ export class AgentManager {
 
     if (update.status) {
       sets.push("status = ?");
-      values.push(update.status);
+      values.push(transitioned.status);
 
-      // Auto-set agent_active=0 on terminal
-      if ((TERMINAL_STATUSES as readonly string[]).includes(update.status)) {
-        sets.push("agent_active = 0");
-        console.log(`[AgentManager] Terminal state ${update.status} for ${ticketUUID}`);
+      // agent_active side effects come from the state machine
+      if (transitioned.agent_active !== ticket.agent_active) {
+        sets.push("agent_active = ?");
+        values.push(transitioned.agent_active);
       }
     }
     if (update.pr_url !== undefined) { sets.push("pr_url = ?"); values.push(update.pr_url); }
@@ -190,6 +198,8 @@ export class AgentManager {
           secrets: config.secrets,
           gatewayConfig: config.gatewayConfig,
           model: config.model,
+          mode: config.mode,
+          slackPersona: config.slackPersona,
         }),
       }));
 

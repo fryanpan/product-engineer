@@ -20,10 +20,18 @@ image = "../agent/Dockerfile"
 instance_type = "basic"
 max_instances = 20
 
+# Per-product project agents — persistent, accumulate context over time
+[[containers]]
+class_name = "ProjectAgent"
+image = "../agent/Dockerfile"
+instance_type = "basic"
+max_instances = 10
+
 [durable_objects]
 bindings = [
   { name = "ORCHESTRATOR", class_name = "Orchestrator" },
-  { name = "TICKET_AGENT", class_name = "TicketAgent" }
+  { name = "TICKET_AGENT", class_name = "TicketAgent" },
+  { name = "PROJECT_AGENT", class_name = "ProjectAgent" }
 ]
 
 [[r2_buckets]]
@@ -37,17 +45,9 @@ id = "5b4f4cc3f3b342c59eead588a5446ca8"
 # Then update this ID with the actual namespace ID
 
 [vars]
-DECISIONS_CHANNEL = "#product-engineer-decisions"
-
 # WORKER_URL must be set via `wrangler secret put WORKER_URL` before deploying.
 # Value: the deployed Worker URL (e.g., "https://product-engineer.your-subdomain.workers.dev")
 # The orchestrator container uses this to forward Slack events back to the Worker.
-
-# v1 was the original queue-based architecture (now replaced)
-[[rules]]
-type = "Text"
-globs = ["**/*.mustache"]
-fallthrough = true
 
 [[migrations]]
 tag = "v1"
@@ -58,13 +58,14 @@ tag = "v2"
 new_sqlite_classes = ["Orchestrator", "TicketAgent"]
 deleted_classes = ["Sandbox"]
 
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["ProjectAgent"]
+
 # ── Staging environment ──────────────────────────────────────────────
 # Deploy with: wrangler deploy --env staging
 [env.staging]
 name = "product-engineer-stg"
-
-[env.staging.vars]
-DECISIONS_CHANNEL = "#staging-pe-decisions"
 
 [[env.staging.r2_buckets]]
 binding = "TRANSCRIPTS"
@@ -77,7 +78,8 @@ id = "52c44a6e0d144e53a51c9cb4e9bcbbe0"
 [env.staging.durable_objects]
 bindings = [
   { name = "ORCHESTRATOR", class_name = "Orchestrator" },
-  { name = "TICKET_AGENT", class_name = "TicketAgent" }
+  { name = "TICKET_AGENT", class_name = "TicketAgent" },
+  { name = "PROJECT_AGENT", class_name = "ProjectAgent" }
 ]
 
 # Orchestrator — always-on, Slack Socket Mode, event routing
@@ -93,4 +95,11 @@ class_name = "TicketAgent"
 image = "../agent/Dockerfile"
 instance_type = "basic"
 max_instances = 5
+
+# Per-product project agents — persistent
+[[env.staging.containers]]
+class_name = "ProjectAgent"
+image = "../agent/Dockerfile"
+instance_type = "basic"
+max_instances = 3
 

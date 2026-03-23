@@ -28,6 +28,12 @@ export function resolveAgentEnvVars(
     CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
     // Model selection (sonnet, opus, haiku)
     MODEL: config.model || "",
+    // Agent mode (coding, research, flexible)
+    MODE: config.mode || "coding",
+    // Slack persona for outbound messages
+    SLACK_PERSONA: config.slackPersona ? JSON.stringify(config.slackPersona) : "",
+    // Secret prompt delimiter for wrapping untrusted input (defense-in-depth)
+    PROMPT_DELIMITER: env.PROMPT_DELIMITER || "",
   };
 
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {

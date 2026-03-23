@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { getLinearAppUserId, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
+import { normalizeLinearEvent, normalizeGitHubEvent } from "./security/normalized-event";
 
 function getOrchestrator(env: Bindings): DurableObjectStub {
   const id = env.ORCHESTRATOR.idFromName("main");
@@ -194,6 +195,16 @@ linearWebhook.post("/", async (c) => {
 
     const ticketStatus = await statusRes.json<{ status: string; product: string }>();
 
+    const commentScanResult = await normalizeLinearEvent({
+      action: payload.action,
+      type: payload.type,
+      data: { id: commentData.id, body: commentData.body },
+    } as Record<string, unknown>);
+    if (!commentScanResult.ok) {
+      console.warn(`[Linear] Comment rejected: ${commentScanResult.error}`);
+      return c.json({ error: "Event rejected: suspicious content detected" }, 400);
+    }
+
     await forwardToOrchestrator(c.env, {
       type: "linear_comment",
       source: "linear",
@@ -209,6 +220,13 @@ linearWebhook.post("/", async (c) => {
     });
 
     return c.json({ ok: true, ticketUUID: commentData.issue.id });
+  }
+
+  // Scan free-text fields for injection attacks
+  const scanResult = await normalizeLinearEvent(payload as unknown as Record<string, unknown>);
+  if (!scanResult.ok) {
+    console.warn(`[Linear] Event rejected: ${scanResult.error}`);
+    return c.json({ error: "Event rejected: suspicious content detected" }, 400);
   }
 
   if (!(await isOurTeam(orchestrator, payload.data.teamId))) {
@@ -349,6 +367,13 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     repository: { full_name: string };
   };
 
+  // Scan free-text fields for injection attacks
+  const ghScan = await normalizeGitHubEvent("pull_request", payload as unknown as Record<string, unknown>);
+  if (!ghScan.ok) {
+    console.warn(`[GitHub] PR event rejected: ${ghScan.error}`);
+    return Response.json({ error: "Event rejected: suspicious content" }, { status: 400 });
+  }
+
   const branch = payload.pull_request.head.ref;
   const taskId = extractTaskId(branch);
   if (!taskId) {
@@ -464,6 +489,13 @@ async function handlePullRequestReview(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true });
   }
 
+  // Scan free-text fields for injection attacks
+  const ghScan = await normalizeGitHubEvent("pull_request_review", payload as unknown as Record<string, unknown>);
+  if (!ghScan.ok) {
+    console.warn(`[GitHub] PR review rejected: ${ghScan.error}`);
+    return Response.json({ error: "Event rejected: suspicious content" }, { status: 400 });
+  }
+
   const branch = payload.pull_request.head.ref;
   const taskId = extractTaskId(branch);
   if (!taskId) {
@@ -514,6 +546,13 @@ async function handlePullRequestReviewComment(rawBody: string, env: Bindings) {
 
   if (payload.action !== "created") {
     return Response.json({ ok: true, ignored: true });
+  }
+
+  // Scan free-text fields for injection attacks
+  const ghScan = await normalizeGitHubEvent("pull_request_review_comment", payload as unknown as Record<string, unknown>);
+  if (!ghScan.ok) {
+    console.warn(`[GitHub] PR review comment rejected: ${ghScan.error}`);
+    return Response.json({ error: "Event rejected: suspicious content" }, { status: 400 });
   }
 
   const branch = payload.pull_request.head.ref;
@@ -570,6 +609,13 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
 
   if (payload.action !== "created") {
     return Response.json({ ok: true, ignored: true });
+  }
+
+  // Scan free-text fields for injection attacks
+  const ghScan = await normalizeGitHubEvent("issue_comment", payload as unknown as Record<string, unknown>);
+  if (!ghScan.ok) {
+    console.warn(`[GitHub] Issue comment rejected: ${ghScan.error}`);
+    return Response.json({ error: "Event rejected: suspicious content" }, { status: 400 });
   }
 
   // Resolve product early so we can get the right per-product GitHub token

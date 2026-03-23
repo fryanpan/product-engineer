@@ -217,12 +217,6 @@
       </div>
     </div>
 
-    <div class="section">
-      <h2>🧠 Recent Decisions</h2>
-      <div id="decisionsSection">
-        <div class="loading">Loading decisions...</div>
-      </div>
-    </div>
   </div>
 
   <script>
@@ -555,82 +549,6 @@
       container.innerHTML = html;
     }
 
-    async function fetchDecisions() {
-      try {
-        const response = await fetch('/api/dashboard/decisions', {
-          credentials: 'include'
-        });
-        if (!response.ok) return;
-        const decisions = await response.json();
-        renderDecisions(decisions);
-      } catch (err) {
-        console.error('Failed to fetch decisions:', err);
-      }
-    }
-
-    function renderDecisions(decisions) {
-      const container = document.getElementById('decisionsSection');
-
-      if (!decisions || decisions.length === 0) {
-        container.innerHTML = '<div class="empty">No recent decisions</div>';
-        return;
-      }
-
-      let html = `
-        <table>
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Type</th>
-              <th>Ticket</th>
-              <th>Action</th>
-              <th>Reason</th>
-              <th>Feedback</th>
-            </tr>
-          </thead>
-          <tbody>
-      `;
-
-      for (const d of decisions) {
-        html += `
-          <tr>
-            <td class="time">${formatTime(d.timestamp)}</td>
-            <td>${escapeHtml(d.type).replace(/_/g, ' ')}</td>
-            <td>${escapeHtml(d.ticket_id) || '—'}</td>
-            <td><span class="status-badge">${escapeHtml(d.action)}</span></td>
-            <td>${escapeHtml((d.reason || '').slice(0, 60))}${(d.reason || '').length > 60 ? '...' : ''}</td>
-            <td>
-              <div class="feedback-buttons">
-                <button onclick="submitFeedback('${d.id}', 'good')">👍</button>
-                <button onclick="submitFeedback('${d.id}', 'bad')">👎</button>
-              </div>
-            </td>
-          </tr>
-        `;
-      }
-
-      html += `</tbody></table>`;
-      container.innerHTML = html;
-    }
-
-    async function submitFeedback(decisionId, feedback) {
-      try {
-        const response = await fetch('/api/dashboard/decision-feedback', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ decisionId, feedback })
-        });
-        if (response.ok) {
-          alert('Feedback submitted!');
-          fetchDecisions();
-          fetchMetrics();
-        }
-      } catch (err) {
-        alert('Failed to submit feedback: ' + err.message);
-      }
-    }
-
     // Auto-refresh every 30 seconds
     refreshInterval = setInterval(refreshData, 30000);
     startCountdown();
@@ -639,7 +557,6 @@
     fetchUserInfo();
     refreshData();
     fetchMetrics();
-    fetchDecisions();
   </script>
 </body>
 </html>

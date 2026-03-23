@@ -320,11 +320,11 @@ describe("AgentManager", () => {
       expect(ticket.status).toBe("reviewing");
     });
 
-    it("rejects invalid transitions (created -> merged)", () => {
+    it("rejects invalid transitions (created -> merged) by returning unchanged ticket", () => {
       manager.createTicket(defaultParams);
-      expect(() => manager.updateStatus("PE-1", { status: "merged" })).toThrow(
-        "Invalid transition: created → merged"
-      );
+      const ticket = manager.updateStatus("PE-1", { status: "merged" });
+      // Invalid transitions return the ticket unchanged (no throw)
+      expect(ticket.status).toBe("created");
     });
 
     it("sets agent_active=0 on terminal transitions", () => {

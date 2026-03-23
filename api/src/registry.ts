@@ -5,6 +5,12 @@
  * This file provides cached lookups with lazy loading from the DO.
  */
 
+export interface SlackPersona {
+  username: string;
+  icon_emoji?: string;
+  icon_url?: string;
+}
+
 export interface ProductConfig {
   repos: string[];
   slack_channel: string;
@@ -15,6 +21,9 @@ export interface ProductConfig {
     slack?: { enabled: boolean };
   };
   secrets: Record<string, string>;
+  slack_persona?: SlackPersona;
+  mode?: "coding" | "research" | "flexible";
+  preferred_backend?: string;
 }
 
 export interface CloudflareAIGateway {

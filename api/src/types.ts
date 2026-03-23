@@ -67,30 +67,8 @@ export interface TicketAgentConfig {
   secrets: Record<string, string>; // logical name → binding name
   gatewayConfig?: { account_id: string; gateway_id: string } | null;
   model?: string; // Claude model to use (e.g., "sonnet", "opus", "haiku")
-}
-
-// Decision engine types
-export interface DecisionRequest {
-  type: "ticket_review" | "merge_gate" | "supervisor";
-  context: Record<string, unknown>;
-}
-
-export interface DecisionResponse {
-  action: string;
-  reason: string;
-  confidence: number;
-  model?: string; // For ticket_review: which model to assign
-}
-
-export interface DecisionLog {
-  id: string;
-  timestamp: string;
-  type: "ticket_review" | "merge_gate" | "supervisor";
-  ticket_id: string | null;
-  context_summary: string;
-  action: string;
-  reason: string;
-  confidence: number;
+  mode?: "coding" | "research" | "flexible";
+  slackPersona?: { username: string; icon_emoji?: string; icon_url?: string };
 }
 
 // Metrics types for observability
@@ -107,17 +85,21 @@ export interface TicketMetrics {
   completed_at: string | null;
 }
 
-export interface DecisionFeedback {
-  decision_id: string;
-  feedback: "good" | "bad";
-  details: string | null;
-  given_by: string | null;   // Slack user who gave feedback
-  given_at: string;
+export interface HeartbeatPayload {
+  ticketUUID: string;
+  message?: string;
+  status?: TicketState;
+  pr_url?: string;
+  ci_status?: "pending" | "passing" | "failing" | "none";
+  ready_to_merge?: boolean;
+  needs_attention?: boolean;
+  needs_attention_reason?: string;
 }
 
 export interface Bindings {
   ORCHESTRATOR: DurableObjectNamespace;
   TICKET_AGENT: DurableObjectNamespace;
+  PROJECT_AGENT: DurableObjectNamespace;
 
   // R2 buckets
   TRANSCRIPTS: R2Bucket;
@@ -127,7 +109,6 @@ export interface Bindings {
 
   // Config vars
   WORKER_URL: string;
-  DECISIONS_CHANNEL: string;
 
   // Secrets
   API_KEY: string;

@@ -1,9 +1,11 @@
 import { Container } from "@cloudflare/containers";
-import { TERMINAL_STATUSES, TICKET_STATES, type TicketEvent, type Bindings } from "./types";
-import type { ProductConfig } from "./registry";
-import { DecisionEngine } from "./decision-engine";
-import { ContextAssembler } from "./context-assembler";
+import { TERMINAL_STATUSES, TICKET_STATES, type TicketEvent, type HeartbeatPayload, type Bindings } from "./types";
+import type { ProductConfig, CloudflareAIGateway } from "./registry";
 import { AgentManager, type SpawnConfig } from "./agent-manager";
+import { addReaction } from "./slack-utils";
+import { configure as configureInjectionDetector } from "./security/injection-detector";
+import { normalizeSlackEvent } from "./security/normalized-event";
+import type { ProjectAgentConfig } from "./project-agent";
 
 function sanitizeTicketUUID(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -46,8 +48,6 @@ export class Orchestrator extends Container<Bindings> {
 
   private dbInitialized = false;
   private containerStarted = false;
-  private _decisionEngine: DecisionEngine | null = null;
-  private _contextAssembler: ContextAssembler | null = null;
   private agentManager!: AgentManager;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
@@ -62,6 +62,9 @@ export class Orchestrator extends Container<Bindings> {
       SENTRY_DSN: (env as any).SENTRY_DSN || "",
       WORKER_URL: (env as any).WORKER_URL || (() => { console.error("[Orchestrator] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
     };
+
+    // Configure injection detector with per-environment secret delimiter
+    configureInjectionDetector((env as any).PROMPT_DELIMITER);
   }
 
   override onStop(params: { exitCode: number; reason: string }) {
@@ -90,44 +93,8 @@ export class Orchestrator extends Container<Bindings> {
       // Don't let supervisor failures break the alarm loop
     }
 
-    // Process pending merge gate retries (persisted in SQLite, survives DO restarts)
-    const pendingRetries = this.ctx.storage.sql.exec(
-      "SELECT ticket_uuid, product, retry_count FROM merge_gate_retries WHERE next_retry_at <= datetime('now')"
-    ).toArray() as Array<{ ticket_uuid: string; product: string; retry_count: number }>;
-
-    for (const retry of pendingRetries) {
-      // Verify ticket is still eligible (pr_open, not terminal)
-      const row = this.ctx.storage.sql.exec(
-        "SELECT status, pr_url FROM tickets WHERE ticket_uuid = ?", retry.ticket_uuid
-      ).toArray()[0] as { status: string; pr_url: string | null } | undefined;
-
-      if (!row?.pr_url || this.agentManager.isTerminalStatus(row.status)) {
-        console.log(`[Orchestrator] Merge gate retry skipped for ${retry.ticket_uuid} (status=${row?.status}, pr_url=${!!row?.pr_url})`);
-        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_uuid = ?", retry.ticket_uuid);
-        continue;
-      }
-
-      console.log(`[Orchestrator] Retrying merge gate for ${retry.ticket_uuid} (Copilot review pending, attempt ${retry.retry_count})`);
-      this.evaluateMergeGate(retry.ticket_uuid, retry.product).catch(err =>
-        console.error(`[Orchestrator] Merge gate retry failed for ${retry.ticket_uuid}:`, err)
-      );
-    }
-
-    // Schedule next alarm — pick the earliest of: supervisor (5 min) or next pending retry
-    const nextRetryRow = this.ctx.storage.sql.exec(
-      "SELECT MIN(next_retry_at) as next_at FROM merge_gate_retries"
-    ).toArray()[0] as { next_at: string | null } | undefined;
-    let nextAlarmMs = Date.now() + 300_000; // default: 5 min supervisor tick
-    if (nextRetryRow?.next_at) {
-      // SQLite datetime() returns "YYYY-MM-DD HH:MM:SS" — add "T" separator and "Z" suffix
-      // to form valid ISO-8601 for JS Date parsing
-      const isoStr = nextRetryRow.next_at.replace(" ", "T") + "Z";
-      const retryMs = new Date(isoStr).getTime();
-      if (!Number.isNaN(retryMs)) {
-        nextAlarmMs = Math.min(nextAlarmMs, retryMs);
-      }
-    }
-    this.ctx.storage.setAlarm(nextAlarmMs);
+    // Schedule next alarm — 5 min supervisor tick
+    this.ctx.storage.setAlarm(Date.now() + 300_000);
 
     // Refresh Linear OAuth token every 12h (alarm fires every 5min, so check timestamp)
     try {
@@ -158,10 +125,6 @@ export class Orchestrator extends Container<Bindings> {
   // reliable across deploys (the flag survives but the container gets replaced).
   private lastHealthCheck = 0;
 
-  // Merge gate retry constants — state is persisted in SQLite (merge_gate_retries table)
-  // Single retry (90s) to detect Copilot availability; if not present, assume not enabled
-  private static MAX_MERGE_GATE_RETRIES = 1;
-  private static MERGE_GATE_RETRY_DELAY_MS = 90_000; // 90 seconds
   private static HEALTH_CHECK_TTL = 60_000; // 60 seconds
 
   private async ensureContainerRunning() {
@@ -193,29 +156,6 @@ export class Orchestrator extends Container<Bindings> {
     }
   }
 
-  private getDecisionEngine(): DecisionEngine {
-    if (!this._decisionEngine) {
-      this._decisionEngine = new DecisionEngine({
-        anthropicApiKey: (this.env.ANTHROPIC_API_KEY as string) || "",
-        slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
-        decisionsChannel: (this.env as any).DECISIONS_CHANNEL || "#product-engineer-decisions",
-        linearAppToken: this.getLinearAppToken(),
-      });
-    }
-    return this._decisionEngine;
-  }
-
-  private getContextAssembler(): ContextAssembler {
-    if (!this._contextAssembler) {
-      this._contextAssembler = new ContextAssembler({
-        sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
-        slackBotToken: (this.env.SLACK_BOT_TOKEN as string) || "",
-        linearAppToken: this.getLinearAppToken(),
-        githubTokens: this.getGithubTokens(),
-      });
-    }
-    return this._contextAssembler;
-  }
 
   private getGithubTokens(): Record<string, string> {
     // Build product→token map from per-product token bindings in env
@@ -307,10 +247,6 @@ export class Orchestrator extends Container<Bindings> {
         );
       }
 
-      // Invalidate cached engine/assembler so they pick up the new token
-      this._decisionEngine = null;
-      this._contextAssembler = null;
-
       console.log("[Orchestrator] Linear token refreshed successfully");
       return true;
     } catch (err) {
@@ -373,20 +309,6 @@ export class Orchestrator extends Container<Bindings> {
         updated_at TEXT DEFAULT (datetime('now'))
       )
     `);
-    // Decision log table — records orchestrator decisions for observability
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS decision_log (
-        id TEXT PRIMARY KEY,
-        timestamp TEXT NOT NULL,
-        type TEXT NOT NULL,
-        ticket_id TEXT,
-        context_summary TEXT,
-        action TEXT NOT NULL,
-        reason TEXT,
-        confidence REAL DEFAULT 0
-      )
-    `);
-
     // Slack thread → Linear issue mapping (for linking Slack-originated tickets)
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS slack_thread_map (
@@ -426,112 +348,27 @@ export class Orchestrator extends Container<Bindings> {
       )
     `);
 
-    // Decision feedback table — tracks human feedback on orchestrator decisions
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS decision_feedback (
-        id TEXT PRIMARY KEY,
-        decision_id TEXT NOT NULL,
-        feedback TEXT NOT NULL,
-        details TEXT,
-        given_by TEXT,
-        given_at TEXT NOT NULL,
-        slack_message_ts TEXT,
-        UNIQUE(decision_id)
-      )
-    `);
+    // Migrations: add columns that may not exist on older deployments
+    const addColumn = (table: string, colDef: string) => {
+      try {
+        this.ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${colDef}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "";
+        if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
+          console.error(`[Orchestrator] Failed to add column (${colDef}) to ${table}:`, err);
+          throw err;
+        }
+      }
+    };
 
-    // Migration: add agent_active column for existing deployments
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_active INTEGER NOT NULL DEFAULT 1`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (!message.includes("duplicate column") && !message.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add agent_active column:", err);
-        throw err;
-      }
-    }
-    // Migration: add last_heartbeat column for monitoring
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN last_heartbeat TEXT`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (!message.includes("duplicate column") && !message.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add last_heartbeat column:", err);
-        throw err;
-      }
-    }
-    // Migration: add transcript_r2_key column for transcript storage
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN transcript_r2_key TEXT`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (!message.includes("duplicate column") && !message.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add transcript_r2_key column:", err);
-        throw err;
-      }
-    }
-    // Migration: add slack_message_ts to decision_log for feedback tracking
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE decision_log ADD COLUMN slack_message_ts TEXT`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (!message.includes("duplicate column") && !message.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add slack_message_ts column:", err);
-        throw err;
-      }
-    }
-    // Migration: add identifier column to tickets for human-readable IDs like BC-137
-    // (will be renamed to ticket_id by a later migration)
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN identifier TEXT`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (!message.includes("duplicate column") && !message.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add identifier column:", err);
-        throw err;
-      }
-    }
-    // Migration: add title column to tickets
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN title TEXT`);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (!message.includes("duplicate column") && !message.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add title column:", err);
-        throw err;
-      }
-    }
-    // Migration: add agent_message column — stores last phone-home log message from agent (observability only)
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN agent_message TEXT`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add agent_message column:", err);
-        throw err;
-      }
-    }
-    // Migration: add checks_passed flag — set when check_suite webhook arrives before PR URL
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN checks_passed INTEGER DEFAULT 0`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add checks_passed column:", err);
-        throw err;
-      }
-    }
-    // Migration: add last_merge_decision_sha — stores composite fingerprint of merge-relevant state
-    // (head SHA, CI status, Copilot review, mergeable state, review count) to deduplicate merge gate decisions
-    try {
-      this.ctx.storage.sql.exec(`ALTER TABLE tickets ADD COLUMN last_merge_decision_sha TEXT`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
-        console.error("[Orchestrator] Failed to add last_merge_decision_sha column:", err);
-        throw err;
-      }
-    }
+    addColumn("tickets", "agent_active INTEGER NOT NULL DEFAULT 1");
+    addColumn("tickets", "last_heartbeat TEXT");
+    addColumn("tickets", "transcript_r2_key TEXT");
+    addColumn("tickets", "identifier TEXT"); // renamed to ticket_id below
+    addColumn("tickets", "title TEXT");
+    addColumn("tickets", "agent_message TEXT");
+    addColumn("tickets", "checks_passed INTEGER DEFAULT 0");
+    addColumn("tickets", "last_merge_decision_sha TEXT");
     // Merge gate retry state — persisted so it survives DO restarts/deploys
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS merge_gate_retries (
@@ -577,6 +414,10 @@ export class Orchestrator extends Container<Bindings> {
     try {
       this.ctx.storage.sql.exec(`ALTER TABLE ticket_metrics RENAME COLUMN ticket_id TO ticket_uuid`);
     } catch {}
+
+    addColumn("tickets", "ci_status TEXT DEFAULT NULL");
+    addColumn("tickets", "needs_attention INTEGER DEFAULT 0");
+    addColumn("tickets", "needs_attention_reason TEXT DEFAULT NULL");
 
     this.dbInitialized = true;
 
@@ -814,16 +655,10 @@ export class Orchestrator extends Container<Bindings> {
         return request.method === "GET" ? this.listProducts() : this.createProduct(request);
       case "/settings":
         return this.listSettings();
-      case "/decisions":
-        return Response.json(this.ctx.storage.sql.exec(
-          "SELECT * FROM decision_log ORDER BY timestamp DESC LIMIT 20"
-        ).toArray());
       case "/metrics":
         return this.getMetrics(request);
       case "/metrics/summary":
         return this.getMetricsSummary();
-      case "/decision-feedback":
-        return this.handleDecisionFeedback(request);
       default:
         // Handle dynamic routes
         if (url.pathname.startsWith("/ticket-status/")) {
@@ -848,6 +683,334 @@ export class Orchestrator extends Container<Bindings> {
         if (url.pathname.startsWith("/settings/")) {
           if (request.method === "PUT") return this.updateSetting(request);
         }
+        // Project agent internal endpoints
+        if (url.pathname.startsWith("/project-agent/")) {
+          return this.handleProjectAgentRoute(url.pathname, request);
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+    }
+  }
+
+  // --- Project Agent routing ---
+
+  /**
+   * Ensure a ProjectAgent DO is initialized and running for a product.
+   * Returns the DO stub for further interaction.
+   */
+  private async ensureProjectAgent(
+    product: string,
+    productConfig: ProductConfig,
+  ): Promise<DurableObjectStub> {
+    const id = this.env.PROJECT_AGENT.idFromName(product);
+    const stub = this.env.PROJECT_AGENT.get(id);
+
+    // Build ProjectAgentConfig
+    const gatewayRows = this.ctx.storage.sql.exec(
+      "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+    ).toArray() as Array<{ value: string }>;
+    const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) as CloudflareAIGateway : null;
+
+    const config: ProjectAgentConfig = {
+      product,
+      repos: productConfig.repos,
+      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+      slackPersona: productConfig.slack_persona,
+      secrets: productConfig.secrets,
+      mode: productConfig.mode,
+      gatewayConfig,
+      model: "sonnet",
+    };
+
+    // Initialize (idempotent — if config unchanged and container healthy, returns immediately)
+    const res = await stub.fetch(new Request("http://project-agent/ensure-running", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    }));
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "unknown error");
+      console.error(`[Orchestrator] Failed to ensure ProjectAgent for ${product}: ${errText}`);
+    }
+
+    return stub;
+  }
+
+  /**
+   * Ensure the Conductor (cross-product coordinator) is running.
+   * The Conductor is a special ProjectAgent keyed as "__conductor__".
+   */
+  private async ensureConductor(): Promise<DurableObjectStub> {
+    const id = this.env.PROJECT_AGENT.idFromName("__conductor__");
+    const stub = this.env.PROJECT_AGENT.get(id);
+
+    // Read conductor channel from settings
+    const channelRows = this.ctx.storage.sql.exec(
+      "SELECT value FROM settings WHERE key = 'conductor_channel'",
+    ).toArray() as Array<{ value: string }>;
+    const conductorChannel = channelRows.length > 0 ? channelRows[0].value : "";
+
+    const conductorConfig: ProjectAgentConfig = {
+      product: "__conductor__",
+      repos: [],
+      slackChannel: conductorChannel,
+      secrets: {
+        ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+      },
+      mode: "flexible",
+      model: "sonnet",
+    };
+
+    const res = await stub.fetch(new Request("http://project-agent/ensure-running", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(conductorConfig),
+    }));
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "unknown error");
+      console.error(`[Orchestrator] Failed to ensure Conductor: ${errText}`);
+    }
+
+    return stub;
+  }
+
+  /**
+   * Route an event to the ProjectAgent for a product.
+   * Ensures the agent is running first, then forwards the event.
+   */
+  private async routeToProjectAgent(
+    product: string,
+    event: TicketEvent,
+  ): Promise<void> {
+    // Load product config
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?",
+      product,
+    ).toArray() as Array<{ config: string }>;
+
+    if (productRows.length === 0) {
+      throw new Error(`No product config for ${product} — cannot route to ProjectAgent`);
+    }
+
+    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+
+    const stub = await this.ensureProjectAgent(product, productConfig);
+
+    const res = await stub.fetch(new Request("http://project-agent/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }));
+
+    if (res.ok) {
+      console.log(`[Orchestrator] Routed ${event.type} to ProjectAgent for ${product}`);
+    } else if (res.status === 202) {
+      console.log(`[Orchestrator] Event buffered in ProjectAgent for ${product} (container starting)`);
+    } else {
+      throw new Error(`ProjectAgent event routing failed: ${res.status}`);
+    }
+  }
+
+  /**
+   * Handle internal project agent API requests.
+   * These endpoints are called by the project agent container via the worker.
+   */
+  private async handleProjectAgentRoute(pathname: string, request: Request): Promise<Response> {
+    const subpath = pathname.replace("/project-agent/", "");
+
+    switch (subpath) {
+      case "spawn-task": {
+        // Project agent requests spawning a ticket agent for a task
+        const body = await request.json<{
+          product: string;
+          ticketUUID: string;
+          ticketId?: string;
+          ticketTitle?: string;
+          ticketDescription?: string;
+          slackThreadTs?: string;
+          slackChannel?: string;
+          mode?: "coding" | "research" | "flexible";
+          model?: string;
+        }>();
+
+        // Load product config
+        const productRows = this.ctx.storage.sql.exec(
+          "SELECT config FROM products WHERE slug = ?",
+          body.product,
+        ).toArray() as Array<{ config: string }>;
+        if (productRows.length === 0) {
+          return Response.json({ error: "product not found" }, { status: 404 });
+        }
+        const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+
+        // Create ticket in DB
+        try {
+          this.agentManager.createTicket({
+            ticketUUID: body.ticketUUID,
+            product: body.product,
+            slackThreadTs: body.slackThreadTs,
+            slackChannel: body.slackChannel,
+            ticketId: body.ticketId,
+            title: body.ticketTitle,
+          });
+        } catch {
+          // Already exists — fine
+        }
+
+        // Build spawn config
+        const gatewayRows = this.ctx.storage.sql.exec(
+          "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+        ).toArray() as Array<{ value: string }>;
+        const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
+
+        const spawnConfig: SpawnConfig = {
+          product: body.product,
+          repos: productConfig.repos,
+          slackChannel: body.slackChannel || productConfig.slack_channel_id || productConfig.slack_channel,
+          slackThreadTs: body.slackThreadTs,
+          secrets: productConfig.secrets,
+          gatewayConfig,
+          model: body.model || "sonnet",
+          mode: body.mode || productConfig.mode,
+          slackPersona: productConfig.slack_persona,
+        };
+
+        try {
+          await this.agentManager.spawnAgent(body.ticketUUID, spawnConfig);
+
+          // Send the task description as an event so the ticket agent starts work
+          if (body.ticketDescription || body.ticketTitle) {
+            const taskEvent: TicketEvent = {
+              type: "slack_mention",
+              source: "internal",
+              ticketUUID: body.ticketUUID,
+              product: body.product,
+              payload: {
+                text: body.ticketDescription || body.ticketTitle || "",
+                title: body.ticketTitle || "",
+              },
+            };
+            try {
+              await this.agentManager.sendEvent(body.ticketUUID, taskEvent);
+            } catch (err) {
+              console.warn(`[Orchestrator] spawn-task: event delivery deferred for ${body.ticketUUID}:`, err);
+              // Agent may not be ready yet — it will receive the event via buffer drain
+            }
+          }
+
+          return Response.json({ ok: true, ticketUUID: body.ticketUUID, status: "spawned" });
+        } catch (err) {
+          console.error(`[Orchestrator] spawn-task failed for ${body.ticketUUID}:`, err);
+          return Response.json({ error: "spawn failed" }, { status: 500 });
+        }
+      }
+
+      case "list-tasks": {
+        // List all tickets for a product
+        const url = new URL(request.url);
+        const product = url.searchParams.get("product");
+        if (!product) return Response.json({ error: "product required" }, { status: 400 });
+
+        const rows = this.ctx.storage.sql.exec(
+          `SELECT ticket_uuid, ticket_id, title, status, agent_active, pr_url,
+                  branch_name, agent_message, created_at, updated_at
+           FROM tickets WHERE product = ? ORDER BY created_at DESC LIMIT 50`,
+          product,
+        ).toArray();
+        return Response.json({ tasks: rows });
+      }
+
+      case "send-event": {
+        // Forward an event to a specific ticket agent
+        const body = await request.json<{ ticketUUID: string; event: TicketEvent }>();
+        try {
+          await this.agentManager.sendEvent(body.ticketUUID, body.event);
+          return Response.json({ ok: true });
+        } catch (err) {
+          return Response.json({ error: "send failed" }, { status: 500 });
+        }
+      }
+
+      case "relay-to-project": {
+        // Relay a message/event to a specific product's ProjectAgent DO
+        const body = await request.json<{ product: string; event: TicketEvent }>();
+
+        // Load product config
+        const productRows = this.ctx.storage.sql.exec(
+          "SELECT config FROM products WHERE slug = ?",
+          body.product,
+        ).toArray() as Array<{ config: string }>;
+
+        if (productRows.length === 0) {
+          return Response.json({ error: "product not found" }, { status: 404 });
+        }
+
+        const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
+
+        try {
+          const stub = await this.ensureProjectAgent(body.product, productConfig);
+          const res = await stub.fetch(new Request("http://project-agent/event", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body.event),
+          }));
+
+          if (res.ok) {
+            return Response.json({ ok: true, routed: body.product });
+          }
+          return Response.json({ error: "relay failed" }, { status: res.status });
+        } catch (err) {
+          console.error(`[Orchestrator] relay-to-project failed for ${body.product}:`, err);
+          return Response.json({ error: "relay failed" }, { status: 500 });
+        }
+      }
+
+      case "stop-task": {
+        // Stop a ticket agent
+        const body = await request.json<{ ticketUUID: string; reason?: string }>();
+        try {
+          await this.agentManager.stopAgent(body.ticketUUID, body.reason || "project_agent_request");
+          return Response.json({ ok: true });
+        } catch (err) {
+          return Response.json({ error: "stop failed" }, { status: 500 });
+        }
+      }
+
+      case "drain-events": {
+        // Drain buffered events from a specific ProjectAgent DO.
+        // Called by the container after starting a session to pick up events
+        // that were buffered while the container was starting/restarting.
+        const url = new URL(request.url);
+        const product = url.searchParams.get("product");
+        if (!product) return Response.json({ error: "product required" }, { status: 400 });
+
+        const id = this.env.PROJECT_AGENT.idFromName(product);
+        const stub = this.env.PROJECT_AGENT.get(id);
+        return stub.fetch(new Request("http://project-agent/drain-events"));
+      }
+
+      case "status": {
+        // Get status of all project agents
+        const productRows = this.ctx.storage.sql.exec(
+          "SELECT slug FROM products",
+        ).toArray() as Array<{ slug: string }>;
+
+        const statuses: Record<string, unknown> = {};
+        for (const row of productRows) {
+          try {
+            const id = this.env.PROJECT_AGENT.idFromName(row.slug);
+            const stub = this.env.PROJECT_AGENT.get(id);
+            const res = await stub.fetch(new Request("http://project-agent/status"));
+            statuses[row.slug] = res.ok ? await res.json() : { error: `${res.status}` };
+          } catch {
+            statuses[row.slug] = { error: "unreachable" };
+          }
+        }
+        return Response.json({ project_agents: statuses });
+      }
+
+      default:
         return Response.json({ error: "not found" }, { status: 404 });
     }
   }
@@ -954,38 +1117,6 @@ export class Orchestrator extends Container<Bindings> {
       return Response.json({ ok: true, ticketUUID: event.ticketUUID });
     }
 
-    // CI passed + PR exists → evaluate merge gate (orchestrator decides, not agent)
-    if (event.type === "checks_passed") {
-      let ticketRow = this.agentManager.getTicket(event.ticketUUID);
-
-      // Branch names use the human-readable identifier (e.g., ticket/PES-23),
-      // but the canonical ticket ID is the Linear UUID. Fall back to ticket_id lookup.
-      if (!ticketRow) {
-        const byIdentifier = this.agentManager.getTicketByIdentifier(event.ticketUUID);
-        if (byIdentifier) {
-          console.log(`[Orchestrator] checks_passed: resolved identifier ${event.ticketUUID} → ticket ${byIdentifier.ticket_uuid}`);
-          ticketRow = byIdentifier;
-        }
-      }
-
-      if (ticketRow?.pr_url) {
-        await this.evaluateMergeGate(ticketRow.ticket_uuid, event.product);
-        return Response.json({ ok: true, ticketUUID: ticketRow.ticket_uuid });
-      }
-
-      // PR URL not set yet — store checks_passed flag so merge gate triggers
-      // when the agent later reports the PR URL via handleStatusUpdate.
-      if (ticketRow) {
-        console.log(`[Orchestrator] checks_passed for ${ticketRow.ticket_uuid} but no PR URL yet — storing flag for deferred merge gate`);
-        this.ctx.storage.sql.exec(
-          "UPDATE tickets SET checks_passed = 1, updated_at = datetime('now') WHERE ticket_uuid = ?",
-          ticketRow.ticket_uuid,
-        );
-        return Response.json({ ok: true, ticketUUID: ticketRow.ticket_uuid, deferred: true });
-      }
-      // Ticket not found — route to agent normally
-    }
-
     // Handle PR merged/closed events directly in orchestrator — don't route to agent.
     // The agent container may have already exited, so routing via sendEvent would silently
     // drop the event (sendEvent requires agent_active=1). Update status here instead.
@@ -1040,13 +1171,18 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   /**
-   * Use LLM decision engine to review a new ticket and decide what to do:
-   * start_agent, ask_questions, mark_duplicate, queue, or expand_existing.
+   * Review a new ticket and decide how to handle it.
+   *
+   * v3 flow: Routes the event to the persistent ProjectAgent for the product.
+   * The ProjectAgent (via coding-project-lead SKILL.md) decides whether to:
+   * - Spawn a TicketAgent for coding tasks
+   * - Handle directly (quick answers, research)
+   * - Ask for clarification
+   *
+   * Fallback: If ProjectAgent routing fails, spawns a TicketAgent directly
+   * (preserves v2 behavior as safety net).
    */
   private async handleTicketReview(event: TicketEvent): Promise<void> {
-    const engine = this.getDecisionEngine();
-    const assembler = this.getContextAssembler();
-
     const payload = event.payload as Record<string, unknown>;
 
     // Load product config from database
@@ -1084,651 +1220,71 @@ export class Orchestrator extends Container<Bindings> {
       // May already be in reviewing state — ignore
     }
 
-    const context = await assembler.forTicketReview({
-      ticketUUID: event.ticketUUID,
-      identifier: (payload.identifier as string) || null,
-      title: (payload.title as string) || "",
-      description: (payload.description as string) || "",
-      priority: (payload.priority as number) || 3,
-      labels: (payload.labels as string[]) || [],
+    // v3: Route to ProjectAgent — let it decide what to do
+    try {
+      await this.routeToProjectAgent(event.product, event);
+      console.log(`[Orchestrator] Routed ticket ${event.ticketUUID} to ProjectAgent for ${event.product}`);
+      return; // ProjectAgent will handle spawning if needed via /project-agent/spawn-task
+    } catch (err) {
+      console.error(`[Orchestrator] ProjectAgent routing failed for ${event.ticketUUID}, falling back to direct spawn:`, err);
+    }
+
+    // Fallback: spawn TicketAgent directly (v2 behavior)
+    const model = "sonnet";
+    console.log(`[Orchestrator] Fallback: Starting agent for ticket ${event.ticketUUID} (model=${model})`);
+
+    // Build spawn config from product
+    const gatewayRows = this.ctx.storage.sql.exec(
+      "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+    ).toArray() as Array<{ value: string }>;
+    const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
+
+    const spawnConfig: SpawnConfig = {
       product: event.product,
       repos: productConfig.repos,
-      slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || null,
-      slackChannel: event.slackChannel || (ticketRow?.slack_channel as string) || null,
-    });
-
-    let decision;
-    try {
-      decision = await engine.makeDecision("ticket-review", context);
-    } catch (err) {
-      console.error("[Orchestrator] LLM ticket review failed, defaulting to start_agent with sonnet:", err);
-      decision = { action: "start_agent", model: "sonnet", reason: "LLM review failed, using default", confidence: 0 };
-    }
-
-    // Log the decision (use human-readable identifier like PES-8, fall back to UUID)
-    const displayId = (payload.identifier as string) || event.ticketUUID;
-    await engine.logDecision({
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      type: "ticket_review",
-      ticket_id: displayId,
-      context_summary: `${displayId}: ${((payload.title as string) || "").slice(0, 100)}`,
-      action: decision.action,
-      reason: decision.reason,
-      confidence: decision.confidence || 0,
-    }, {
-      sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
-      slackChannel: event.slackChannel || (ticketRow?.slack_channel as string) || undefined,
+      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
       slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined,
-      linearIssueId: event.ticketUUID,
-    });
+      secrets: productConfig.secrets,
+      gatewayConfig,
+      model,
+      mode: productConfig.mode,
+      slackPersona: productConfig.slack_persona,
+    };
 
-    // Act on decision
-    switch (decision.action) {
-      case "start_agent": {
-        const model = decision.model || "sonnet";
-
-        // Build spawn config from product
-        const gatewayRows = this.ctx.storage.sql.exec(
-          "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
-        ).toArray() as Array<{ value: string }>;
-        const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
-
-        const spawnConfig: SpawnConfig = {
-          product: event.product,
-          repos: productConfig.repos,
-          slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
-          slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined,
-          secrets: productConfig.secrets,
-          gatewayConfig,
-          model,
-        };
-
-        try {
-          await this.agentManager.spawnAgent(event.ticketUUID, spawnConfig);
-          await this.agentManager.sendEvent(event.ticketUUID, event);
-        } catch (err) {
-          console.error(`[Orchestrator] Failed to spawn agent for ${event.ticketUUID}:`, err);
-        }
-        break;
-      }
-      case "ask_questions": {
-        // Update status to needs_info
-        try {
-          this.agentManager.updateStatus(event.ticketUUID, { status: "needs_info" });
-        } catch (err) {
-          console.warn(`[Orchestrator] Failed to set needs_info for ${event.ticketUUID}:`, err);
-        }
-
-        // Post questions to Slack thread and Linear
-        const questions = (decision as unknown as Record<string, unknown>).questions as string[] | undefined;
-        if (questions && questions.length > 0) {
-          const numberedQuestions = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
-
-          // Post to Slack thread
-          const slackChannel = event.slackChannel || (ticketRow?.slack_channel as string) || undefined;
-          const slackThreadTs = event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined;
-          if (slackChannel && slackThreadTs) {
-            const slackText = `❓ Before I start, a couple questions:\n${numberedQuestions}`;
-            await fetch("https://slack.com/api/chat.postMessage", {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                channel: slackChannel,
-                text: slackText,
-                thread_ts: slackThreadTs,
-              }),
-            }).catch((err) => console.error("[Orchestrator] Failed to post questions to Slack:", err));
-          }
-
-          // Post to Linear as a comment
-          const linearToken = this.getLinearAppToken();
-          if (linearToken) {
-            const linearBody = `❓ **Before I start, a couple questions:**\n${numberedQuestions}`;
-            await fetch("https://api.linear.app/graphql", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${linearToken}`,
-              },
-              body: JSON.stringify({
-                query: `mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`,
-                variables: { issueId: event.ticketUUID, body: linearBody },
-              }),
-            }).catch((err) => console.error("[Orchestrator] Failed to post questions to Linear:", err));
-          }
-        }
-        break;
-      }
-      case "mark_duplicate": {
-        try {
-          this.agentManager.updateStatus(event.ticketUUID, { status: "closed" });
-        } catch (err) {
-          console.warn(`[Orchestrator] Failed to mark duplicate for ${event.ticketUUID}:`, err);
-        }
-        break;
-      }
-      case "queue": {
-        this.ctx.storage.sql.exec(
-          `INSERT INTO ticket_queue (id, ticket_uuid, product, priority, payload)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO NOTHING`,
-          crypto.randomUUID(), event.ticketUUID, event.product,
-          (payload.priority as number) || 3, JSON.stringify(event),
-        );
-        try {
-          this.agentManager.updateStatus(event.ticketUUID, { status: "queued" });
-        } catch (err) {
-          console.warn(`[Orchestrator] Failed to set queued for ${event.ticketUUID}:`, err);
-        }
-        break;
-      }
-      case "expand_existing": {
-        // Route the event to the existing ticket's agent
-        // decision.expand_ticket contains the ticket ID to expand
-        const expandTicketId = (decision as unknown as Record<string, unknown>).expand_ticket as string | undefined;
-        if (expandTicketId) {
-          const expandedEvent = { ...event, ticketUUID: expandTicketId };
-          await this.agentManager.sendEvent(expandTicketId, expandedEvent);
-        }
-        break;
-      }
-    }
-  }
-
-  /**
-   * LLM Merge Gate — evaluates whether a PR is ready to auto-merge.
-   * Called when CI passes and PR exists for a tracked ticket.
-   *
-   * Deduplicates decisions using composite fingerprint: only makes a new decision if any
-   * merge-relevant state has changed since the last decision:
-   * - Head SHA (new commits)
-   * - CI status (passed/failed)
-   * - Copilot review status (complete/pending)
-   * - Mergeable state (MERGEABLE/CONFLICTING/UNKNOWN)
-   * - Review count (new human reviews)
-   * - Copilot comment content (new/updated comments)
-   */
-  private async evaluateMergeGate(
-    ticketUUID: string,
-    product: string,
-  ): Promise<void> {
-    let ticketRow = this.ctx.storage.sql.exec(
-      "SELECT * FROM tickets WHERE ticket_uuid = ?", ticketUUID
-    ).toArray()[0] as Record<string, unknown> | undefined;
-
-    // Fall back to ticket_id lookup (branch names use human-readable identifiers)
-    if (!ticketRow?.pr_url) {
-      const byIdentifier = this.ctx.storage.sql.exec(
-        "SELECT * FROM tickets WHERE ticket_id = ?", ticketUUID
-      ).toArray()[0] as Record<string, unknown> | undefined;
-      if (byIdentifier?.pr_url) {
-        console.log(`[Orchestrator] evaluateMergeGate: resolved identifier ${ticketUUID} → ticket ${byIdentifier.ticket_uuid}`);
-        ticketRow = byIdentifier;
-        // Use canonical UUID for all downstream operations
-        ticketUUID = ticketRow.ticket_uuid as string;
-      }
-    }
-
-    if (!ticketRow?.pr_url) {
-      console.log(`[Orchestrator] No PR URL for ${ticketUUID}, skipping merge gate`);
-      return;
-    }
-
-    // Load product config directly from SQLite (avoid loadRegistry which calls back to self)
-    const productRows = this.ctx.storage.sql.exec(
-      "SELECT config FROM products WHERE slug = ?",
-      product,
-    ).toArray() as Array<{ config: string }>;
-
-    if (productRows.length === 0) {
-      console.log(`[Orchestrator] No product config for ${product}, skipping merge gate`);
-      return;
-    }
-
-    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
-
-    const engine = this.getDecisionEngine();
-    const assembler = this.getContextAssembler();
-
-    const context = await assembler.forMergeGate({
-      ticketUUID,
-      identifier: null,
-      title: "",
-      product,
-      pr_url: ticketRow.pr_url as string,
-      branch: (ticketRow.branch_name as string) || "",
-      repo: productConfig.repos[0],
-    });
-
-    // If PR fetch failed, escalate immediately instead of proceeding with bogus data
-    if (context.error === "pr_fetch_failed") {
-      console.error(`[Orchestrator] PR fetch failed for ${ticketUUID}, escalating to human`);
-      if (ticketRow.slack_channel && ticketRow.slack_thread_ts) {
-        await fetch("https://slack.com/api/chat.postMessage", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            channel: ticketRow.slack_channel,
-            text: `⚠️ *Merge Gate — API Error*\n${ticketRow.pr_url}\n*Reason:* ${context.errorMessage}\n\nThis is likely a transient GitHub API issue. You can manually re-trigger the merge gate by pushing a new commit or commenting on the PR.`,
-            thread_ts: ticketRow.slack_thread_ts,
-          }),
-        });
-      }
-      return;
-    }
-
-    // --- Wait for CI and/or Copilot review before proceeding ---
-    // Retry logic: CI and Copilot share a retry counter with separate phases.
-    // Phase "ci" = waiting for CI. Phase "copilot" = waiting for Copilot review.
-    const checksPassedFlag = (ticketRow.checks_passed as number) === 1;
-    const ciReady = !context.hasCI || context.ciPassed || checksPassedFlag;
-    const copilotReady = context.copilotReviewComplete as boolean;
-
-    const waitReason = !ciReady ? "ci" : !copilotReady ? "copilot" : null;
-
-    if (waitReason) {
-      const retryRow = this.ctx.storage.sql.exec(
-        "SELECT retry_count, phase FROM merge_gate_retries WHERE ticket_uuid = ?", ticketUUID
-      ).toArray()[0] as { retry_count: number; phase: string } | undefined;
-      let retryCount = retryRow?.retry_count ?? 0;
-
-      // Reset counter when transitioning from CI wait → Copilot wait
-      if (retryRow?.phase === "ci" && waitReason === "copilot") {
-        retryCount = 0;
-      }
-
-      // Heuristic: if this is retry 0 (first check), schedule one retry to give Copilot time.
-      // If retry >= 1 and still no Copilot review, assume Copilot isn't enabled and proceed.
-      const shouldRetry = retryCount === 0;
-
-      if (shouldRetry) {
-        const nextRetryAt = new Date(Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS).toISOString().replace("T", " ").replace("Z", "");
-        const label = waitReason === "ci" ? `CI pending (${context.ciFailureDetails})` : "Copilot review pending";
-        console.log(
-          `[Orchestrator] ${label} for ${ticketUUID}, scheduling retry ${retryCount + 1}/${Orchestrator.MAX_MERGE_GATE_RETRIES}`
-        );
-        this.ctx.storage.sql.exec(
-          `INSERT INTO merge_gate_retries (ticket_uuid, product, retry_count, next_retry_at, phase)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(ticket_uuid) DO UPDATE SET retry_count = ?, next_retry_at = ?, phase = ?`,
-          ticketUUID, product, retryCount + 1, nextRetryAt, waitReason,
-          retryCount + 1, nextRetryAt, waitReason,
-        );
-        this.ctx.storage.setAlarm(Date.now() + Orchestrator.MERGE_GATE_RETRY_DELAY_MS);
-        return;
-      }
-
-      // Exhausted retries — proceed anyway
-      const exhaustedLabel = waitReason === "ci" ? "CI" : "Copilot review";
-      console.log(
-        `[Orchestrator] ${exhaustedLabel} not ready after ${Orchestrator.MAX_MERGE_GATE_RETRIES} retries for ${ticketUUID}, proceeding`
-      );
-    }
-
-    // Clear retries — either everything is ready, or we've exhausted retries
-    this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_uuid = ?", ticketUUID);
-    // Deduplication: skip decision if PR state hasn't materially changed since last decision
-    // Track composite fingerprint of all merge-relevant state (not just commit SHA)
-    const copilotComments = context.copilotComments as Array<{ path: string; body: string }>;
-    const copilotCommentsHash = copilotComments.length > 0
-      ? copilotComments.map(c => `${c.path}:${c.body.slice(0, 100)}`).join(";").slice(0, 200)
-      : "none";
-
-    const currentFingerprint = [
-      `sha:${context.headSha}`,
-      `ci:${context.ciPassed}`,
-      `copilot:${context.copilotReviewComplete}`,
-      `mergeable:${context.mergeable}`,
-      `reviews:${(context.reviewComments as unknown[]).length}`,
-      `copilot_comments:${copilotCommentsHash}`,
-    ].join("|");
-
-    const lastFingerprint = ticketRow.last_merge_decision_sha as string | null;
-
-    if (lastFingerprint === currentFingerprint) {
-      console.log(`[Orchestrator] Skipping merge gate for ${ticketUUID} — no changes since last decision`);
-      return;
-    }
-
-    // Detect what changed since last decision for the decision log
-    const changes: string[] = [];
-    if (!lastFingerprint) {
-      changes.push("initial evaluation");
-    } else {
-      const lastParts = Object.fromEntries(lastFingerprint.split("|").map(p => p.split(":")));
-      const currentParts = Object.fromEntries(currentFingerprint.split("|").map(p => p.split(":")));
-
-      if (lastParts.sha !== currentParts.sha) {
-        changes.push(`new commits (${lastParts.sha?.slice(0, 7) || "?"} → ${currentParts.sha?.slice(0, 7) || "?"})`);
-      }
-      if (lastParts.ci !== currentParts.ci) {
-        changes.push(`CI ${currentParts.ci === "true" ? "passed" : "failed"}`);
-      }
-      if (lastParts.copilot !== currentParts.copilot) {
-        changes.push(currentParts.copilot === "true" ? "Copilot review complete" : "Copilot review pending");
-      }
-      if (lastParts.mergeable !== currentParts.mergeable) {
-        changes.push(`mergeable state: ${lastParts.mergeable} → ${currentParts.mergeable}`);
-      }
-      if (lastParts.reviews !== currentParts.reviews) {
-        changes.push(`reviews: ${lastParts.reviews} → ${currentParts.reviews}`);
-      }
-      if (lastParts.copilot_comments !== currentParts.copilot_comments) {
-        changes.push("Copilot comments updated");
-      }
-    }
-
-    let decision;
     try {
-      decision = await engine.makeDecision("merge-gate", context);
+      await this.agentManager.spawnAgent(event.ticketUUID, spawnConfig);
+      await this.agentManager.sendEvent(event.ticketUUID, event);
     } catch (err) {
-      console.error("[Orchestrator] Merge gate LLM call failed:", err);
-      // Don't auto-merge on failure — escalate instead
-      decision = { action: "escalate", reason: "Merge gate LLM call failed", confidence: 0 };
-    }
-
-    // Update last decision fingerprint to prevent re-evaluating on identical state
-    this.ctx.storage.sql.exec(
-      "UPDATE tickets SET last_merge_decision_sha = ?, updated_at = datetime('now') WHERE ticket_uuid = ?",
-      currentFingerprint, ticketUUID
-    );
-
-    // Log the decision (use human-readable identifier like BC-156, fall back to UUID)
-    const displayId = (ticketRow.ticket_id as string) || ticketUUID;
-    const reasonWithChanges = changes.length > 0
-      ? `${decision.reason} (changes: ${changes.join(", ")})`
-      : decision.reason;
-
-    await engine.logDecision({
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      type: "merge_gate",
-      ticket_id: displayId,
-      context_summary: `PR: ${ticketRow.pr_url}`,
-      action: decision.action,
-      reason: reasonWithChanges,
-      confidence: decision.confidence || 0,
-    }, {
-      sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
-      slackChannel: (ticketRow.slack_channel as string) || undefined,
-      slackThreadTs: (ticketRow.slack_thread_ts as string) || undefined,
-      linearIssueId: ticketUUID,
-    });
-
-    switch (decision.action) {
-      case "auto_merge":
-        await this.autoMergePR(ticketUUID, product, ticketRow);
-        break;
-      case "escalate":
-        // Post escalation to Slack
-        if (ticketRow.slack_channel && ticketRow.slack_thread_ts) {
-          await fetch("https://slack.com/api/chat.postMessage", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              channel: ticketRow.slack_channel,
-              text: `\u26A0\uFE0F *Merge Gate \u2014 Human Review Needed*\n${ticketRow.pr_url}\n*Reason:* ${decision.reason}`,
-              thread_ts: ticketRow.slack_thread_ts,
-            }),
-          });
-        }
-        break;
-      case "send_back": {
-        // Increment revision count for metrics
-        this.ctx.storage.sql.exec(
-          `UPDATE ticket_metrics SET revision_count = revision_count + 1, updated_at = datetime('now') WHERE ticket_uuid = ?`,
-          ticketUUID,
-        );
-
-        // Route back to agent
-        const sendBackEvent: TicketEvent = {
-          type: "merge_feedback",
-          source: "orchestrator",
-          ticketUUID,
-          product,
-          payload: { feedback: decision.reason, missing: (decision as unknown as Record<string, unknown>).missing },
-        };
-        await this.agentManager.sendEvent(ticketUUID, sendBackEvent);
-        break;
-      }
+      console.error(`[Orchestrator] Failed to spawn agent for ${event.ticketUUID}:`, err);
     }
   }
 
   /**
-   * Auto-merge a PR via GitHub API (squash merge).
-   */
-  private async autoMergePR(
-    ticketUUID: string,
-    product: string,
-    ticketRow: Record<string, unknown>,
-  ): Promise<void> {
-    const ghTokens = this.getGithubTokens();
-    const ghToken = ghTokens[product];
-    const prUrl = ticketRow.pr_url as string;
-    if (!ghToken || !prUrl) return;
-
-    const prMatch = prUrl.match(/\/pull\/(\d+)/);
-    if (!prMatch) return;
-
-    // Load repo from product config directly from SQLite
-    const productRows = this.ctx.storage.sql.exec(
-      "SELECT config FROM products WHERE slug = ?",
-      product,
-    ).toArray() as Array<{ config: string }>;
-
-    if (productRows.length === 0) return;
-
-    const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
-    const repo = productConfig.repos[0];
-    const prNumber = prMatch[1];
-
-    console.log(`[Orchestrator] Auto-merging PR #${prNumber} on ${repo}`);
-
-    const mergeRes = await fetch(`https://api.github.com/repos/${repo}/pulls/${prNumber}/merge`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${ghToken}`,
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "product-engineer-orchestrator",
-      },
-      body: JSON.stringify({ merge_method: "squash" }),
-    });
-
-    if (mergeRes.ok) {
-      console.log(`[Orchestrator] PR #${prNumber} merged successfully`);
-
-      // Notify Slack thread about the merge
-      if (ticketRow.slack_thread_ts && ticketRow.slack_channel) {
-        fetch("https://slack.com/api/chat.postMessage", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            channel: ticketRow.slack_channel,
-            thread_ts: ticketRow.slack_thread_ts,
-            text: `✅ PR #${prNumber} merged successfully.`,
-          }),
-        }).catch(err => console.warn("[Orchestrator] Failed to notify Slack of merge:", err));
-      }
-
-      // The pr_merged webhook will trigger handleStatusUpdate -> terminal state
-    } else {
-      const errorText = await mergeRes.text();
-      console.error(`[Orchestrator] Failed to merge PR #${prNumber}: ${mergeRes.status} ${errorText}`);
-
-      // Notify via Slack if thread available
-      if (ticketRow.slack_thread_ts && ticketRow.slack_channel) {
-        await fetch("https://slack.com/api/chat.postMessage", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            channel: ticketRow.slack_channel,
-            thread_ts: ticketRow.slack_thread_ts,
-            text: `Auto-merge failed for PR #${prNumber}: ${mergeRes.status === 405 || mergeRes.status === 409 ? "merge conflict or branch not mergeable" : `API error ${mergeRes.status}`}. Sending back to agent for rebase.`,
-          }),
-        }).catch(err => console.warn("[Orchestrator] Failed to notify Slack:", err));
-      }
-
-      // Route back to agent with rebase instruction
-      const rebaseEvent: TicketEvent = {
-        type: "merge_conflict",
-        source: "github",
-        ticketUUID,
-        product,
-        payload: { error: errorText, pr_url: ticketRow.pr_url, action: "rebase_and_push" },
-        slackThreadTs: ticketRow.slack_thread_ts as string | undefined,
-        slackChannel: ticketRow.slack_channel as string | undefined,
-      };
-      await this.agentManager.sendEvent(ticketUUID, rebaseEvent);
-    }
-  }
-
-  /**
-   * LLM Supervisor — runs on every alarm tick to check system health.
-   * Evaluates active agents, stale PRs, and queued tickets, then takes
-   * action (kill stuck agents, trigger merge evals, escalate, start queued).
+   * Supervisor tick — heartbeat-only staleness check.
+   *
+   * Agents now manage their own PR lifecycle (merge gate, CI checks) via
+   * agent/src/merge-gate.ts. The supervisor only detects stale agents
+   * (no heartbeat in 5+ minutes) and flags them for observability.
    */
   private async runSupervisorTick(): Promise<void> {
-    const assembler = this.getContextAssembler();
-    const engine = this.getDecisionEngine();
+    const staleAgents = this.ctx.storage.sql.exec(`
+      SELECT ticket_uuid, product, last_heartbeat
+      FROM tickets
+      WHERE agent_active = 1
+        AND last_heartbeat IS NOT NULL
+        AND last_heartbeat < datetime('now', '-5 minutes')
+    `).toArray() as Array<{
+      ticket_uuid: string;
+      product: string;
+      last_heartbeat: string;
+    }>;
 
-    const context = await assembler.forSupervisor();
-
-    // Skip LLM call if nothing needs attention
-    if ((context.agentCount as number) === 0 &&
-        (context.stalePRs as unknown[]).length === 0 &&
-        (context.queuedTickets as unknown[]).length === 0) {
-      return;
-    }
-
-    let actions: Array<{ target: string; action: string; reason: string }>;
-    try {
-      const response = await engine.makeDecision("supervisor", context);
-      // Supervisor template asks for a JSON array
-      // The response might be a single object or an array
-      if (Array.isArray(response)) {
-        actions = response;
-      } else {
-        actions = [response as unknown as { target: string; action: string; reason: string }];
-      }
-    } catch (err) {
-      console.error("[Orchestrator] Supervisor LLM call failed:", err);
-      return; // Don't take action on LLM failure
-    }
-
-    for (const action of actions) {
-      if (action.action === "none") continue;
-
-      // Resolve target to UUID — defense in depth if LLM returns human-readable ID
-      let resolvedTarget = action.target;
-      if (action.target !== "system") {
-        const direct = this.agentManager.getTicket(action.target);
-        if (!direct) {
-          const byIdentifier = this.agentManager.getTicketByIdentifier(action.target);
-          if (byIdentifier) {
-            console.log(`[Orchestrator] Resolved supervisor target ${action.target} → ${byIdentifier.ticket_uuid}`);
-            resolvedTarget = byIdentifier.ticket_uuid;
-          } else {
-            console.warn(`[Orchestrator] Supervisor target not found: ${action.target}`);
-            continue; // Skip this action — target doesn't exist
-          }
-        }
-      }
-
-      // Log each action (use human-readable identifier for display)
-      let displayId = resolvedTarget;
-      if (resolvedTarget !== "system") {
-        // Look up the human-readable ticket_id from the tickets table
-        const ticketRow = this.ctx.storage.sql.exec(
-          "SELECT ticket_id FROM tickets WHERE ticket_uuid = ?", resolvedTarget
-        ).toArray()[0] as { ticket_id: string | null } | undefined;
-        displayId = ticketRow?.ticket_id || resolvedTarget;
-      }
-
-      await engine.logDecision({
-        id: crypto.randomUUID(),
-        timestamp: new Date().toISOString(),
-        type: "supervisor",
-        ticket_id: resolvedTarget !== "system" ? displayId : null,
-        context_summary: `Supervisor: ${action.action} on ${displayId}`,
-        action: action.action,
-        reason: action.reason,
-        confidence: 0,
-      }, {
-        sqlExec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params),
-      });
-
-      switch (action.action) {
-        case "kill": {
-          if (resolvedTarget !== "system") {
-            try {
-              this.agentManager.updateStatus(resolvedTarget, { status: "failed" });
-            } catch {
-              // Force stop even if state transition is invalid
-              this.ctx.storage.sql.exec(
-                "UPDATE tickets SET status = 'failed', agent_active = 0, updated_at = datetime('now') WHERE ticket_uuid = ?",
-                resolvedTarget,
-              );
-            }
-            await this.agentManager.stopAgent(resolvedTarget, `supervisor: ${action.reason}`).catch(err =>
-              console.warn(`[Orchestrator] Failed to kill agent for ${resolvedTarget}:`, err)
-            );
-          }
-          break;
-        }
-        case "trigger_merge_eval": {
-          if (resolvedTarget !== "system") {
-            const ticket = this.agentManager.getTicket(resolvedTarget);
-            if (ticket) {
-              await this.evaluateMergeGate(resolvedTarget, ticket.product);
-            }
-          }
-          break;
-        }
-        case "escalate": {
-          // Post to decisions channel
-          await fetch("https://slack.com/api/chat.postMessage", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${this.env.SLACK_BOT_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              channel: (this.env as Record<string, unknown>).DECISIONS_CHANNEL as string || "#product-engineer-decisions",
-              text: `\u26A0\uFE0F *Supervisor Escalation*\n*Target:* ${resolvedTarget}\n*Reason:* ${action.reason}`,
-            }),
-          });
-          break;
-        }
-        case "start_queued": {
-          // Pop the highest-priority ticket from the queue
-          const queuedRow = this.ctx.storage.sql.exec(
-            "SELECT id, ticket_uuid, payload FROM ticket_queue ORDER BY priority ASC, created_at ASC LIMIT 1"
-          ).toArray()[0] as { id: string; ticket_uuid: string; payload: string } | undefined;
-          if (queuedRow) {
-            this.ctx.storage.sql.exec("DELETE FROM ticket_queue WHERE id = ?", queuedRow.id);
-            const queuedEvent = JSON.parse(queuedRow.payload) as TicketEvent;
-            await this.handleTicketReview(queuedEvent);
-          }
-          break;
-        }
-        // "restart", "redeliver_events", "defer_new_tickets" — can be added later
-      }
+    for (const agent of staleAgents) {
+      console.log(`[Supervisor] Agent stale: ${agent.ticket_uuid} (last heartbeat: ${agent.last_heartbeat})`);
+      this.ctx.storage.sql.exec(
+        "UPDATE tickets SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE ticket_uuid = ?",
+        agent.ticket_uuid,
+      );
     }
   }
 
@@ -1769,18 +1325,27 @@ export class Orchestrator extends Container<Bindings> {
     }
 
     if (status) {
+      // Map agent tool status names to valid ticket states
+      const statusAliases: Record<string, string> = {
+        in_progress: "active",
+        in_review: "pr_open",
+        needs_revision: "active",
+        asking: "needs_info",
+      };
+      const resolvedStatus = statusAliases[status] || status;
+
       // Only accept valid ticket states — reject agent lifecycle messages (e.g., "agent:*")
       // that old agent code may still send to this endpoint instead of /heartbeat.
-      if (!(TICKET_STATES as readonly string[]).includes(status)) {
+      if (!(TICKET_STATES as readonly string[]).includes(resolvedStatus)) {
         console.log(`[Orchestrator] Rejecting invalid status "${status}" for ticket ${ticketUUID} — use /heartbeat for lifecycle messages`);
         // Still process other fields (pr_url, branch_name, etc.) below
       } else {
         updates.push("status = ?");
-        values.push(status);
+        values.push(resolvedStatus);
       }
 
       // Track first_response_at when agent starts working
-      if (status === "in_progress") {
+      if (resolvedStatus === "active") {
         this.ctx.storage.sql.exec(
           `UPDATE ticket_metrics SET first_response_at = COALESCE(first_response_at, datetime('now')), updated_at = datetime('now') WHERE ticket_uuid = ?`,
           ticketUUID,
@@ -1846,21 +1411,6 @@ export class Orchestrator extends Container<Bindings> {
       );
     }
 
-    // Trigger merge gate when PR URL is reported.
-    // Always trigger — evaluateMergeGate handles all cases:
-    // - Repos with CI: checks already passed (via webhook) or will pass later
-    // - Repos without CI: fetchCIStatus returns passed when no statuses exist
-    // - Copilot review: retry loop waits for Copilot if enabled, proceeds after timeout
-    if (pr_url) {
-      const ticket = this.agentManager.getTicket(ticketUUID);
-      if (ticket) {
-        console.log(`[Orchestrator] PR URL reported for ${ticketUUID}, triggering merge gate (status=${status}, checks_passed=${ticket.checks_passed})`);
-        this.evaluateMergeGate(ticketUUID, ticket.product).catch(err =>
-          console.error(`[Orchestrator] Merge gate check on PR report failed for ${ticketUUID}:`, err)
-        );
-      }
-    }
-
     return Response.json({ ok: true });
   }
 
@@ -1919,10 +1469,35 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleHeartbeat(request: Request): Promise<Response> {
-    const { ticketUUID, message } = await request.json<{ ticketUUID: string; message?: string }>();
+    const payload = await request.json<HeartbeatPayload>();
+    const { ticketUUID, message, ci_status, needs_attention, needs_attention_reason } = payload;
 
     console.log(`[Orchestrator] heartbeat: ticket=${ticketUUID} ${message || ""}`);
     this.agentManager.recordPhoneHome(ticketUUID, message);
+
+    // Store expanded heartbeat fields if provided
+    const extraUpdates: string[] = [];
+    const extraValues: (string | number | null)[] = [];
+
+    if (ci_status !== undefined) {
+      extraUpdates.push("ci_status = ?");
+      extraValues.push(ci_status);
+    }
+    if (needs_attention !== undefined) {
+      extraUpdates.push("needs_attention = ?");
+      extraValues.push(needs_attention ? 1 : 0);
+    }
+    if (needs_attention_reason !== undefined) {
+      extraUpdates.push("needs_attention_reason = ?");
+      extraValues.push(needs_attention_reason);
+    }
+
+    if (extraUpdates.length > 0) {
+      this.ctx.storage.sql.exec(
+        `UPDATE tickets SET ${extraUpdates.join(", ")}, updated_at = datetime('now') WHERE ticket_uuid = ?`,
+        ...extraValues, ticketUUID,
+      );
+    }
 
     // Auto-transition spawning → active on first heartbeat.
     // The agent sends heartbeats once it's running — this replaces the old
@@ -2256,30 +1831,7 @@ export class Orchestrator extends Container<Bindings> {
         }
       }
 
-      const res = await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel,
-          thread_ts: threadTs,
-          text: message,
-        }),
-      });
-
-      if (!res.ok) {
-        console.error(`[Orchestrator] Slack API error: ${res.status} ${res.statusText}`);
-        return;
-      }
-
-      const json = (await res.json()) as { ok: boolean; error?: string };
-      if (!json.ok) {
-        console.error(`[Orchestrator] Slack API error: ${json.error}`);
-        return;
-      }
-
+      await this.postSlackMessage(channel, message, threadTs);
       console.log(`[Orchestrator] Posted status to channel=${channel}`);
     } catch (err) {
       console.error("[Orchestrator] Failed to handle status command:", err);
@@ -2325,7 +1877,12 @@ export class Orchestrator extends Container<Bindings> {
     return `${diffDays}d ago`;
   }
 
-  private async postSlackError(channel: string, threadTs: string, message: string): Promise<void> {
+  /** Post a message to Slack. Returns the message ts on success, null on failure. */
+  private async postSlackMessage(
+    channel: string,
+    text: string,
+    threadTs?: string | null,
+  ): Promise<string | null> {
     try {
       const res = await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
@@ -2335,22 +1892,25 @@ export class Orchestrator extends Container<Bindings> {
         },
         body: JSON.stringify({
           channel,
-          thread_ts: threadTs,
-          text: message,
+          text,
+          ...(threadTs && { thread_ts: threadTs }),
         }),
       });
 
       if (!res.ok) {
-        console.error(`[Orchestrator] Failed to post Slack error: ${res.status}`);
-        return;
+        console.error(`[Orchestrator] Slack API error: ${res.status}`);
+        return null;
       }
 
-      const data = await res.json() as { ok: boolean; error?: string };
+      const data = await res.json() as { ok: boolean; ts?: string; error?: string };
       if (!data.ok) {
         console.error(`[Orchestrator] Slack API error: ${data.error}`);
+        return null;
       }
+      return data.ts || null;
     } catch (err) {
-      console.error("[Orchestrator] Failed to post Slack error:", err);
+      console.error("[Orchestrator] Failed to post Slack message:", err);
+      return null;
     }
   }
 
@@ -2368,90 +1928,22 @@ export class Orchestrator extends Container<Bindings> {
       item?: { ts: string; channel: string };
     }>();
 
-    // Handle reaction_added events for decision feedback
-    if (slackEvent.type === "reaction_added" && slackEvent.item?.ts) {
-      const reactionTs = slackEvent.item.ts;
-      const reaction = slackEvent.reaction;
-
-      // Check if this reaction is on a decision message
-      const decision = this.ctx.storage.sql.exec(
-        `SELECT id FROM decision_log WHERE slack_message_ts = ?`,
-        reactionTs,
-      ).toArray()[0] as { id: string } | undefined;
-
-      if (decision) {
-        let feedback: "good" | "bad" | null = null;
-        if (reaction === "+1" || reaction === "thumbsup" || reaction === "white_check_mark" || reaction === "heavy_check_mark") {
-          feedback = "good";
-        } else if (reaction === "-1" || reaction === "thumbsdown" || reaction === "x" || reaction === "no_entry_sign") {
-          feedback = "bad";
-        }
-
-        if (feedback) {
-          console.log(`[Orchestrator] Decision feedback: ${feedback} for decision ${decision.id} from user ${slackEvent.user}`);
-          this.ctx.storage.sql.exec(
-            `INSERT INTO decision_feedback (id, decision_id, feedback, given_by, given_at, slack_message_ts)
-             VALUES (?, ?, ?, ?, datetime('now'), ?)
-             ON CONFLICT(decision_id) DO UPDATE SET
-               feedback = excluded.feedback,
-               given_by = excluded.given_by,
-               given_at = datetime('now')`,
-            crypto.randomUUID(),
-            decision.id,
-            feedback,
-            slackEvent.user || null,
-            reactionTs,
-          );
-          return Response.json({ ok: true, handled: "decision_feedback", feedback });
-        }
-      }
+    // Fast-ack: immediately add 👀 reaction so user knows we received the event
+    if (slackEvent.ts && slackEvent.channel && slackEvent.type === "app_mention") {
+      addReaction({
+        token: this.getSlackBotToken(),
+        channel: slackEvent.channel,
+        timestamp: slackEvent.ts,
+        name: "eyes",
+      }); // Fire-and-forget — don't await
     }
 
-    // Handle reply to a decision message with feedback details
-    if (slackEvent.type === "message" && slackEvent.thread_ts && slackEvent.text) {
-      const decision = this.ctx.storage.sql.exec(
-        `SELECT id FROM decision_log WHERE slack_message_ts = ?`,
-        slackEvent.thread_ts,
-      ).toArray()[0] as { id: string } | undefined;
-
-      if (decision) {
-        // User is replying to a decision message with details
-        // Update or insert feedback with the details
-        const existingFeedback = this.ctx.storage.sql.exec(
-          `SELECT feedback FROM decision_feedback WHERE decision_id = ?`,
-          decision.id,
-        ).toArray()[0] as { feedback: string } | undefined;
-
-        // Infer feedback from text if not already set
-        const textLower = slackEvent.text.toLowerCase();
-        let feedback = existingFeedback?.feedback || null;
-        if (!feedback) {
-          if (textLower.includes("bad") || textLower.includes("wrong") || textLower.includes("incorrect")) {
-            feedback = "bad";
-          } else if (textLower.includes("good") || textLower.includes("correct") || textLower.includes("right")) {
-            feedback = "good";
-          }
-        }
-
-        if (feedback) {
-          console.log(`[Orchestrator] Decision feedback reply: ${feedback} for decision ${decision.id} with details`);
-          this.ctx.storage.sql.exec(
-            `INSERT INTO decision_feedback (id, decision_id, feedback, details, given_by, given_at, slack_message_ts)
-             VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
-             ON CONFLICT(decision_id) DO UPDATE SET
-               feedback = excluded.feedback,
-               details = excluded.details,
-               given_by = excluded.given_by,
-               given_at = datetime('now')`,
-            crypto.randomUUID(),
-            decision.id,
-            feedback,
-            slackEvent.text,
-            slackEvent.user || null,
-            slackEvent.thread_ts,
-          );
-          return Response.json({ ok: true, handled: "decision_feedback_reply", feedback });
-        }
+    // Scan for injection attacks before processing
+    if (slackEvent.text) {
+      const scanResult = await normalizeSlackEvent(slackEvent as Record<string, unknown>);
+      if (!scanResult.ok) {
+        console.warn(`[Orchestrator] Slack event rejected: ${scanResult.error}`);
+        return Response.json({ ok: true, rejected: true, reason: "injection detected" });
       }
     }
 
@@ -2519,11 +2011,11 @@ export class Orchestrator extends Container<Bindings> {
     if (slackEvent.type !== "app_mention") {
       // This shouldn't happen (Socket Mode only forwards app_mention and thread messages),
       // but if it does, let the user know
-      await this.postSlackError(
+      await this.postSlackMessage(
         slackEvent.channel || "",
-        slackEvent.ts || "",
         `ℹ️ I only respond to direct mentions (@product-engineer).\n\n` +
-        `Please mention me to start a new task.`
+        `Please mention me to start a new task.`,
+        slackEvent.ts || ""
       );
       return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
     }
@@ -2539,39 +2031,86 @@ export class Orchestrator extends Container<Bindings> {
       return acc;
     }, {} as Record<string, ProductConfig>);
 
+    // Check if this mention is in the conductor's dedicated channel
+    const conductorChannelRows = this.ctx.storage.sql.exec(
+      "SELECT value FROM settings WHERE key = 'conductor_channel'",
+    ).toArray() as Array<{ value: string }>;
+    const conductorChannelId = conductorChannelRows.length > 0 ? conductorChannelRows[0].value : null;
+
     const product = resolveProductFromChannel(products, slackEvent.channel || "");
+
+    // Route to conductor if mention is in the conductor's dedicated channel
+    if (conductorChannelId && slackEvent.channel === conductorChannelId) {
+      console.log(`[Orchestrator] Mention in conductor channel ${conductorChannelId} — routing to Conductor`);
+
+      try {
+        const conductorStub = await this.ensureConductor();
+        const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+        const event: TicketEvent = {
+          type: "slack_mention",
+          source: "slack",
+          ticketUUID: `conductor-${slackEvent.ts || Date.now()}`,
+          product: "__conductor__",
+          payload: {
+            text: rawText,
+            user: slackEvent.user,
+            channel: slackEvent.channel,
+            ts: slackEvent.ts,
+          },
+          slackThreadTs: slackEvent.thread_ts || slackEvent.ts,
+          slackChannel: slackEvent.channel,
+        };
+        await conductorStub.fetch(new Request("http://project-agent/event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(event),
+        }));
+        return Response.json({ ok: true, routed: "conductor" });
+      } catch (err) {
+        console.error("[Orchestrator] Failed to route to Conductor:", err);
+        return Response.json({ error: "conductor_routing_failed" }, { status: 500 });
+      }
+    }
+
     if (!product) {
-      console.warn(`[Orchestrator] No product mapped to channel ${slackEvent.channel}`);
-
-      // Post error message to Slack so users know what went wrong
-      const registeredChannels = Object.values(products)
-        .map(p => `• <#${p.slack_channel_id || p.slack_channel}>`)
-        .join("\n");
-
-      await this.postSlackError(
-        slackEvent.channel || "",
-        slackEvent.ts || "",
-        `❌ This channel is not registered with Product Engineer.\n\n` +
-        `**Registered channels:**\n${registeredChannels}\n\n` +
-        `To register this channel, update the product registry in the Orchestrator database.`
-      );
-
-      return Response.json({ error: "no product for channel" }, { status: 404 });
+      console.log(`[Orchestrator] No product mapped to channel ${slackEvent.channel} — ignoring mention`);
+      return Response.json({ ok: true, ignored: true, reason: "unmapped_channel" });
     }
 
     const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
 
-    // Create a Linear ticket instead of spawning an agent directly.
-    // The Linear webhook will handle ticket creation → agent spawning.
     const productConfig = products[product];
     const projectName = productConfig.triggers?.linear?.project_name;
+
+    // Products without Linear (e.g., research mode) route directly to ProjectAgent
+    // without creating a ticket. The ProjectAgent handles the request directly.
     if (!projectName) {
-      await this.postSlackError(
-        slackEvent.channel || "",
-        slackThreadTs || "",
-        `❌ No Linear project configured for this product. Cannot create ticket.`,
+      console.log(`[Orchestrator] No Linear project for ${product} — routing directly to ProjectAgent`);
+
+      const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+      const ticketUUID = `slack-${slackEvent.ts || Date.now()}`;
+
+      const directEvent: TicketEvent = {
+        type: "slack_mention",
+        source: "slack",
+        ticketUUID,
+        product,
+        payload: {
+          text: rawText,
+          user: slackEvent.user,
+          channel: slackEvent.channel,
+          ts: slackEvent.ts,
+        },
+        slackThreadTs: slackThreadTs || undefined,
+        slackChannel: slackEvent.channel || undefined,
+      };
+
+      // Route to ProjectAgent (fire-and-forget — don't block Slack response)
+      this.routeToProjectAgent(product, directEvent).catch(err =>
+        console.error(`[Orchestrator] Direct ProjectAgent routing failed for ${product}:`, err)
       );
-      return Response.json({ error: "no linear project for product" }, { status: 400 });
+
+      return Response.json({ ok: true, routed: "project_agent", product });
     }
 
     // Load settings for Linear API
@@ -2582,10 +2121,10 @@ export class Orchestrator extends Container<Bindings> {
     const linearToken = this.getLinearAppToken();
 
     if (!teamId || !linearToken) {
-      await this.postSlackError(
+      await this.postSlackMessage(
         slackEvent.channel || "",
-        slackThreadTs || "",
         `❌ Linear integration not configured (missing team ID or token).`,
+        slackThreadTs || "",
       );
       return Response.json({ error: "linear not configured" }, { status: 500 });
     }
@@ -2664,10 +2203,10 @@ export class Orchestrator extends Container<Bindings> {
     if (!createRes.ok) {
       const errText = await createRes.text();
       console.error(`[Orchestrator] Failed to create Linear issue: ${createRes.status} ${errText}`);
-      await this.postSlackError(
+      await this.postSlackMessage(
         slackEvent.channel || "",
-        slackThreadTs || "",
         `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+        slackThreadTs || "",
       );
       return Response.json({ error: "linear issue creation failed" }, { status: 500 });
     }
@@ -2679,10 +2218,10 @@ export class Orchestrator extends Container<Bindings> {
 
     if (!issue) {
       console.error("[Orchestrator] Linear issueCreate returned no issue:", JSON.stringify(createData));
-      await this.postSlackError(
+      await this.postSlackMessage(
         slackEvent.channel || "",
-        slackThreadTs || "",
         `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+        slackThreadTs || "",
       );
       return Response.json({ error: "linear issue creation failed" }, { status: 500 });
     }
@@ -2691,44 +2230,18 @@ export class Orchestrator extends Container<Bindings> {
 
     // Post acknowledgment as a NEW top-level message (not a reply).
     // This message becomes the ticket thread — all future updates reply here.
-    let ticketThreadTs: string | null = null;
-    try {
-      const ackRes = await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${(this.env as Record<string, unknown>).SLACK_BOT_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: slackEvent.channel,
-          // No thread_ts — creates a new top-level message
-          text: `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
-        }),
-      });
-      const ackData = await ackRes.json() as { ok: boolean; ts?: string; error?: string };
-      if (ackData.ok && ackData.ts) {
-        ticketThreadTs = ackData.ts;
-      } else {
-        console.warn("[Orchestrator] Ack message failed:", ackData.error);
-      }
-    } catch (err) {
-      console.warn("[Orchestrator] Failed to post ack:", err);
-    }
+    const ticketThreadTs = await this.postSlackMessage(
+      slackEvent.channel!,
+      `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
+    );
 
     // Reply briefly in the user's original thread pointing to the ticket thread
     if (ticketThreadTs) {
-      fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${(this.env as Record<string, unknown>).SLACK_BOT_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel: slackEvent.channel,
-          thread_ts: slackThreadTs,
-          text: `👋 On it! Follow progress in the thread above.`,
-        }),
-      }).catch(err => console.warn("[Orchestrator] Failed to post thread pointer:", err));
+      this.postSlackMessage(
+        slackEvent.channel!,
+        `👋 On it! Follow progress in the thread above.`,
+        slackThreadTs,
+      ).catch(err => console.warn("[Orchestrator] Failed to post thread pointer:", err));
     }
 
     // Store the Slack thread association so the Linear webhook handler can link them.
@@ -2792,172 +2305,7 @@ export class Orchestrator extends Container<Bindings> {
     return Response.json({ ok: true, linearIssue: issue.identifier });
   }
 
-  private async handleSlackInteractive(request: Request): Promise<Response> {
-    const payload = await request.json<{
-      type: string;
-      user: { id: string };
-      actions?: Array<{ action_id: string; value: string }>;
-      message?: { ts: string };
-      view?: {
-        id: string;
-        state: {
-          values: Record<string, Record<string, { value?: string; selected_option?: { value: string } }>>;
-        };
-        private_metadata?: string;
-      };
-      trigger_id?: string;
-    }>();
-
-    // Handle button clicks for decision feedback
-    if (payload.type === "block_actions" && payload.actions && payload.actions.length > 0) {
-      const action = payload.actions[0];
-      const decisionId = action.value;
-      const userId = payload.user.id;
-
-      if (action.action_id === "decision_feedback_good") {
-        // Record "correct" feedback
-        this.ctx.storage.sql.exec(
-          `INSERT INTO decision_feedback (id, decision_id, feedback, given_by, given_at, slack_message_ts)
-           VALUES (?, ?, ?, ?, datetime('now'), ?)
-           ON CONFLICT(decision_id) DO UPDATE SET
-             feedback = excluded.feedback,
-             given_by = excluded.given_by,
-             given_at = datetime('now')`,
-          crypto.randomUUID(),
-          decisionId,
-          "good",
-          userId,
-          payload.message?.ts || null,
-        );
-        console.log(`[Orchestrator] Decision feedback (button): good for ${decisionId} from user ${userId}`);
-        return Response.json({ ok: true });
-      }
-
-      if (action.action_id === "decision_feedback_bad") {
-        // Record "incorrect" feedback
-        this.ctx.storage.sql.exec(
-          `INSERT INTO decision_feedback (id, decision_id, feedback, given_by, given_at, slack_message_ts)
-           VALUES (?, ?, ?, ?, datetime('now'), ?)
-           ON CONFLICT(decision_id) DO UPDATE SET
-             feedback = excluded.feedback,
-             given_by = excluded.given_by,
-             given_at = datetime('now')`,
-          crypto.randomUUID(),
-          decisionId,
-          "bad",
-          userId,
-          payload.message?.ts || null,
-        );
-        console.log(`[Orchestrator] Decision feedback (button): bad for ${decisionId} from user ${userId}`);
-        return Response.json({ ok: true });
-      }
-
-      if (action.action_id === "decision_feedback_details" && payload.trigger_id) {
-        // Open a modal for detailed feedback
-        const modalView = {
-          type: "modal",
-          callback_id: "decision_feedback_modal",
-          private_metadata: decisionId,
-          title: { type: "plain_text", text: "Decision Feedback" },
-          submit: { type: "plain_text", text: "Submit" },
-          close: { type: "plain_text", text: "Cancel" },
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: "Was this decision correct?",
-              },
-            },
-            {
-              type: "actions",
-              block_id: "feedback_choice",
-              elements: [
-                {
-                  type: "radio_buttons",
-                  action_id: "feedback_radio",
-                  options: [
-                    {
-                      text: { type: "plain_text", text: "✓ Correct" },
-                      value: "good",
-                    },
-                    {
-                      text: { type: "plain_text", text: "✗ Incorrect" },
-                      value: "bad",
-                    },
-                  ],
-                },
-              ],
-            },
-            {
-              type: "input",
-              block_id: "feedback_details",
-              label: { type: "plain_text", text: "Additional context (optional)" },
-              element: {
-                type: "plain_text_input",
-                action_id: "details_input",
-                multiline: true,
-                placeholder: {
-                  type: "plain_text",
-                  text: "Provide more details about what was right or wrong with this decision...",
-                },
-              },
-              optional: true,
-            },
-          ],
-        };
-
-        // Open the modal
-        try {
-          await fetch("https://slack.com/api/views.open", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${this.getSlackBotToken()}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              trigger_id: payload.trigger_id,
-              view: modalView,
-            }),
-          });
-        } catch (err) {
-          console.error("[Orchestrator] Failed to open modal:", err);
-        }
-
-        return Response.json({ ok: true });
-      }
-    }
-
-    // Handle modal submission for detailed feedback
-    if (payload.type === "view_submission" && payload.view) {
-      const decisionId = payload.view.private_metadata || "";
-      const values = payload.view.state.values;
-      const feedbackChoice = values.feedback_choice?.feedback_radio?.selected_option?.value as "good" | "bad" | undefined;
-      const details = values.feedback_details?.details_input?.value || null;
-      const userId = payload.user.id;
-
-      if (feedbackChoice) {
-        this.ctx.storage.sql.exec(
-          `INSERT INTO decision_feedback (id, decision_id, feedback, details, given_by, given_at, slack_message_ts)
-           VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
-           ON CONFLICT(decision_id) DO UPDATE SET
-             feedback = excluded.feedback,
-             details = excluded.details,
-             given_by = excluded.given_by,
-             given_at = datetime('now')`,
-          crypto.randomUUID(),
-          decisionId,
-          feedbackChoice,
-          details,
-          userId,
-          null,
-        );
-        console.log(`[Orchestrator] Decision feedback (modal): ${feedbackChoice} for ${decisionId} from user ${userId} with details`);
-      }
-
-      return Response.json({ response_action: "clear" });
-    }
-
+  private async handleSlackInteractive(_request: Request): Promise<Response> {
     return Response.json({ ok: true });
   }
 
@@ -3055,26 +2403,6 @@ export class Orchestrator extends Container<Bindings> {
       ORDER BY day DESC
     `).toArray() as Array<{ day: string; cost: number; tickets: number }>;
 
-    // Decision correctness (from feedback)
-    const decisionFeedback = this.ctx.storage.sql.exec(`
-      SELECT
-        feedback,
-        COUNT(*) as count
-      FROM decision_feedback
-      GROUP BY feedback
-    `).toArray() as Array<{ feedback: string; count: number }>;
-
-    const goodDecisions = decisionFeedback.find(f => f.feedback === "good")?.count || 0;
-    const badDecisions = decisionFeedback.find(f => f.feedback === "bad")?.count || 0;
-    const totalFeedback = goodDecisions + badDecisions;
-    const decisionAccuracy = totalFeedback > 0 ? (goodDecisions / totalFeedback * 100).toFixed(1) : "N/A";
-
-    // Decisions without feedback (assumed good)
-    const totalDecisions = this.ctx.storage.sql.exec(
-      `SELECT COUNT(*) as count FROM decision_log`
-    ).toArray()[0] as { count: number };
-    const decisionsWithoutFeedback = totalDecisions.count - totalFeedback;
-
     // Average time to completion
     const avgCompletionTime = this.ctx.storage.sql.exec(`
       SELECT AVG(
@@ -3101,64 +2429,7 @@ export class Orchestrator extends Container<Bindings> {
         max: costStats?.max_cost?.toFixed(2) || "0",
         daily: dailyCost,
       },
-      decisions: {
-        total: totalDecisions.count,
-        withFeedback: totalFeedback,
-        withoutFeedback: decisionsWithoutFeedback,
-        accuracy: decisionAccuracy === "N/A" ? "N/A" : `${decisionAccuracy}%`,
-        goodCount: goodDecisions,
-        badCount: badDecisions,
-      },
     });
-  }
-
-  private async handleDecisionFeedback(request: Request): Promise<Response> {
-    const { decisionId, feedback, details, givenBy, slackMessageTs } = await request.json<{
-      decisionId?: string;
-      slackMessageTs?: string;
-      feedback: "good" | "bad";
-      details?: string;
-      givenBy?: string;
-    }>();
-
-    if (!feedback || (feedback !== "good" && feedback !== "bad")) {
-      return Response.json({ error: "feedback must be 'good' or 'bad'" }, { status: 400 });
-    }
-
-    // If slackMessageTs is provided, look up the decision by slack_message_ts
-    let resolvedDecisionId = decisionId;
-    if (!resolvedDecisionId && slackMessageTs) {
-      const decision = this.ctx.storage.sql.exec(
-        `SELECT id FROM decision_log WHERE slack_message_ts = ?`,
-        slackMessageTs,
-      ).toArray()[0] as { id: string } | undefined;
-      if (decision) {
-        resolvedDecisionId = decision.id;
-      }
-    }
-
-    if (!resolvedDecisionId) {
-      return Response.json({ error: "decisionId or slackMessageTs required" }, { status: 400 });
-    }
-
-    // Insert or update feedback
-    this.ctx.storage.sql.exec(
-      `INSERT INTO decision_feedback (id, decision_id, feedback, details, given_by, given_at, slack_message_ts)
-       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
-       ON CONFLICT(decision_id) DO UPDATE SET
-         feedback = excluded.feedback,
-         details = excluded.details,
-         given_by = excluded.given_by,
-         given_at = datetime('now')`,
-      crypto.randomUUID(),
-      resolvedDecisionId,
-      feedback,
-      details || null,
-      givenBy || null,
-      slackMessageTs || null,
-    );
-
-    return Response.json({ ok: true, decisionId: resolvedDecisionId });
   }
 
 }
