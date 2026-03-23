@@ -651,6 +651,7 @@ Respond with ONLY the JSON object, no other text.`,
     const registry = await request.json<{
       linear_team_id?: string;
       linear_app_user_id?: string;
+      conductor_channel?: string;
       cloudflare_ai_gateway?: { account_id: string; gateway_id: string };
       products: Record<string, unknown>;
     }>();
@@ -663,6 +664,7 @@ Respond with ONLY the JSON object, no other text.`,
     const settingsToUpsert: [string, string][] = [];
     if (registry.linear_team_id) settingsToUpsert.push(["linear_team_id", registry.linear_team_id]);
     if (registry.linear_app_user_id) settingsToUpsert.push(["linear_app_user_id", registry.linear_app_user_id]);
+    if (registry.conductor_channel) settingsToUpsert.push(["conductor_channel", registry.conductor_channel]);
     if (registry.cloudflare_ai_gateway) settingsToUpsert.push(["cloudflare_ai_gateway", JSON.stringify(registry.cloudflare_ai_gateway)]);
 
     for (const [key, value] of settingsToUpsert) {

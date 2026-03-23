@@ -64,6 +64,17 @@ For each secret in the product's config:
    - `app_mention` enables @mentions to create new tickets
    - `message.channels` enables thread replies without @mentions to continue conversations
 
+**For the Conductor channel (cross-product coordination):**
+1. Set the conductor channel so the orchestrator routes messages there without requiring @mentions:
+   ```bash
+   curl -X PUT <WORKER_URL>/api/settings/conductor_channel \
+     -H "Content-Type: application/json" \
+     -d '{"value": "<CHANNEL_ID>"}'
+   ```
+   Or include `"conductor_channel": "<CHANNEL_ID>"` in the seed payload (`POST /api/products/seed`).
+2. Get the channel ID from Slack: right-click channel name → "Copy link" → extract the `C...` segment from the URL.
+3. Without this setting, plain messages in the conductor channel are silently ignored — only @mentions work.
+
 **For feedback widgets (web apps only):**
 1. The product's worker dispatches to the orchestrator: `POST /api/dispatch`
 2. Include `X-API-Key` header with the orchestrator's API key
