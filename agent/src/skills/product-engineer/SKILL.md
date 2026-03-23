@@ -77,10 +77,25 @@ Examples: database schema changes, API contract changes, deleting data, architec
 - If no CI configured: proceed to merge immediately
 - Max 3 CI fix attempts before giving up
 
-### 6. Merge (YOU must do this)
-- When CI passes (or no CI), call `merge_pr` with the PR URL
-- Use `update_task_status` with status `merged`
-- Notify Slack: "PR merged! Task complete."
+### 6. Merge Decision (YOU must make this call)
+When CI passes (or no CI), apply the same decision framework to merging:
+
+**Auto-merge** (reversible, low-risk changes):
+- Small bug fixes, copy changes, test additions, config tweaks
+- Changes isolated to a single file or module with no downstream dependencies
+- Additive changes (new functions, new files) that don't modify existing behavior
+- Call `merge_pr`, update status to `merged`, notify Slack: "PR merged! Task complete."
+
+**Request human review first** (hard-to-reverse, risky changes):
+- Database schema changes or migrations
+- API contract changes (new/modified endpoints, changed request/response shapes)
+- Security-sensitive code (auth, permissions, secrets handling, input validation)
+- Changes touching multiple systems or shared infrastructure
+- Deleting or significantly refactoring existing functionality
+- Dependency upgrades that could break downstream consumers
+- Notify Slack: "PR is ready — requesting human review before merge because [reason]."
+- Use `update_task_status` with status `in_review`
+- Wait for a PR approval or Slack reply before merging
 
 ### 7. Handle Failure
 - If you can't fix CI after 3 attempts: notify Slack explaining what's failing
