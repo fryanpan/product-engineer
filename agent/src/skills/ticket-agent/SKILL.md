@@ -135,6 +135,7 @@ Call `update_task_status` at every phase transition:
 
 ## Communication
 
+- **Always identify yourself as "Ticket Agent"** at the start of Slack messages (e.g., "Ticket Agent: PR is ready for review...")
 - Use `update_task_status` at **every state transition** (updates orchestrator, Linear, and Slack header automatically)
 - Use `notify_slack` for progress updates — but always combine with other work in the same turn
 - Use `ask_question` when you need clarification (reply comes as your next message)

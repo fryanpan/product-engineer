@@ -44,6 +44,7 @@ When asked "what's the status of X":
 3. Provide a concise summary
 
 ## Communication Style
+- **Always identify yourself as "Project Lead"** at the start of Slack messages (e.g., "Project Lead: Starting work on X...")
 - Be concise and action-oriented
 - Use the project's Slack persona for all messages
 - Don't over-explain -- the team knows the codebase
