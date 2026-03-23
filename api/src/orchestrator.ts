@@ -2129,6 +2129,12 @@ Respond with ONLY the JSON object, no other text.`,
     ).toArray() as Array<{ value: string }>;
     const conductorChannelId = conductorChannelRows.length > 0 ? conductorChannelRows[0].value : null;
 
+    if (!conductorChannelId) {
+      console.log(`[Orchestrator] No conductor_channel configured in settings — conductor routing skipped for channel ${slackEvent.channel}`);
+    } else if (slackEvent.channel !== conductorChannelId) {
+      console.log(`[Orchestrator] Message in channel ${slackEvent.channel} does not match conductor channel ${conductorChannelId}`);
+    }
+
     if (conductorChannelId && slackEvent.channel === conductorChannelId) {
       console.log(`[Orchestrator] Mention in conductor channel ${conductorChannelId} — routing to Conductor`);
 
