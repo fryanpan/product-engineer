@@ -23,6 +23,7 @@ export interface TurnUsage {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   costUsd: number;
+  model?: string;
   promptSnippet?: string;
   outputSnippet?: string;
 }
@@ -34,6 +35,7 @@ export interface TokenSummary {
   totalCacheCreationTokens: number;
   totalCostUsd: number;
   turns: number;
+  model?: string;
   turnLog: TurnUsage[];
 }
 
@@ -45,6 +47,7 @@ export interface ReportOptions {
   slackChannel: string;
   slackThreadTs?: string;
   sessionMessageCount?: number;
+  model?: string;
 }
 
 // ── Implementation ─────────────────────────────────────────────────────────
@@ -56,6 +59,7 @@ export class TokenTracker {
   private totalCacheCreationTokens = 0;
   private totalCostUsd = 0;
   private turnLog: TurnUsage[] = [];
+  private model?: string;
 
   /** Record a single assistant turn's token usage. */
   recordTurn(input: {
@@ -63,6 +67,7 @@ export class TokenTracker {
     outputTokens: number;
     cacheReadTokens: number;
     cacheCreationTokens: number;
+    model?: string;
     promptSnippet?: string;
     outputSnippet?: string;
   }): void {
@@ -72,6 +77,11 @@ export class TokenTracker {
     this.totalOutputTokens += outputTokens;
     this.totalCacheReadTokens += cacheReadTokens;
     this.totalCacheCreationTokens += cacheCreationTokens;
+
+    // Store model from first turn (all turns in a session use the same model)
+    if (!this.model && input.model) {
+      this.model = input.model;
+    }
 
     const turnCost =
       inputTokens * INPUT_COST_PER_TOKEN +
@@ -88,6 +98,7 @@ export class TokenTracker {
       cacheReadTokens,
       cacheCreationTokens,
       costUsd: turnCost,
+      model: input.model,
       promptSnippet: input.promptSnippet,
       outputSnippet: input.outputSnippet,
     });
@@ -111,6 +122,7 @@ export class TokenTracker {
     this.totalCacheCreationTokens = 0;
     this.totalCostUsd = 0;
     this.turnLog = [];
+    this.model = undefined;
   }
 
   /** Return a snapshot of current totals and per-turn log. */
@@ -122,6 +134,7 @@ export class TokenTracker {
       totalCacheCreationTokens: this.totalCacheCreationTokens,
       totalCostUsd: this.totalCostUsd,
       turns: this.turnLog.length,
+      model: this.model,
       turnLog: [...this.turnLog],
     };
   }
@@ -133,6 +146,9 @@ export class TokenTracker {
     const formattedOutputTokens = (this.totalOutputTokens / 1000).toFixed(1);
 
     let msg = `📊 **Token Usage Summary**\n\n`;
+    if (this.model) {
+      msg += `**Model:** ${this.model}\n`;
+    }
     msg += `**Total Cost:** $${formattedCost}\n`;
     msg += `**Input:** ${formattedInputTokens}K tokens ($${(this.totalInputTokens * INPUT_COST_PER_TOKEN).toFixed(2)})\n`;
     msg += `**Output:** ${formattedOutputTokens}K tokens ($${(this.totalOutputTokens * OUTPUT_COST_PER_TOKEN).toFixed(2)})\n`;
@@ -186,6 +202,7 @@ export class TokenTracker {
         totalCostUsd: summary.totalCostUsd,
         turns: summary.turns,
         sessionMessageCount: options.sessionMessageCount ?? summary.turns,
+        model: options.model ?? summary.model,
       };
 
       const apiRes = await fetch(`${options.workerUrl}/api/internal/token-usage`, {
