@@ -361,7 +361,7 @@ app.post("/event", async (c) => {
         config.ticketTitle = ticketData.title;
       }
 
-      const prompt = await buildPrompt(taskPayload, config.slackBotToken, process.env.MODE);
+      const prompt = await buildPrompt(taskPayload, config.slackBotToken, process.env.MODE, roleConfig.role);
       await startSession(prompt);
       drainBufferedEvents();
     } else if (messageYielder) {

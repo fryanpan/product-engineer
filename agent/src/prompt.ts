@@ -12,6 +12,7 @@
 import Mustache from "mustache";
 import initialTemplate from "./prompts/task-initial.mustache";
 import researchTemplate from "./prompts/task-research.mustache";
+import projectLeadTemplate from "./prompts/task-project-lead.mustache";
 import resumeTemplate from "./prompts/task-resume.mustache";
 
 import type {
@@ -91,8 +92,14 @@ export async function buildPrompt(
   task: TaskPayload,
   slackBotToken: string,
   mode?: string,
+  role?: string,
 ): Promise<MessageContent> {
-  const template = mode === "research" ? researchTemplate : initialTemplate;
+  const template =
+    role === "project-lead" || role === "conductor"
+      ? projectLeadTemplate
+      : mode === "research"
+        ? researchTemplate
+        : initialTemplate;
 
   const header = Mustache.render(template, {
     product: task.product,
