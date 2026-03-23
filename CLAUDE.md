@@ -67,7 +67,7 @@ Container class — one instance per ticket, lives up to 2 hours:
 - Runs a persistent HTTP server that receives events from the Orchestrator DO
 - Wraps the Agent SDK with `settingSources: ["project"]` to load product repo CLAUDE.md and skills
 - Loads plugins from the target repo's `.claude/settings.json` (`enabledPlugins`) — see Plugin Loading below
-- Follows the `product-engineer` skill for decision-making (reversible actions = autonomous, irreversible = batch and ask)
+- Follows the `ticket-agent` skill for decision-making (reversible actions = autonomous, irreversible = batch and ask)
 - Communicates via Slack (`notify_slack`, `ask_question` tools)
 - Handles full ticket lifecycle: creation, implementation, PR, review, revision, merge
 
@@ -93,7 +93,7 @@ Products are stored in the Orchestrator DO's SQLite database, managed via the ad
 Agent decision-making is encoded in English skills, not TypeScript. Skills are split into two locations:
 
 **Agent skills** (`agent/src/skills/`): Define how autonomous agents behave — decision framework, coding workflow, retros. These are baked into the container image and injected into target repos at runtime via `settingSources: ["project"]`.
-- `product-engineer` — ticket agent lifecycle (implement → PR → CI → merge)
+- `ticket-agent` — ticket agent lifecycle (implement → PR → CI → merge)
 - `coding-project-lead` — project lead event routing and ticket management
 - `conductor` — cross-product coordinator / DM handler
 - `research-agent` — non-coding research tasks

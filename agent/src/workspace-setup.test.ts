@@ -94,7 +94,7 @@ function makeRoleConfig(overrides: Partial<RoleConfig> = {}): RoleConfig {
     persistAfterSession: false,
     exitOnError: true,
     peRepoRequired: false,
-    peRepo: "fryanpan/product-engineer",
+    peRepo: "fryanpan/ticket-agent",
     ...overrides,
   };
 }
@@ -103,11 +103,11 @@ function makeRoleConfig(overrides: Partial<RoleConfig> = {}): RoleConfig {
 
 describe("injectSkills", () => {
   it("copies entire skill folders into target directory", async () => {
-    globResults = ["product-engineer/SKILL.md", "task-retro/SKILL.md"];
+    globResults = ["ticket-agent/SKILL.md", "task-retro/SKILL.md"];
 
     // Register expected spawn calls for cp -r (whole folder copy)
     spawnCalls.push({
-      cmd: ["cp", "-r", "/app/src/skills/product-engineer", "/target/.claude/skills/product-engineer"],
+      cmd: ["cp", "-r", "/app/src/skills/ticket-agent", "/target/.claude/skills/ticket-agent"],
       exitCode: 0,
     });
     spawnCalls.push({
@@ -117,7 +117,7 @@ describe("injectSkills", () => {
 
     const names = await injectSkills("/target/.claude/skills");
 
-    expect(names).toEqual(["product-engineer", "task-retro"]);
+    expect(names).toEqual(["ticket-agent", "task-retro"]);
   });
 
   it("uses custom source directory when provided", async () => {
@@ -255,8 +255,8 @@ describe("setupWorkspace", () => {
     spawnCalls.push({
       cmd: [
         "git", "clone",
-        "https://github.com/fryanpan/product-engineer.git",
-        "/workspace/product-engineer",
+        "https://github.com/fryanpan/ticket-agent.git",
+        "/workspace/ticket-agent",
       ],
       exitCode: 0,
     });
@@ -275,13 +275,13 @@ describe("setupWorkspace", () => {
       roleConfig: makeRoleConfig({
         role: "project-lead",
         isProjectLead: true,
-        peRepo: "fryanpan/product-engineer",
+        peRepo: "fryanpan/ticket-agent",
         peRepoRequired: true,
       }),
       phoneHome,
     });
 
-    expect(result.agentCwd).toBe("/workspace/product-engineer");
+    expect(result.agentCwd).toBe("/workspace/ticket-agent");
     expect(result.additionalDirs).toEqual(["/workspace/target-app"]);
   });
 
@@ -292,23 +292,23 @@ describe("setupWorkspace", () => {
     spawnCalls.push({
       cmd: [
         "git", "clone",
-        "https://github.com/fryanpan/product-engineer.git",
-        "/workspace/product-engineer",
+        "https://github.com/fryanpan/ticket-agent.git",
+        "/workspace/ticket-agent",
       ],
       exitCode: 0,
     });
 
     const result = await setupWorkspace({
-      repos: ["fryanpan/product-engineer"],
+      repos: ["fryanpan/ticket-agent"],
       roleConfig: makeRoleConfig({
         role: "project-lead",
         isProjectLead: true,
-        peRepo: "fryanpan/product-engineer",
+        peRepo: "fryanpan/ticket-agent",
       }),
       phoneHome,
     });
 
-    expect(result.agentCwd).toBe("/workspace/product-engineer");
+    expect(result.agentCwd).toBe("/workspace/ticket-agent");
     // PE repo is in repos, but since it IS the PE repo, it's not an additional dir
     expect(result.additionalDirs).toEqual([]);
   });
