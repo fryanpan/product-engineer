@@ -16,9 +16,10 @@
  *   4. Agent posts to Slack (creates thread)
  *   5. Agent responds to thread reply
  *   6. ProjectAgent status query works
- *   C1. Conductor routes status query
- *   C2. Conductor routes work delegation
- *   C3. Conductor routes relay directions
+ *   C1. Conductor status query — routes + verifies Slack response with task info
+ *   C2. Conductor task details — queries specific project status
+ *   C3. Conductor relay — forwards directions to project agent
+ *   C4. Conductor channel isolation — unmapped channels are rejected
  *
  * FULL mode (default):
  *   Steps 1-6, plus:
@@ -720,16 +721,32 @@ async function step6_verifyProjectAgentStatus(): Promise<void> {
 
 // --- Conductor tests ---
 
-async function stepC1_conductorStatusQuery(): Promise<void> {
-  log("conductor-1", "Testing Conductor routing for status query...");
+const CONDUCTOR_RESPONSE_TIMEOUT_MS = 180_000; // 3 min — conductor may cold-start
 
+/**
+ * Helper: send a mention to the conductor channel (post real Slack message for visibility,
+ * then route via internal endpoint) and wait for the conductor to reply in the thread.
+ *
+ * Returns the conductor's reply messages, or empty array if it didn't respond in time.
+ */
+async function sendConductorMentionAndWaitForReply(
+  stepName: string,
+  mentionText: string,
+  timeoutMs: number = CONDUCTOR_RESPONSE_TIMEOUT_MS,
+): Promise<{ routed: boolean; threadTs: string; replies: SlackMessage[] }> {
   if (!SLACK_APP_TOKEN) {
-    logWarn("conductor-1", "Skipping (SLACK_APP_TOKEN not set)");
-    return;
+    logWarn(stepName, "Skipping (SLACK_APP_TOKEN not set)");
+    return { routed: false, threadTs: "", replies: [] };
   }
 
-  // Send a message to the conductor's dedicated channel via the internal endpoint
-  const testTs = `${Date.now() / 1000}`;
+  // Post a real Slack message to the conductor channel for visibility
+  const botUserId = process.env.SLACK_BOT_USER_ID || "U0AKJ2C6QUA";
+  const fullText = `<@${botUserId}> ${mentionText}`;
+  const slackResult = await postSlackMessage(STAGING_CONDUCTOR_CHANNEL, fullText);
+  const threadTs = slackResult.ts;
+  log(stepName, `Posted to conductor channel: ts=${threadTs}`);
+
+  // Route through internal endpoint (same path Socket Mode uses)
   const res = await fetch(`${STAGING_URL}/api/internal/slack-event`, {
     method: "POST",
     headers: {
@@ -738,71 +755,166 @@ async function stepC1_conductorStatusQuery(): Promise<void> {
     },
     body: JSON.stringify({
       type: "app_mention",
-      text: "<@BOT> What's the status of all projects?",
+      text: fullText,
       user: "U_E2E_CONDUCTOR",
       channel: STAGING_CONDUCTOR_CHANNEL,
-      ts: testTs,
+      ts: threadTs,
     }),
   });
 
   if (!res.ok) {
-    logWarn("conductor-1", `Internal endpoint returned ${res.status} — Conductor routing may not be deployed yet`);
-    return;
+    logWarn(stepName, `Internal endpoint returned ${res.status} — Conductor routing may not be deployed yet`);
+    return { routed: false, threadTs, replies: [] };
   }
 
   const data = await res.json() as { routed?: string; error?: string };
-  if (data.routed === "conductor") {
-    logSuccess("conductor-1", "Status query routed to Conductor successfully");
+  if (data.routed !== "conductor") {
+    logWarn(stepName, `Event was not routed to Conductor: ${JSON.stringify(data)}`);
+    return { routed: false, threadTs, replies: [] };
+  }
+
+  logSuccess(stepName, "Event routed to Conductor");
+
+  // Poll for conductor's reply in the thread
+  const deadline = Date.now() + timeoutMs;
+  log(stepName, `Waiting up to ${timeoutMs / 1000}s for conductor to reply...`);
+
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS);
+
+    try {
+      const messages = await getSlackThreadMessages(STAGING_CONDUCTOR_CHANNEL, threadTs);
+      // Filter out the original message — look for bot replies
+      const replies = messages.filter(m => m.ts !== threadTs && (m.bot_id || m.user !== "U_E2E_CONDUCTOR"));
+      if (replies.length > 0) {
+        return { routed: true, threadTs, replies };
+      }
+    } catch {
+      // Slack API hiccup — keep polling
+    }
+  }
+
+  logWarn(stepName, "Conductor did not reply within timeout");
+  return { routed: true, threadTs, replies: [] };
+}
+
+async function stepC1_conductorStatusQuery(): Promise<void> {
+  log("conductor-1", "Testing Conductor status query behavior...");
+
+  const { routed, replies } = await sendConductorMentionAndWaitForReply(
+    "conductor-1",
+    "What's the status of all projects? List any active tasks.",
+  );
+
+  if (!routed) return;
+
+  if (replies.length === 0) {
+    logWarn("conductor-1", "Conductor was routed but did not reply — may still be cold-starting");
+    return;
+  }
+
+  // Verify the conductor's response looks like a status report
+  const replyText = replies.map(r => r.text).join("\n").toLowerCase();
+  logSuccess("conductor-1", `Conductor replied with ${replies.length} message(s)`);
+
+  // The conductor should mention task status, projects, or indicate no active tasks
+  const statusIndicators = ["status", "task", "project", "active", "no ", "none", "idle", "working", "progress"];
+  const hasStatusContent = statusIndicators.some(indicator => replyText.includes(indicator));
+
+  if (hasStatusContent) {
+    logSuccess("conductor-1", "Response contains task status information");
   } else {
-    logWarn("conductor-1", `Event was not routed to Conductor: ${JSON.stringify(data)}`);
+    logWarn("conductor-1", `Response may not contain status info: "${replies[0].text.slice(0, 120)}..."`);
   }
 }
 
-async function stepC2_conductorDelegateWork(): Promise<void> {
-  log("conductor-2", "Testing Conductor routing for work delegation...");
+async function stepC2_conductorTaskDetails(): Promise<void> {
+  log("conductor-2", "Testing Conductor can query details on a specific task...");
 
   if (!SLACK_APP_TOKEN) {
     logWarn("conductor-2", "Skipping (SLACK_APP_TOKEN not set)");
     return;
   }
 
-  const testTs = `${Date.now() / 1000}`;
-  const res = await fetch(`${STAGING_URL}/api/internal/slack-event`, {
-    method: "POST",
-    headers: {
-      "X-Internal-Key": SLACK_APP_TOKEN,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      type: "app_mention",
-      text: "<@BOT> Please start working on a test task for staging-test-app: add a hello world function",
-      user: "U_E2E_CONDUCTOR",
-      channel: STAGING_CONDUCTOR_CHANNEL,
-      ts: testTs,
-    }),
-  });
+  // First, check if there are any active tasks we can ask about
+  try {
+    const status = await apiCall<StatusResponse>("/api/project-agent/v3/status");
+    const activeAgents = status.activeAgents || [];
 
-  if (!res.ok) {
-    logWarn("conductor-2", `Internal endpoint returned ${res.status}`);
+    if (activeAgents.length === 0) {
+      log("conductor-2", "No active agents — asking conductor about recent tasks instead");
+    } else {
+      log("conductor-2", `Found ${activeAgents.length} active agent(s) to query about`);
+    }
+  } catch {
+    log("conductor-2", "Could not fetch active agents — proceeding with general query");
+  }
+
+  const { routed, replies } = await sendConductorMentionAndWaitForReply(
+    "conductor-2",
+    "Can you check on the staging-test-app project? What tasks have been worked on recently and what's their current status?",
+  );
+
+  if (!routed) return;
+
+  if (replies.length === 0) {
+    logWarn("conductor-2", "Conductor was routed but did not reply");
     return;
   }
 
-  const data = await res.json() as { routed?: string };
-  if (data.routed === "conductor") {
-    logSuccess("conductor-2", "Work delegation routed to Conductor");
+  const replyText = replies.map(r => r.text).join("\n").toLowerCase();
+  logSuccess("conductor-2", `Conductor replied with ${replies.length} message(s)`);
+
+  // The conductor should reference the staging-test-app or mention task details
+  const detailIndicators = ["staging-test-app", "task", "ticket", "pr", "branch", "status", "no task", "no active"];
+  const hasDetails = detailIndicators.some(indicator => replyText.includes(indicator));
+
+  if (hasDetails) {
+    logSuccess("conductor-2", "Response contains project-specific task details");
   } else {
-    logWarn("conductor-2", `Unexpected routing: ${JSON.stringify(data)}`);
+    logWarn("conductor-2", `Response may not contain task details: "${replies[0].text.slice(0, 120)}..."`);
   }
 }
 
 async function stepC3_conductorRelayDirections(): Promise<void> {
-  log("conductor-3", "Testing Conductor routing for relay directions...");
+  log("conductor-3", "Testing Conductor relay to project agent...");
 
-  if (!SLACK_APP_TOKEN) {
-    logWarn("conductor-3", "Skipping (SLACK_APP_TOKEN not set)");
+  const { routed, replies } = await sendConductorMentionAndWaitForReply(
+    "conductor-3",
+    "Tell staging-test-app to prioritize any pending tasks and make sure they have tests",
+  );
+
+  if (!routed) return;
+
+  if (replies.length === 0) {
+    logWarn("conductor-3", "Conductor was routed but did not reply");
     return;
   }
 
+  const replyText = replies.map(r => r.text).join("\n").toLowerCase();
+  logSuccess("conductor-3", `Conductor replied with ${replies.length} message(s)`);
+
+  // The conductor should acknowledge the relay or report what it did
+  const relayIndicators = ["relay", "sent", "forward", "told", "staging-test-app", "message", "direct", "no active", "no task"];
+  const acknowledgedRelay = relayIndicators.some(indicator => replyText.includes(indicator));
+
+  if (acknowledgedRelay) {
+    logSuccess("conductor-3", "Conductor acknowledged relay action");
+  } else {
+    logWarn("conductor-3", `Response may not confirm relay: "${replies[0].text.slice(0, 120)}..."`);
+  }
+}
+
+async function stepC4_conductorChannelIsolation(): Promise<void> {
+  log("conductor-4", "Testing Conductor channel isolation (unmapped channel rejection)...");
+
+  if (!SLACK_APP_TOKEN) {
+    logWarn("conductor-4", "Skipping (SLACK_APP_TOKEN not set)");
+    return;
+  }
+
+  // Send a mention from a channel that is NOT the conductor channel and NOT mapped to any product
+  const fakeChannel = "C_UNMAPPED_TEST";
   const testTs = `${Date.now() / 1000}`;
   const res = await fetch(`${STAGING_URL}/api/internal/slack-event`, {
     method: "POST",
@@ -812,23 +924,26 @@ async function stepC3_conductorRelayDirections(): Promise<void> {
     },
     body: JSON.stringify({
       type: "app_mention",
-      text: "<@BOT> Tell staging-test-app to prioritize the hello world function and make sure it has tests",
+      text: "<@BOT> This should be ignored",
       user: "U_E2E_CONDUCTOR",
-      channel: STAGING_CONDUCTOR_CHANNEL,
+      channel: fakeChannel,
       ts: testTs,
     }),
   });
 
   if (!res.ok) {
-    logWarn("conductor-3", `Internal endpoint returned ${res.status}`);
+    logWarn("conductor-4", `Internal endpoint returned ${res.status}`);
     return;
   }
 
-  const data = await res.json() as { routed?: string };
-  if (data.routed === "conductor") {
-    logSuccess("conductor-3", "Relay directions routed to Conductor");
+  const data = await res.json() as { ok?: boolean; ignored?: boolean; reason?: string; routed?: string };
+
+  if (data.ignored && data.reason === "unmapped_channel") {
+    logSuccess("conductor-4", "Unmapped channel correctly rejected (not routed to conductor or any product)");
+  } else if (data.routed === "conductor") {
+    logWarn("conductor-4", "Message was routed to conductor — channel isolation NOT working (catch-all still active)");
   } else {
-    logWarn("conductor-3", `Unexpected routing: ${JSON.stringify(data)}`);
+    logWarn("conductor-4", `Unexpected response: ${JSON.stringify(data)}`);
   }
 }
 
@@ -1095,7 +1210,7 @@ Verification Coverage:
   Tier 1: Infrastructure connectivity (prereqs)
   Tier 2: Event routing — Slack → ProjectAgent → TicketAgent
   Tier 3: Agent communication — posts to Slack, responds to replies
-  Tier 3b: Conductor routing — status queries, work delegation, relay
+  Tier 3b: Conductor behavior — status queries, task details, relay, channel isolation
   Tier 4: Full lifecycle — implement → PR → CI → merge → terminate
   `);
   process.exit(0);
@@ -1154,10 +1269,11 @@ try {
     await step5_verifyAgentRespondsToReply(ctx);
     await step6_verifyProjectAgentStatus();
 
-    // --- Tier 3b: Conductor routing ---
+    // --- Tier 3b: Conductor behavior ---
     await stepC1_conductorStatusQuery();
-    await stepC2_conductorDelegateWork();
+    await stepC2_conductorTaskDetails();
     await stepC3_conductorRelayDirections();
+    await stepC4_conductorChannelIsolation();
 
     if (mode === "medium") {
       console.log("\n[medium] Stopping after Conductor tests");

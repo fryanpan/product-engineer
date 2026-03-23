@@ -176,69 +176,70 @@ describe("SlackEcho", () => {
       expect(mockFetch.calls[0].body.text).toContain("Bash");
     });
 
-    test("formats Bash tool", () => {
+    test("formats Bash tool with description only", () => {
+      echo.echoToolUse("Bash", { command: "npm test --coverage", description: "Run tests" });
+
+      const text = mockFetch.calls[0].body.text as string;
+      expect(text).toContain("`Bash`");
+      expect(text).toContain("Run tests");
+      expect(text).not.toContain("npm test");
+    });
+
+    test("formats Bash tool without description as name only", () => {
       echo.echoToolUse("Bash", { command: "npm test --coverage" });
 
       const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("\u{1F527}");
       expect(text).toContain("`Bash`");
-      expect(text).toContain("$ npm test --coverage");
+      expect(text).not.toContain("npm test");
     });
 
-    test("formats Read tool with short path", () => {
+    test("formats Read tool with short path only", () => {
       echo.echoToolUse("Read", { file_path: "/home/user/project/src/index.ts" });
 
       const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("\u{1F4C4}");
+      expect(text).toContain("`Bash`".replace("Bash", "Read"));
       expect(text).toContain("src/index.ts");
     });
 
-    test("formats Edit tool with short path", () => {
+    test("formats Edit tool with short path only", () => {
       echo.echoToolUse("Edit", { file_path: "/a/b/c/file.ts", old_string: "x", new_string: "y" });
 
       const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("\u{270F}\u{FE0F}");
+      expect(text).toContain("`Edit`");
       expect(text).toContain("c/file.ts");
+      expect(text).not.toContain("old_string");
     });
 
-    test("formats Write tool with short path", () => {
-      echo.echoToolUse("Write", { file_path: "/a/b/c/new-file.ts", content: "..." });
-
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("\u{270F}\u{FE0F}");
-      expect(text).toContain("c/new-file.ts");
-    });
-
-    test("formats Glob tool", () => {
+    test("formats Glob tool as name only", () => {
       echo.echoToolUse("Glob", { pattern: "**/*.test.ts" });
 
       const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("\u{1F50D}");
-      expect(text).toContain("**/*.test.ts");
+      expect(text).toContain("`Glob`");
+      expect(text).not.toContain("**/*.test.ts");
     });
 
-    test("formats Grep tool", () => {
+    test("formats Grep tool as name only", () => {
       echo.echoToolUse("Grep", { pattern: "import.*from" });
 
       const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("\u{1F50D}");
-      expect(text).toContain("import.*from");
+      expect(text).toContain("`Grep`");
+      expect(text).not.toContain("import.*from");
     });
 
-    test("formats Agent tool", () => {
+    test("formats Agent tool with description", () => {
       echo.echoToolUse("Agent", { description: "Analyze the codebase structure" });
 
       const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("\u{1F916}");
+      expect(text).toContain("`Agent`");
       expect(text).toContain("Analyze the codebase structure");
     });
 
-    test("formats unknown tool as compact JSON", () => {
+    test("formats unknown tool as name only", () => {
       echo.echoToolUse("CustomTool", { foo: "bar", count: 42 });
 
       const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("CustomTool");
-      expect(text).toContain('"foo"');
+      expect(text).toContain("`CustomTool`");
+      expect(text).not.toContain('"foo"');
     });
   });
 
@@ -296,28 +297,37 @@ describe("SlackEcho", () => {
 // ── formatToolSummary unit tests ─────────────────────────────────────────────
 
 describe("formatToolSummary", () => {
-  test("truncates long Bash commands", () => {
-    const longCmd = "x".repeat(300);
-    const result = formatToolSummary("Bash", { command: longCmd });
-    expect(result.length).toBeLessThanOrEqual(210); // backticks + "$ " + 200 + "..."
+  test("Bash with description returns description only", () => {
+    const result = formatToolSummary("Bash", { command: "npm test", description: "Run tests" });
+    expect(result).toBe("Run tests");
   });
 
-  test("truncates long unknown tool JSON", () => {
+  test("Bash without description returns empty", () => {
+    const result = formatToolSummary("Bash", { command: "npm test" });
+    expect(result).toBe("");
+  });
+
+  test("unknown tool returns empty", () => {
     const bigInput: Record<string, string> = {};
     for (let i = 0; i < 50; i++) bigInput[`key${i}`] = "value";
     const result = formatToolSummary("Unknown", bigInput);
-    expect(result.length).toBeLessThanOrEqual(153); // 150 + "..."
+    expect(result).toBe("");
   });
 
   test("handles missing fields gracefully", () => {
-    expect(formatToolSummary("Bash", {})).toContain("$ ");
-    expect(formatToolSummary("Read", {})).toContain("\u{1F4C4}");
-    expect(formatToolSummary("Edit", {})).toContain("\u{270F}\u{FE0F}");
-    expect(formatToolSummary("Agent", {})).toContain("\u{1F916}");
+    expect(formatToolSummary("Bash", {})).toBe("");
+    expect(formatToolSummary("Read", {})).toBe("");
+    expect(formatToolSummary("Edit", {})).toBe("");
+    expect(formatToolSummary("Agent", {})).toBe("");
   });
 
-  test("Agent falls back to prompt field", () => {
-    const result = formatToolSummary("Agent", { prompt: "Do something" });
-    expect(result).toContain("Do something");
+  test("Agent uses description field", () => {
+    const result = formatToolSummary("Agent", { description: "Do something" });
+    expect(result).toBe("Do something");
+  });
+
+  test("file tools show short path", () => {
+    expect(formatToolSummary("Read", { file_path: "/a/b/c/file.ts" })).toBe("`c/file.ts`");
+    expect(formatToolSummary("Edit", { file_path: "/x/y.ts" })).toBe("`x/y.ts`");
   });
 });

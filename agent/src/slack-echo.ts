@@ -154,40 +154,26 @@ export function formatToolSummary(
   toolName: string,
   input: Record<string, unknown>,
 ): string {
+  // Compact summaries — just enough to know what happened, not the full input.
   switch (toolName) {
     case "Bash": {
-      const cmd = typeof input.command === "string" ? input.command : "";
-      return `\`$ ${truncate(cmd, MAX_BASH_LENGTH)}\``;
+      const desc = typeof input.description === "string" ? input.description : "";
+      return desc ? truncate(desc, MAX_OTHER_LENGTH) : "";
     }
-    case "Read": {
-      const fp = typeof input.file_path === "string" ? input.file_path : "";
-      return `\u{1F4C4} \`${shortPath(fp)}\``;
-    }
+    case "Read":
     case "Edit":
     case "Write": {
       const fp = typeof input.file_path === "string" ? input.file_path : "";
-      return `\u{270F}\u{FE0F} \`${shortPath(fp)}\``;
+      return fp ? `\`${shortPath(fp)}\`` : "";
     }
-    case "Glob": {
-      const pat = typeof input.pattern === "string" ? input.pattern : "";
-      return `\u{1F50D} \`${pat}\``;
-    }
-    case "Grep": {
-      const pat = typeof input.pattern === "string" ? input.pattern : "";
-      return `\u{1F50D} \`${pat}\``;
-    }
+    case "Glob":
+    case "Grep":
+      return "";
     case "Agent": {
-      const desc =
-        typeof input.description === "string"
-          ? input.description
-          : typeof input.prompt === "string"
-            ? input.prompt
-            : "";
-      return `\u{1F916} ${truncate(desc, MAX_OTHER_LENGTH)}`;
+      const desc = typeof input.description === "string" ? input.description : "";
+      return desc ? truncate(desc, MAX_OTHER_LENGTH) : "";
     }
-    default: {
-      const json = JSON.stringify(input);
-      return truncate(json, MAX_OTHER_LENGTH);
-    }
+    default:
+      return "";
   }
 }
