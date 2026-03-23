@@ -19,15 +19,12 @@ oauth_config:
       - app_mentions:read
       - channels:history
       - channels:read
-      - groups:history
-      - groups:read
 
 settings:
   event_subscriptions:
     bot_events:
       - app_mention
       - message.channels
-      - message.groups
   socket_mode_enabled: true
   org_deploy_enabled: false
   token_rotation_enabled: false
