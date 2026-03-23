@@ -19,7 +19,7 @@ Gather:
 
 ### Step 2: Add to Registry
 
-Add the product to the orchestrator's registry in `orchestrator/src/registry.ts`:
+Add the product to the orchestrator's registry in `api/src/registry.ts`:
 
 ```typescript
 "product-name": {
