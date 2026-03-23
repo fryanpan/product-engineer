@@ -49,7 +49,7 @@ The script will guide you through the remaining steps.
 
 8. Set Cloudflare secrets:
    ```bash
-   cd orchestrator
+   cd api
 
    wrangler secret put GOOGLE_CLIENT_ID
    # Paste Client ID when prompted
@@ -102,7 +102,7 @@ The script will guide you through the remaining steps.
 #### Step 3: Deploy
 
 ```bash
-cd orchestrator
+cd api
 wrangler deploy
 ```
 
@@ -151,7 +151,7 @@ wrangler deploy
 ### "GOOGLE_CLIENT_ID not configured"
 
 ```bash
-cd orchestrator
+cd api
 wrangler secret put GOOGLE_CLIENT_ID
 ```
 

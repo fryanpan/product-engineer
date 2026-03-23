@@ -12,10 +12,10 @@ The core insight: most engineering work involves a series of decisions (what to 
 
 | Decision Point | Options | Where It's Defined |
 |----------------|---------|-------------------|
-| **Ticket triage** | Start work, ask questions, mark duplicate, queue | `orchestrator/src/prompts/ticket-review.mustache` |
+| **Ticket triage** | Start work, ask questions, mark duplicate, queue | `api/src/prompts/ticket-review.mustache` |
 | **Implementation** | What files to change, how to structure code | `.claude/skills/product-engineer/SKILL.md` |
 | **When to ask humans** | Reversible → autonomous, irreversible → ask | `.claude/skills/product-engineer/SKILL.md` |
-| **Merge evaluation** | Auto-merge, escalate, send back for revision | `orchestrator/src/prompts/merge-decision.mustache` |
+| **Merge evaluation** | Auto-merge, escalate, send back for revision | `api/src/prompts/merge-decision.mustache` |
 
 ### How You Tune It
 
@@ -126,7 +126,7 @@ graph TD
 
 | Directory | Purpose |
 |-----------|---------|
-| `orchestrator/` | Worker + Durable Object — webhook handling, event routing, ticket tracking |
+| `api/` | Worker + Durable Object — webhook handling, event routing, ticket tracking |
 | `agent/` | Agent entrypoint — Agent SDK, tools, prompt construction |
 | `containers/` | Dockerfiles and container code (orchestrator Slack Socket Mode, agent server) |
 | `.claude/skills/` | English skill files that define agent behavior |
@@ -145,14 +145,14 @@ npx wrangler r2 bucket create product-engineer-transcripts
 For manual deployment:
 
 ```bash
-cd orchestrator && npx wrangler deploy
+cd api && npx wrangler deploy
 ```
 
 ## Development
 
 ```bash
-# Run orchestrator tests
-cd orchestrator && bun test
+# Run API tests
+cd api && bun test
 
 # Run agent tests
 cd agent && bun test

@@ -17,7 +17,7 @@ Core implementation is **complete and functional**. The registry has been succes
 
 ## Test Situation
 
-The registry tests (`orchestrator/src/registry.test.ts`) are **failing** because:
+The registry tests (`api/src/registry.test.ts`) are **failing** because:
 
 1. **API change**: Registry functions now require an `orchestratorStub` parameter (they were previously synchronous)
 2. **Data source change**: Tests relied on the real `registry.json` which is now a template with fictional data
@@ -25,9 +25,9 @@ The registry tests (`orchestrator/src/registry.test.ts`) are **failing** because
 
 ## Test Files Affected
 
-- `orchestrator/src/registry.test.ts` - All tests fail, needs complete rewrite
-- `orchestrator/src/linear-webhook.test.ts` - May need updates for async registry calls
-- `orchestrator/src/orchestrator.test.ts` - May need updates for resolveProductFromChannel signature
+- `api/src/registry.test.ts` - All tests fail, needs complete rewrite
+- `api/src/linear-webhook.test.ts` - May need updates for async registry calls
+- `api/src/orchestrator.test.ts` - May need updates for resolveProductFromChannel signature
 
 ## Recommended Approach
 

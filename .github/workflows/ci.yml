@@ -12,20 +12,20 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install orchestrator dependencies
-        run: cd orchestrator && bun install
+      - name: Install API dependencies
+        run: cd api && bun install
 
       - name: Install agent dependencies
         run: cd agent && bun install
 
-      - name: Typecheck orchestrator
-        run: cd orchestrator && bun run typecheck
+      - name: Typecheck API
+        run: cd api && bun run typecheck
 
       - name: Typecheck agent
         run: cd agent && bun run typecheck
 
-      - name: Run orchestrator tests
-        run: cd orchestrator && bun test
+      - name: Run API tests
+        run: cd api && bun test
 
       - name: Run agent tests
         run: cd agent && bun test

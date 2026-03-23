@@ -1,4 +1,0 @@
-[test]
-preload = ["./src/test-preload.ts"]
-[loader]
-".mustache" = "text"

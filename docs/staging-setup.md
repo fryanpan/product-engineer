@@ -15,7 +15,7 @@ The **production orchestrator** acts as the control plane for staging access. A 
 | GitHub repo | Private repo for staging tests |
 | Linear team | Separate Linear team for staging |
 | Slack channels | Separate channels for staging communication and decisions |
-| Wrangler staging env | `[env.staging]` in `orchestrator/wrangler.toml` |
+| Wrangler staging env | `[env.staging]` in `api/wrangler.toml` |
 | Cloudflare R2 bucket | Separate bucket for staging transcripts |
 | Cloudflare KV namespace | Separate namespace for staging sessions |
 
@@ -71,7 +71,7 @@ Configure in Linear (Settings → API → Webhooks):
 ## Deploying to Staging
 
 ```bash
-cd orchestrator
+cd api
 npx wrangler deploy --env staging
 ```
 

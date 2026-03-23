@@ -13,6 +13,9 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Pre-install MCP server packages (avoids npx hanging in containers)
+RUN npm install -g @notionhq/notion-mcp-server
+
 # Non-root user — Claude Code refuses bypassPermissions as root
 RUN useradd -m -s /bin/bash agent
 RUN mkdir -p /workspace && chown agent:agent /workspace

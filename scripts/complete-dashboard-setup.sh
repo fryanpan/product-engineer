@@ -56,7 +56,7 @@ echo "   c) Add redirect URI: $WORKER_URL/api/auth/callback"
 echo "   d) Save Client ID and Client Secret"
 echo ""
 echo "   Then run these commands:"
-echo "   cd orchestrator"
+echo "   cd api"
 echo "   wrangler secret put GOOGLE_CLIENT_ID"
 echo "   wrangler secret put GOOGLE_CLIENT_SECRET"
 echo "   wrangler secret put ALLOWED_EMAILS  # your@email.com,other@email.com"
@@ -108,13 +108,13 @@ read -p "   Ready to deploy? (y/n) " -n 1 -r
 echo ""
 
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    cd orchestrator
+    cd api
     echo "   Deploying..."
     wrangler deploy
     echo "✅ Deployed successfully"
 else
     echo "   ⏭️  Skipping deployment. Deploy manually with:"
-    echo "   cd orchestrator && wrangler deploy"
+    echo "   cd api && wrangler deploy"
 fi
 
 echo ""

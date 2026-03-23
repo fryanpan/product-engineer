@@ -179,22 +179,22 @@ These are known risks we've evaluated and accepted, with mitigations noted:
 
 | Control | Status | Files |
 |---------|--------|-------|
-| Linear webhook HMAC verification | **Implemented** | `orchestrator/src/linear-webhook.ts` |
-| GitHub webhook HMAC verification | **Implemented** | `orchestrator/src/github-webhook.ts` |
-| Worker endpoint timing-safe auth | **Implemented** | `orchestrator/src/index.ts` |
-| Agent container auth (defense-in-depth) | **Implemented** | `agent/src/server.ts`, `orchestrator/src/ticket-agent.ts` |
-| Request body size limit (1MB) | **Implemented** | `orchestrator/src/index.ts` middleware |
-| Ticket ID sanitization | **Implemented** | `orchestrator/src/orchestrator.ts` |
+| Linear webhook HMAC verification | **Implemented** | `api/src/linear-webhook.ts` |
+| GitHub webhook HMAC verification | **Implemented** | `api/src/github-webhook.ts` |
+| Worker endpoint timing-safe auth | **Implemented** | `api/src/index.ts` |
+| Agent container auth (defense-in-depth) | **Implemented** | `agent/src/server.ts`, `api/src/ticket-agent.ts` |
+| Request body size limit (1MB) | **Implemented** | `api/src/index.ts` middleware |
+| Ticket ID sanitization | **Implemented** | `api/src/orchestrator.ts` |
 | Repo name validation | **Implemented** | `agent/src/server.ts` |
 | Untrusted content delimiters | **Implemented** | `agent/src/prompt.ts` |
-| Slack event type filtering | **Implemented** | `orchestrator/src/orchestrator.ts` |
-| Cold start retry with backoff | **Implemented** | `orchestrator/src/orchestrator.ts` |
+| Slack event type filtering | **Implemented** | `api/src/orchestrator.ts` |
+| Cold start retry with backoff | **Implemented** | `api/src/orchestrator.ts` |
 | Sentry error tracking | **Implemented** | Worker, orchestrator container, agent container |
 | Health endpoint info minimization | **Implemented** | `agent/src/server.ts` |
-| Secret binding name redaction | **Implemented** | `orchestrator/src/ticket-agent.ts` |
+| Secret binding name redaction | **Implemented** | `api/src/ticket-agent.ts` |
 | Empty signature crash protection | **Implemented** | Both webhook handlers |
 | Fail-closed on missing webhook secret | **Implemented** | Both webhook handlers |
-| Per-product secret scoping (GitHub) | **Implemented** | `orchestrator/src/registry.ts` |
+| Per-product secret scoping (GitHub) | **Implemented** | `api/src/registry.ts` |
 | Conditional MCP server inclusion | **Implemented** | `agent/src/mcp.ts` |
-| GH_TOKEN headless auth (no .netrc for gh) | **Implemented** | `orchestrator/src/ticket-agent.ts` |
+| GH_TOKEN headless auth (no .netrc for gh) | **Implemented** | `api/src/ticket-agent.ts` |
 | MCP auth via env vars (not CLI args) | **Implemented** | `agent/src/mcp.ts` |

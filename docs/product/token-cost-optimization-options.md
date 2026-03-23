@@ -81,7 +81,7 @@ Without analytics, we can't answer:
    - Could use existing admin endpoint if available
 
 4. **Deploy** (3 min)
-   - `cd orchestrator && bun run deploy`
+   - `cd api && bun run deploy`
    - New agents will automatically route through gateway
 
 5. **Verify** (2 min)

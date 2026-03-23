@@ -37,23 +37,24 @@ Worker (stateless) ──→ Orchestrator DO (singleton, always-on)
 
 | Directory | Purpose |
 |-----------|---------|
-| `orchestrator/` | Worker + Durable Object — webhook handling, event routing, ticket tracking |
+| `api/` | Worker + Durable Object — webhook handling, event routing, ticket tracking |
 | `agent/` | Generic Product Engineer agent — Agent SDK, tools, prompt construction |
 | `containers/` | Dockerfiles and container-specific code (orchestrator Socket Mode, agent server) |
-| `.claude/skills/` | English skills that define agent behavior |
+| `agent/src/skills/` | Agent behavior skills — injected into containers at build time, copied into target repos at runtime |
+| `.claude/skills/` | Management skills for human operators — registry, propagation, retros, project setup |
 | `templates/` | Baseline `.claude/rules/`, settings, and `CLAUDE.md.tmpl` for target product repos — pushed via `/propagate` |
 | `docs/` | Process docs and learnings |
 
 ## How It Works
 
-### Worker (`orchestrator/src/index.ts`)
+### Worker (`api/src/index.ts`)
 Stateless Cloudflare Worker that receives webhooks and proxies them to the Orchestrator Durable Object:
 - `POST /api/webhooks/linear` — Linear issue creation/update (HMAC-verified)
 - `POST /api/webhooks/github` — PR review/merge events (signature-verified)
 
 The Worker looks up product config from the registry, resolves the Orchestrator DO singleton, and forwards events.
 
-### Orchestrator DO (`orchestrator/src/orchestrator.ts`)
+### Orchestrator DO (`api/src/orchestrator.ts`)
 Singleton Durable Object that owns all coordination:
 - SQLite-backed ticket tracking (status, metadata, agent assignment)
 - Routes events to the correct TicketAgent container
@@ -61,12 +62,12 @@ Singleton Durable Object that owns all coordination:
 - Its companion container (`containers/orchestrator/`) maintains a persistent Slack Socket Mode WebSocket connection, forwarding `@product-engineer` mentions to the DO
 - Tracks `agent_active` per ticket — set to `0` on terminal states (`merged`, `closed`, `deferred`, `failed`) so deployment-triggered webhook events do not re-spawn completed agents (see `docs/deployment-safety.md`)
 
-### TicketAgent (`orchestrator/src/ticket-agent.ts`)
+### TicketAgent (`api/src/ticket-agent.ts`)
 Container class — one instance per ticket, lives up to 2 hours:
 - Runs a persistent HTTP server that receives events from the Orchestrator DO
 - Wraps the Agent SDK with `settingSources: ["project"]` to load product repo CLAUDE.md and skills
 - Loads plugins from the target repo's `.claude/settings.json` (`enabledPlugins`) — see Plugin Loading below
-- Follows the `product-engineer` skill for decision-making (reversible actions = autonomous, irreversible = batch and ask)
+- Follows the `ticket-agent` skill for decision-making (reversible actions = autonomous, irreversible = batch and ask)
 - Communicates via Slack (`notify_slack`, `ask_question` tools)
 - Handles full ticket lifecycle: creation, implementation, PR, review, revision, merge
 
@@ -79,7 +80,7 @@ After cloning the target repo, the agent reads `.claude/settings.json` to discov
 - Plugin paths are discovered from `marketplace.json` in each marketplace repo — entries can be local paths or URL-sourced git repos
 
 ### Product Registry (Admin API)
-Products are stored in the Orchestrator DO's SQLite database, managed via the admin API (`GET/POST/PUT/DELETE /api/products`). Each product maps to repos, secrets, Slack channels, and trigger configuration. See `/setup-product` or `/add-project` skills for how to register new products. Legacy `orchestrator/src/registry.json` is a seed template only.
+Products are stored in the Orchestrator DO's SQLite database, managed via the admin API (`GET/POST/PUT/DELETE /api/products`). Each product maps to repos, secrets, Slack channels, and trigger configuration. See `/setup-product` or `/add-project` skills for how to register new products. Legacy `api/src/registry.json` is a seed template only.
 
 ## Conventions
 
@@ -89,18 +90,26 @@ Products are stored in the Orchestrator DO's SQLite database, managed via the ad
 - For **manual setup**: Use `/setup-product` skill for step-by-step guidance on registry entry, secret provisioning, trigger configuration, and testing
 
 ### Modifying Agent Behavior
-Agent decision-making is encoded in English skills (`.claude/skills/`), not TypeScript. To change how the agent works:
-1. Edit the relevant skill (e.g., `product-engineer/SKILL.md` for decision logic)
-2. The agent loads skills from this repo AND from the target product's repo
-3. To change what the agent sees from target repos (alwaysApply rules, settings), edit `templates/` and use `/propagate` to push updates
-4. Cross-project skills: `/propagate` (push template updates), `/aggregate` (pull learnings from all products)
+Agent decision-making is encoded in English skills, not TypeScript. Skills are split into two locations:
+
+**Agent skills** (`agent/src/skills/`): Define how autonomous agents behave — decision framework, coding workflow, retros. These are baked into the container image and injected into target repos at runtime via `settingSources: ["project"]`.
+- `ticket-agent` — ticket agent lifecycle (implement → PR → CI → merge)
+- `coding-project-lead` — project lead event routing and ticket management
+- `conductor` — cross-product coordinator / DM handler
+- `research-agent` — non-coding research tasks
+- `task-retro` — per-task retrospective
+
+**Management skills** (`.claude/skills/`): Used by human operators in this repo for system administration — registry, propagation, retros, project setup. NOT loaded into agent containers.
+
+To change agent behavior: edit skills in `agent/src/skills/` and redeploy.
+To change target repo config: edit `templates/` and use `/propagate`.
 
 ### Secrets
 - Platform secrets (Slack, Linear, Anthropic) are shared across products
 - GitHub tokens are per-product (different repo access)
 - All secrets are in Cloudflare Secrets Store, injected as env vars into sandboxes
 - The registry maps logical secret names to Cloudflare binding names
-- `WORKER_URL` is a deployment-specific secret (not checked in) — set via `cd orchestrator && wrangler secret put WORKER_URL`
+- `WORKER_URL` is a deployment-specific secret (not checked in) — set via `cd api && wrangler secret put WORKER_URL`
 
 ### LLM Monitoring
 - All Anthropic API traffic routes through Cloudflare AI Gateway for monitoring
@@ -109,7 +118,7 @@ Agent decision-making is encoded in English skills (`.claude/skills/`), not Type
 - See `docs/cloudflare-ai-gateway.md` for setup and analytics details
 
 ### Testing
-- `cd orchestrator && bun test` for orchestrator tests (Worker, DO, TicketAgent, webhooks, registry)
+- `cd api && bun test` for API tests (Worker, DO, TicketAgent, webhooks, registry)
 - `cd agent && bun test` for agent tests (prompt construction, tools)
 - End-to-end: create a test Linear ticket or Slack mention and watch the Slack channel
 - Deployment safety behavior (terminal state protection, container liveness, re-spawn prevention) is documented in `docs/deployment-safety.md` — when changing `orchestrator.ts` or `ticket-agent.ts`, check whether the doc needs updating (it contains embedded code snippets that drift)

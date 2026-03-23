@@ -23,7 +23,7 @@ Look across all products for:
 - **Recurring failures** — same type of error across products? Fix in the generic agent or skill.
 - **Slow tasks** — what makes some tasks take much longer? Missing context? Ambiguous requirements?
 - **Successful patterns** — what types of tasks consistently succeed? Can we do more of these?
-- **Skill gaps** — are agents frequently deferring tasks they should be able to handle? Update the product-engineer skill.
+- **Skill gaps** — are agents frequently deferring tasks they should be able to handle? Update the ticket-agent skill.
 
 ### Step 3: Propose Improvements
 

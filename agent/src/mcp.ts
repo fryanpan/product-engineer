@@ -47,16 +47,15 @@ export function buildMcpServers(): Record<string, McpServerConfig> {
   }
   servers.context7 = context7;
 
-  // Notion — stdio via npx (disabled: npx download can hang in containers)
-  // TODO: Re-enable once we pre-install MCP server packages in the Dockerfile
-  // const notionToken = process.env.NOTION_TOKEN;
-  // if (notionToken) {
-  //   servers.notion = {
-  //     command: "npx",
-  //     args: ["-y", "@notionhq/notion-mcp-server"],
-  //     env: { NOTION_TOKEN: notionToken },
-  //   };
-  // }
+  // Notion — pre-installed in Dockerfile, no npx needed
+  const notionToken = process.env.NOTION_TOKEN;
+  if (notionToken) {
+    servers.notion = {
+      command: "notion-mcp-server",
+      args: [],
+      env: { OPENAPI_MCP_HEADERS: JSON.stringify({ "Authorization": `Bearer ${notionToken}`, "Notion-Version": "2022-06-28" }) },
+    };
+  }
 
   // Sentry — stdio via npx (disabled: npx download can hang in containers)
   // TODO: Re-enable once we pre-install MCP server packages in the Dockerfile

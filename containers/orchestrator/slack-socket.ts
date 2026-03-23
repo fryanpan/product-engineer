@@ -94,11 +94,14 @@ export class SlackSocket {
             // Only forward thread replies (not top-level messages, edits, joins, etc.)
             this.onEvent(slackEvent);
           } else if (slackEvent.type === "message" && !slackEvent.thread_ts && !slackEvent.subtype) {
-            // Check for slash commands in top-level messages
+            // Top-level messages: check for slash commands, then forward to orchestrator.
+            // The orchestrator routes conductor-channel messages directly and ignores
+            // non-mention messages in product channels.
             const text = slackEvent.text?.trim() || "";
             if (/(^|\s)\/agent-status(\s|$)/.test(text)) {
-              // Mark as slash command for special handling
               this.onEvent({ ...slackEvent, slash_command: "agent-status" });
+            } else {
+              this.onEvent(slackEvent);
             }
           }
         }

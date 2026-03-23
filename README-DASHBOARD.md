@@ -36,7 +36,7 @@ See [docs/dashboard-setup.md](docs/dashboard-setup.md) for complete deployment g
 
 ```bash
 # 1. Create KV namespace
-cd orchestrator
+cd api
 wrangler kv namespace create SESSIONS
 
 # 2. Update wrangler.toml with namespace ID

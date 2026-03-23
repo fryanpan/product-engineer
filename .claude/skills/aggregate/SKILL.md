@@ -34,7 +34,7 @@ Pull learnings from all registered products and agent session transcripts (R2) i
    Before marking as needing propagation, check:
    - Is it already in `templates/`?
    - Was it already pushed via `/propagate`?
-   - Is it covered by the product-engineer skill?
+   - Is it covered by the ticket-agent skill?
 
 7. **Commit** the updated aggregation log.
 

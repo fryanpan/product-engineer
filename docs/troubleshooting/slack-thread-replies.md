@@ -20,7 +20,7 @@ The Slack app needs to be subscribed to the `message.channels` event to receive 
    - Filters for messages with `thread_ts` (thread replies)
    - Ignores bot messages and message edits
 
-2. **Orchestrator looks up ticket** (`orchestrator/src/orchestrator.ts:258-277`)
+2. **Orchestrator looks up ticket** (`api/src/orchestrator.ts:258-277`)
    - Queries SQLite: `SELECT id, product FROM tickets WHERE slack_thread_ts = ?`
    - If found, routes event to TicketAgent with type `slack_reply`
 
@@ -132,14 +132,14 @@ After fixing configuration:
 **Fix:** The orchestrator now loads `slack_thread_ts` from the database when initializing the agent and passes it in the `TicketAgentConfig`. This ensures the agent knows the correct thread from the start.
 
 **Related changes:**
-- `orchestrator/src/types.ts`: Added `slackThreadTs` field to `TicketAgentConfig`
-- `orchestrator/src/orchestrator.ts`: Load `slack_thread_ts` from DB when building agent config
-- `orchestrator/src/ticket-agent.ts`: Use `config.slackThreadTs` when resolving env vars
+- `api/src/types.ts`: Added `slackThreadTs` field to `TicketAgentConfig`
+- `api/src/orchestrator.ts`: Load `slack_thread_ts` from DB when building agent config
+- `api/src/ticket-agent.ts`: Use `config.slackThreadTs` when resolving env vars
 
 ## Related Files
 
 - `containers/orchestrator/slack-socket.ts` — Socket Mode message filtering
-- `orchestrator/src/orchestrator.ts` — Ticket lookup and routing
+- `api/src/orchestrator.ts` — Ticket lookup and routing
 - `agent/src/prompt.ts` — Event prompt formatting
 - `agent/src/tools.ts` — Slack posting logic (uses config.slackThreadTs)
 - `scripts/slack-app-manifest.yaml` — Reference Slack app configuration

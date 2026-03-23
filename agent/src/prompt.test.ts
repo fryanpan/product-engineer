@@ -485,4 +485,48 @@ describe("buildEventPrompt", () => {
     expect(textPos).toBeGreaterThan(tagStart);
     expect(textPos).toBeLessThan(tagEnd);
   });
+
+  it("uses research template when mode is research", async () => {
+    const task: TaskPayload = {
+      type: "command",
+      product: "research-product",
+      repos: [],
+      data: {
+        text: "find the best CRM options for a 10-person team",
+        user: "U12345",
+        channel: "#research",
+      },
+    };
+
+    const content = await buildPrompt(task, MOCK_SLACK_TOKEN, "research");
+    const prompt = extractText(content);
+
+    expect(prompt).toContain("Research Agent");
+    expect(prompt).toContain("research-product");
+    expect(prompt).toContain("find the best CRM options");
+    // Should NOT contain coding-specific content
+    expect(prompt).not.toContain("Create branch");
+    expect(prompt).not.toContain("repos are already cloned");
+  });
+
+  it("uses research template with repos when mode is research", async () => {
+    const task: TaskPayload = {
+      type: "command",
+      product: "research-product",
+      repos: ["fryanpan/research-workspace"],
+      data: {
+        text: "what meetings do I have tomorrow",
+        user: "U12345",
+        channel: "#general",
+      },
+    };
+
+    const content = await buildPrompt(task, MOCK_SLACK_TOKEN, "research");
+    const prompt = extractText(content);
+
+    expect(prompt).toContain("Research Agent");
+    expect(prompt).toContain("fryanpan/research-workspace");
+    expect(prompt).toContain("Commit and push directly to main");
+    expect(prompt).not.toContain("Create branch");
+  });
 });
