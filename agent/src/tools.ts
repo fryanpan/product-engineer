@@ -403,14 +403,15 @@ export function createTools(config: AgentConfig) {
 
   const spawnTask = tool(
     "spawn_task",
-    "Create a new task for a specific product. The product's project lead will receive and handle the task.",
+    "Spawn a ticket agent to work on a task. If a ticketUUID is provided (e.g., from a ticket_created event), the agent works on that existing ticket. Otherwise a new ticket is created.",
     {
       product: z.string().describe("Product slug (e.g., 'staging-test-app')"),
       description: z.string().describe("Task description — what should be done"),
+      ticketUUID: z.string().optional().describe("Existing ticket UUID to spawn an agent for (from event payload). Omit to create a new ticket."),
     },
-    async ({ product, description }) => {
+    async ({ product, description, ticketUUID: existingUUID }) => {
       try {
-        const ticketUUID = `conductor-task-${Date.now()}`;
+        const ticketUUID = existingUUID || `conductor-task-${Date.now()}`;
         const res = await fetch(`${config.workerUrl}/api/project-agent/spawn-task`, {
           method: "POST",
           headers: {

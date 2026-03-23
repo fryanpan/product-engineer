@@ -75,7 +75,8 @@ interface TestContext {
 
 interface StatusResponse {
   activeAgents: Array<{
-    id: string;
+    ticket_uuid: string;
+    ticket_id: string | null;
     product: string;
     status: string;
     last_heartbeat: string | null;
@@ -86,7 +87,8 @@ interface StatusResponse {
 }
 
 interface TicketRow {
-  id: string;
+  ticket_uuid: string;
+  ticket_id: string | null;
   product: string;
   status: string;
   slack_thread_ts: string | null;
@@ -94,7 +96,6 @@ interface TicketRow {
   branch_name: string | null;
   agent_active: number;
   title: string | null;
-  identifier: string | null;
 }
 
 interface SlackMessage {
@@ -493,16 +494,16 @@ async function step2_verifyTicketCreated(ctx: TestContext): Promise<void> {
       );
 
       if (ticket) {
-        ctx.linearIssueId = ticket.id;
+        ctx.linearIssueId = ticket.ticket_uuid;
         ctx.slackThreadTs = ticket.slack_thread_ts || ctx.slackThreadTs;
-        log("step2", `Found ticket: ${ticket.id} (status: ${ticket.status})`);
+        log("step2", `Found ticket: ${ticket.ticket_uuid} (status: ${ticket.status})`);
 
         // Try to get Linear issue details
         try {
-          const issue = await getLinearIssue(ticket.id);
-          logSuccess("step2", `Ticket created: ${ticket.id} (Linear state: ${issue.state.name})`);
+          const issue = await getLinearIssue(ticket.ticket_uuid);
+          logSuccess("step2", `Ticket created: ${ticket.ticket_uuid} (Linear state: ${issue.state.name})`);
         } catch {
-          logSuccess("step2", `Ticket created: ${ticket.id} (could not fetch Linear details)`);
+          logSuccess("step2", `Ticket created: ${ticket.ticket_uuid} (could not fetch Linear details)`);
         }
         return;
       }
@@ -528,7 +529,7 @@ async function step3_verifyAgentSpawned(ctx: TestContext): Promise<void> {
       const status = await apiCall<StatusResponse>("/api/orchestrator/status");
 
       // Check for direct TicketAgent
-      const agent = status.activeAgents.find((a) => a.id === ctx.linearIssueId);
+      const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
       if (agent?.last_heartbeat) {
         logSuccess("step3", `TicketAgent spawned: status=${agent.status}, heartbeat=${agent.last_heartbeat}`);
         return;
@@ -543,7 +544,7 @@ async function step3_verifyAgentSpawned(ctx: TestContext): Promise<void> {
         const pa = paStatus.project_agents?.["staging-test-app"];
         if (pa?.sessionActive) {
           const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-          const ticket = tickets.tickets.find((t) => t.id === ctx.linearIssueId);
+          const ticket = tickets.tickets.find((t) => t.ticket_uuid === ctx.linearIssueId);
 
           if (ticket && ["reviewing", "active", "spawning"].includes(ticket.status)) {
             logSuccess("step3", `ProjectAgent is processing ticket (status: ${ticket.status}, PA messages: ${pa.sessionMessageCount})`);
@@ -957,7 +958,7 @@ async function step7_waitForPR(ctx: TestContext): Promise<void> {
   while (Date.now() < deadline) {
     try {
       const status = await apiCall<StatusResponse>("/api/orchestrator/status");
-      const agent = status.activeAgents.find((a) => a.id === ctx.linearIssueId);
+      const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
 
       if (agent?.pr_url) {
         ctx.prUrl = agent.pr_url;
@@ -1111,7 +1112,7 @@ async function step10_verifyAgentTerminated(ctx: TestContext): Promise<void> {
 
   try {
     const status = await apiCall<StatusResponse>("/api/orchestrator/status");
-    const agent = status.activeAgents.find((a) => a.id === ctx.linearIssueId);
+    const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
 
     if (!agent) {
       logSuccess("step10", "Agent terminated after merge (no longer in active agents)");
@@ -1131,7 +1132,7 @@ async function step10_verifyAgentTerminated(ctx: TestContext): Promise<void> {
   // Verify ticket status in DB
   try {
     const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-    const ticket = tickets.tickets.find((t) => t.id === ctx.linearIssueId);
+    const ticket = tickets.tickets.find((t) => t.ticket_uuid === ctx.linearIssueId);
     if (ticket) {
       log("step10", `Ticket final status: ${ticket.status}, agent_active: ${ticket.agent_active}`);
       if (ticket.agent_active === 0) {
