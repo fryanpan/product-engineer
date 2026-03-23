@@ -844,7 +844,7 @@ export class Orchestrator extends Container<Bindings> {
         }
         const productConfig = JSON.parse(productRows[0].config) as ProductConfig;
 
-        // Create ticket in DB
+        // Create ticket in DB and transition to reviewing so spawnAgent accepts it
         try {
           this.agentManager.createTicket({
             ticketUUID: body.ticketUUID,
@@ -854,8 +854,10 @@ export class Orchestrator extends Container<Bindings> {
             ticketId: body.ticketId,
             title: body.ticketTitle,
           });
+          // Transition from created → reviewing (spawnAgent requires reviewing or queued)
+          this.agentManager.updateStatus(body.ticketUUID, { status: "reviewing" });
         } catch {
-          // Already exists — fine
+          // Already exists or already in reviewing — fine
         }
 
         // Build spawn config
@@ -1314,7 +1316,7 @@ export class Orchestrator extends Container<Bindings> {
       }
     }
 
-    const updates: string[] = ["updated_at = datetime('now')", "last_heartbeat = datetime('now')"];
+    const updates: string[] = ["updated_at = datetime('now')"];
     const values: (string | number | null)[] = [];
 
     // Allow explicit control of agent_active flag (for dashboard kill operations)
@@ -2083,12 +2085,26 @@ export class Orchestrator extends Container<Bindings> {
     const projectName = productConfig.triggers?.linear?.project_name;
 
     // Products without Linear (e.g., research mode) route directly to ProjectAgent
-    // without creating a ticket. The ProjectAgent handles the request directly.
+    // without creating a Linear ticket. A ticket record is still created in the DB
+    // so that thread replies can be routed back to the agent.
     if (!projectName) {
       console.log(`[Orchestrator] No Linear project for ${product} — routing directly to ProjectAgent`);
 
       const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
       const ticketUUID = `slack-${slackEvent.ts || Date.now()}`;
+
+      // Create ticket record so thread replies can be routed
+      try {
+        this.agentManager.createTicket({
+          ticketUUID,
+          product,
+          slackThreadTs: slackThreadTs || undefined,
+          slackChannel: slackEvent.channel || undefined,
+          title: rawText.slice(0, 100),
+        });
+      } catch {
+        // Already exists — fine (e.g. re-delivery)
+      }
 
       const directEvent: TicketEvent = {
         type: "slack_mention",

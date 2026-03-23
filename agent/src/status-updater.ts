@@ -39,6 +39,11 @@ export class StatusUpdater {
     this.config = config;
   }
 
+  /** Update the Slack thread timestamp (called when first Slack message creates a thread). */
+  setSlackThreadTs(ts: string): void {
+    this.config.slackThreadTs = ts;
+  }
+
   /** Use explicit fetchFn if provided, otherwise fall back to globalThis.fetch at call time. */
   private get fetch(): typeof fetch {
     return this.config.fetchFn || globalThis.fetch;

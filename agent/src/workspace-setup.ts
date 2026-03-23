@@ -71,6 +71,10 @@ export async function injectSkills(
   targetSkillsDir: string,
   skillsSourceDir: string = "/app/src/skills",
 ): Promise<string[]> {
+  // Ensure target directory exists (repos may not have .claude/skills/)
+  const mkdir = Bun.spawn(["mkdir", "-p", targetSkillsDir]);
+  await mkdir.exited;
+
   const entries = await Array.fromAsync(
     new Bun.Glob("*/SKILL.md").scan({ cwd: skillsSourceDir }),
   );

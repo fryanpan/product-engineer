@@ -65,6 +65,7 @@ export async function persistSlackThreadTs(
 async function postToSlack(
   text: string,
   config: AgentConfig,
+  statusUpdater?: StatusUpdater,
 ): Promise<ToolResult> {
   const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
@@ -92,6 +93,8 @@ async function postToSlack(
   if (data.ts) {
     // Fire-and-forget with retries — don't block the tool response
     persistSlackThreadTs(config, data.ts).catch(() => {});
+    // Keep StatusUpdater in sync so Slack thread updates use the correct ts
+    if (statusUpdater) statusUpdater.setSlackThreadTs(data.ts);
   }
   return { content: [{ type: "text", text: "Message posted to Slack" }] };
 }
@@ -113,14 +116,14 @@ export function createTools(config: AgentConfig) {
     "notify_slack",
     "Send a notification message to the product's Slack channel. Use this to keep the team informed of progress.",
     { message: z.string().describe("The message to post to Slack") },
-    ({ message }) => postToSlack(message, config),
+    ({ message }) => postToSlack(message, config, statusUpdater),
   );
 
   const askQuestion = tool(
     "ask_question",
     "Post a clarifying question to the Slack channel. Use this when a task is ambiguous and you need more information. The user's reply will arrive as a new event.",
     { question: z.string().describe("The question to ask the user via Slack") },
-    ({ question }) => postToSlack(`*Agent question:*\n${question}`, config),
+    ({ question }) => postToSlack(`*Agent question:*\n${question}`, config, statusUpdater),
   );
 
   const updateTaskStatus = tool(

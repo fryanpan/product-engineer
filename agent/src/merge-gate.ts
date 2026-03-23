@@ -120,6 +120,15 @@ export async function checkCIStatus(
     return { ready: false, reason: "Some checks failed (non-blocking)", ciStatus: "failing" };
   }
 
+  // Guard against unknown mergeable_state values (e.g. "dirty", "draft", "behind")
+  if (prData.mergeable === false) {
+    return { ready: false, reason: `PR is not mergeable (state: ${prData.mergeable_state})`, ciStatus: "failing" };
+  }
+
+  if (prData.mergeable_state && prData.mergeable_state !== "unknown") {
+    return { ready: false, reason: `Unknown mergeable state: ${prData.mergeable_state} — not safe to merge`, ciStatus: "pending", retryAfterMs: 60_000 };
+  }
+
   // No CI statuses and no blocking merge state — no CI configured
   return { ready: true, reason: "No CI configured — ready to merge", ciStatus: "none" };
 }
