@@ -2083,12 +2083,7 @@ export class Orchestrator extends Container<Bindings> {
       }
     }
 
-    // For non-conductor channels, require @-mention
-    if (slackEvent.type !== "app_mention") {
-      return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
-    }
-
-    // Resolve product from channel
+    // Resolve product from channel (needed for both @-mentions and plain messages)
     const productRows = this.ctx.storage.sql.exec(
       "SELECT slug, config FROM products",
     ).toArray() as Array<{ slug: string; config: string }>;
@@ -2101,8 +2096,42 @@ export class Orchestrator extends Container<Bindings> {
     const product = resolveProductFromChannel(products, slackEvent.channel || "");
 
     if (!product) {
-      console.log(`[Orchestrator] No product mapped to channel ${slackEvent.channel} — ignoring mention`);
+      // Unmapped channel — only respond on @-mention, silently ignore plain messages
+      if (slackEvent.type === "app_mention") {
+        console.log(`[Orchestrator] No product mapped to channel ${slackEvent.channel} — replying to mention`);
+        await this.postSlackMessage(
+          slackEvent.channel || "",
+          `ℹ️ This channel is not configured for any product. Ask an admin to register it.`,
+          slackEvent.ts || ""
+        );
+      }
       return Response.json({ ok: true, ignored: true, reason: "unmapped_channel" });
+    }
+
+    // Product channel: route ALL messages to ProjectAgent.
+    // For plain messages (no @-mention), route directly — no Linear ticket.
+    // For @-mentions, create a Linear ticket first (existing flow below).
+    if (slackEvent.type !== "app_mention") {
+      console.log(`[Orchestrator] Plain message in ${product} channel — routing to ProjectAgent`);
+      const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+      const event: TicketEvent = {
+        type: "slack_mention",
+        source: "slack",
+        ticketUUID: `chat-${slackEvent.ts || Date.now()}`,
+        product,
+        payload: {
+          text: rawText,
+          user: slackEvent.user,
+          channel: slackEvent.channel,
+          ts: slackEvent.ts,
+        },
+        slackThreadTs: slackEvent.thread_ts || slackEvent.ts,
+        slackChannel: slackEvent.channel,
+      };
+      this.routeToProjectAgent(product, event).catch(err =>
+        console.error(`[Orchestrator] ProjectAgent routing failed for ${product}:`, err)
+      );
+      return Response.json({ ok: true, routed: "project_agent", product });
     }
 
     const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
