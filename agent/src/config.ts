@@ -102,6 +102,7 @@ export interface AgentConfig {
   ticketIdentifier?: string;  // e.g., "BC-84"
   ticketTitle?: string;        // Brief title for display
   model?: string;              // Claude model to use (sonnet, opus, haiku)
+  slackPersona?: { username: string; icon_emoji?: string; icon_url?: string };
 }
 
 export function loadConfig(): AgentConfig {
@@ -114,9 +115,9 @@ export function loadConfig(): AgentConfig {
   return {
     ticketUUID: required("TICKET_UUID"),
     product: required("PRODUCT"),
-    repos: JSON.parse(required("REPOS")),
+    repos: process.env.REPOS ? JSON.parse(process.env.REPOS) : [],
     anthropicApiKey: required("ANTHROPIC_API_KEY"),
-    githubToken: required("GITHUB_TOKEN"),
+    githubToken: process.env.GITHUB_TOKEN || "",
     slackBotToken: required("SLACK_BOT_TOKEN"),
     slackChannel: process.env.SLACK_CHANNEL || "#general",
     slackThreadTs: process.env.SLACK_THREAD_TS || "",
@@ -126,5 +127,6 @@ export function loadConfig(): AgentConfig {
     ticketIdentifier: process.env.TICKET_IDENTIFIER || undefined,
     ticketTitle: process.env.TICKET_TITLE || undefined,
     model: process.env.MODEL || undefined,
+    slackPersona: process.env.SLACK_PERSONA ? JSON.parse(process.env.SLACK_PERSONA) : undefined,
   };
 }

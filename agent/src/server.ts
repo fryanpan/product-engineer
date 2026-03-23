@@ -17,7 +17,13 @@ import { loadConfig, type TaskPayload, type TicketEvent, type MessageContent } f
 import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt, buildResumePrompt } from "./prompt";
 import { buildMcpServers } from "./mcp";
-import { loadPlugins, type PluginPath } from "./plugins";
+import type { PluginPath } from "./plugins";
+import { TokenTracker } from "./token-tracker";
+import { TranscriptManager } from "./transcripts";
+import { SlackEcho } from "./slack-echo";
+import { resolveRoleConfig } from "./role-config";
+import { setupWorkspace, checkAndCheckoutWorkBranch } from "./workspace-setup";
+import { AgentLifecycle } from "./lifecycle";
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
@@ -32,6 +38,8 @@ function userMessage(content: MessageContent): SDKUserMessage {
   };
 }
 
+// ── Configuration ────────────────────────────────────────────────────────
+
 const app = new Hono();
 
 console.log("[Agent] Starting server...");
@@ -43,357 +51,67 @@ console.log(`[Agent] Env check: PRODUCT=${process.env.PRODUCT || "MISSING"}`);
 console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 
 const config = loadConfig();
-console.log(`[Agent] Config loaded: ticket=${config.ticketUUID} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"}`);
+const roleConfig = resolveRoleConfig(process.env.AGENT_ROLE, process.env.MODE);
 
-// Phone-home: heartbeat + log message to the orchestrator.
-// Every call updates last_heartbeat. The message is for observability only — the
-// orchestrator never makes decisions based on its content.
-function phoneHome(message: string) {
-  console.log(`[Agent] phoneHome: ${message}`);
-  fetch(`${config.workerUrl}/api/orchestrator/heartbeat`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Internal-Key": config.apiKey,
-    },
-    body: JSON.stringify({ ticketUUID: config.ticketUUID, message }),
-  }).catch((err) => console.error("[Agent] phoneHome failed:", err));
-}
+console.log(`[Agent] Config loaded: ticket=${config.ticketUUID} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"} role=${roleConfig.role}`);
 
-// Report token usage to the orchestrator
-async function reportTokenUsage() {
-  try {
-    console.log(`[Agent] Reporting token usage: ${totalInputTokens} in / ${totalOutputTokens} out / $${totalCostUsd.toFixed(2)}`);
+// ── Shared instances ─────────────────────────────────────────────────────
 
-    const usageSummary = {
-      ticketUUID: config.ticketUUID,
-      totalInputTokens,
-      totalOutputTokens,
-      totalCacheReadTokens,
-      totalCacheCreationTokens,
-      totalCostUsd,
-      turns: turnUsageLog.length,
-      sessionMessageCount,
-    };
-
-    const res = await fetch(`${config.workerUrl}/api/internal/token-usage`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Key": config.apiKey,
-      },
-      body: JSON.stringify(usageSummary),
-    });
-
-    if (!res.ok) {
-      console.error(`[Agent] Failed to report token usage: ${res.status}`);
-    } else {
-      console.log("[Agent] Token usage reported successfully");
-    }
-
-    // Also post summary to Slack
-    const formattedCost = totalCostUsd.toFixed(2);
-    const formattedInputTokens = (totalInputTokens / 1000).toFixed(1);
-    const formattedOutputTokens = (totalOutputTokens / 1000).toFixed(1);
-
-    let slackMessage = `📊 **Token Usage Summary**\n\n`;
-    slackMessage += `**Total Cost:** $${formattedCost}\n`;
-    slackMessage += `**Input:** ${formattedInputTokens}K tokens ($${(totalInputTokens * 3.0 / 1_000_000).toFixed(2)})\n`;
-    slackMessage += `**Output:** ${formattedOutputTokens}K tokens ($${(totalOutputTokens * 15.0 / 1_000_000).toFixed(2)})\n`;
-
-    if (totalCacheReadTokens > 0) {
-      slackMessage += `**Cache Read:** ${(totalCacheReadTokens / 1000).toFixed(1)}K tokens ($${(totalCacheReadTokens * 0.3 / 1_000_000).toFixed(2)})\n`;
-    }
-    if (totalCacheCreationTokens > 0) {
-      slackMessage += `**Cache Creation:** ${(totalCacheCreationTokens / 1000).toFixed(1)}K tokens ($${(totalCacheCreationTokens * 3.0 / 1_000_000).toFixed(2)})\n`;
-    }
-
-    slackMessage += `**Conversation Turns:** ${turnUsageLog.length}\n\n`;
-
-    // Include top 3 most expensive turns
-    const topTurns = [...turnUsageLog]
-      .sort((a, b) => b.costUsd - a.costUsd)
-      .slice(0, 3);
-
-    if (topTurns.length > 0) {
-      slackMessage += `**Most Expensive Turns:**\n`;
-      for (const turn of topTurns) {
-        slackMessage += `• Turn ${turn.turn}: $${turn.costUsd.toFixed(4)} (${turn.inputTokens} in / ${turn.outputTokens} out)\n`;
-        if (turn.promptSnippet) {
-          slackMessage += `  Prompt: "${turn.promptSnippet}${turn.promptSnippet.length >= 100 ? '...' : ''}"\n`;
-        }
-        if (turn.outputSnippet) {
-          slackMessage += `  Output: "${turn.outputSnippet}${turn.outputSnippet.length >= 100 ? '...' : ''}"\n`;
-        }
-      }
-    }
-
-    await fetch("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.slackBotToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        channel: config.slackChannel,
-        text: slackMessage,
-        ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
-      }),
-    });
-
-    console.log("[Agent] Token usage posted to Slack");
-  } catch (err) {
-    console.error("[Agent] Failed to report token usage:", err);
-  }
-}
-
-phoneHome(`server_started uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
-
-// Stable UUID for this agent instance — prefixes all transcript R2 keys
 const agentUuid = crypto.randomUUID();
 console.log(`[Agent] Agent UUID: ${agentUuid}`);
 
-// Find the transcript session directory
-function getTranscriptDir(): string {
-  const home = process.env.HOME || "/home/agent";
-  const cwd = process.cwd().replace(/\//g, "-");
-  return `${home}/.claude/projects/${cwd}`;
-}
+const tokenTracker = new TokenTracker();
+const transcriptMgr = new TranscriptManager({
+  agentUuid,
+  workerUrl: config.workerUrl,
+  apiKey: config.apiKey,
+  ticketUUID: config.ticketUUID,
+});
+const slackEcho = new SlackEcho({
+  slackBotToken: config.slackBotToken,
+  slackChannel: config.slackChannel,
+  slackThreadTs: config.slackThreadTs,
+  slackPersona: config.slackPersona,
+});
+const lifecycle = new AgentLifecycle({
+  config,
+  roleConfig,
+  transcriptMgr,
+  tokenTracker,
+});
 
-// Find all transcript .jsonl files for this agent (compaction creates new files)
-async function findAllTranscripts(): Promise<string[]> {
-  try {
-    const sessionDir = getTranscriptDir();
+lifecycle.phoneHome(`server_started uid=${process.getuid?.()} HOME=${process.env.HOME} API_KEY=${config.apiKey ? "SET" : "MISSING"} ANTHROPIC=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
+lifecycle.startTimers();
 
-    const proc = Bun.spawn(["ls", "-1", sessionDir]);
-    const output = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
+// ── Workspace state ──────────────────────────────────────────────────────
 
-    if (exitCode !== 0) return [];
-
-    return output
-      .trim()
-      .split("\n")
-      .filter(f => f.endsWith(".jsonl"))
-      .map(f => `${sessionDir}/${f}`);
-  } catch {
-    return [];
-  }
-}
-
-// Track uploaded size per file so we only re-upload when content changes
-const uploadedSizes = new Map<string, number>();
-
-// Upload all transcript files to R2 via the worker.
-// Each file gets a stable key: {agentUuid}-{filename} so it's uploaded once per change.
-async function uploadTranscripts(force = false) {
-  try {
-    const files = await findAllTranscripts();
-    if (files.length === 0) {
-      console.log("[Agent] No transcript files found to upload");
-      return;
-    }
-
-    for (const path of files) {
-      try {
-        const file = Bun.file(path);
-        const currentSize = file.size;
-        const prevSize = uploadedSizes.get(path) ?? 0;
-
-        // Skip if unchanged (unless forced, e.g., session end / shutdown)
-        if (!force && currentSize === prevSize) continue;
-
-        const basename = path.split("/").pop()!;
-        const r2Key = `${agentUuid}-${basename}`;
-
-        console.log(`[Agent] Uploading transcript ${basename} (${currentSize} bytes, was ${prevSize})...`);
-        const transcriptContent = await file.text();
-        uploadedSizes.set(path, currentSize);
-
-        const uploadRes = await fetch(`${config.workerUrl}/api/internal/upload-transcript`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-Key": config.apiKey,
-          },
-          body: JSON.stringify({
-            ticketUUID: config.ticketUUID,
-            r2Key,
-            transcript: transcriptContent,
-          }),
-        });
-
-        if (!uploadRes.ok) {
-          const errorText = await uploadRes.text();
-          console.error(`[Agent] Transcript upload failed for ${basename}: ${uploadRes.status} — ${errorText}`);
-          continue;
-        }
-
-        console.log(`[Agent] Transcript uploaded: ${r2Key}`);
-      } catch (fileErr) {
-        console.error(`[Agent] Error uploading ${path}:`, fileErr);
-      }
-    }
-  } catch (err) {
-    console.error("[Agent] Transcript upload error:", err);
-  }
-}
-
-// Heartbeat every 2 minutes while the session is active
-const heartbeatInterval = setInterval(() => {
-  if (sessionStatus === "completed" || sessionStatus === "error") {
-    clearInterval(heartbeatInterval);
-    return;
-  }
-  // Only send heartbeat when session is actually doing work (not idle waiting for first event)
-  if (sessionStatus === "idle") return;
-  // Send heartbeat to orchestrator for monitoring
-  fetch(`${config.workerUrl}/api/orchestrator/heartbeat`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Internal-Key": config.apiKey,
-    },
-    body: JSON.stringify({ ticketUUID: config.ticketUUID }),
-  }).catch((err) => console.error("[Agent] Heartbeat failed:", err));
-
-  phoneHome(`heartbeat status=${sessionStatus} msgs=${sessionMessageCount}`);
-}, 120_000);
-
-// Session timeout watchdog: exit if session runs too long or becomes idle
-// This prevents containers from staying alive indefinitely waiting for Slack replies
-const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours wall-clock (safety net)
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes without messages — ephemeral agents exit fast
-const timeoutWatchdog = setInterval(() => {
-  if (!sessionActive && sessionStatus === "idle") return; // Not started yet
-
-  const now = Date.now();
-  const sessionDuration = sessionStartTime > 0 ? now - sessionStartTime : 0;
-  const idleDuration = lastMessageTime > 0 ? now - lastMessageTime : 0;
-
-  // Hard timeout: 2 hours of wall-clock time
-  if (sessionDuration > SESSION_TIMEOUT_MS) {
-    console.log(`[Agent] Session timeout after ${Math.floor(sessionDuration / 60000)}m — exiting`);
-    phoneHome(`session_timeout duration=${Math.floor(sessionDuration / 60000)}m msgs=${sessionMessageCount}`);
-    clearInterval(heartbeatInterval);
-    clearInterval(transcriptBackupInterval);
-    clearInterval(timeoutWatchdog);
-    process.exit(0);
-  }
-
-  // Idle timeout: 30 minutes without any activity (SDK messages or webhook events)
-  // Keep sessionStatus guard — during long tool runs (tests, builds), the SDK status stays
-  // "running" without producing messages. We only timeout truly idle sessions.
-  if (idleDuration > IDLE_TIMEOUT_MS && sessionStatus !== "running") {
-    console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${sessionStatus} — exiting`);
-    phoneHome(`idle_timeout idle=${Math.floor(idleDuration / 60000)}m status=${sessionStatus} msgs=${sessionMessageCount}`);
-    clearInterval(heartbeatInterval);
-    clearInterval(transcriptBackupInterval);
-    clearInterval(timeoutWatchdog);
-    process.exit(0);
-  }
-}, 60_000); // Check every minute
-
-// Periodic transcript backup every 1 minute (only uploads if file changed)
-const transcriptBackupInterval = setInterval(() => {
-  if (sessionStatus === "completed" || sessionStatus === "error") {
-    clearInterval(transcriptBackupInterval);
-    return;
-  }
-  if (sessionStatus === "running" && sessionActive) {
-    uploadTranscripts().catch((err) => console.error("[Agent] Periodic backup failed:", err));
-  }
-}, 60_000); // 1 minute
-
-// Signal handlers to upload transcript on container shutdown
-async function handleShutdown(signal: string) {
-  console.log(`[Agent] Received ${signal}, uploading transcript before shutdown...`);
-  clearInterval(heartbeatInterval);
-  clearInterval(transcriptBackupInterval);
-  clearInterval(timeoutWatchdog);
-  await uploadTranscripts(true);
-  phoneHome(`container_shutdown signal=${signal}`);
-  process.exit(0);
-}
-
-process.on("SIGTERM", () => handleShutdown("SIGTERM"));
-process.on("SIGINT", () => handleShutdown("SIGINT"));
-
-// Drain buffered events from the TicketAgent DO.
-// Events are buffered when the container is unreachable during session transitions.
-// Called after a session starts so messageYielder is available to inject them.
-async function drainBufferedEvents() {
-  // Wait for messageYielder to be ready
-  const maxWaitMs = 5000;
-  const intervalMs = 100;
-  let waited = 0;
-  while (!messageYielder && waited < maxWaitMs) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    waited += intervalMs;
-  }
-  if (!messageYielder) {
-    console.warn("[Agent] messageYielder not ready after 5s; skipping drain to avoid losing events");
-    return;
-  }
-
-  try {
-    // Loop until all buffered events are drained (DO limits to 20 per batch)
-    let batch = 0;
-    const maxBatches = 10;
-    while (batch < maxBatches) {
-      const drainRes = await fetch(
-        `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketUUID)}/drain-events`,
-        { headers: { "X-Internal-Key": config.apiKey } },
-      );
-      if (!drainRes.ok) break;
-
-      const { events } = (await drainRes.json()) as { events: TicketEvent[] };
-      if (!events || events.length === 0) break;
-
-      batch++;
-      console.log(`[Agent] Drained ${events.length} buffered events (batch ${batch})`);
-
-      for (const event of events) {
-        const prompt = await buildEventPrompt(event, config.slackBotToken);
-        messageYielder(userMessage(prompt));
-      }
-    }
-  } catch (err) {
-    console.warn("[Agent] Failed to drain buffered events:", err);
-  }
-}
-
-let sessionActive = false;
-let messageYielder: ((msg: SDKUserMessage) => void) | null = null;
-let repoCloned = false;
+let workspaceReady = false;
+let agentCwd = "";
+let additionalDirs: string[] = [];
 let loadedPlugins: PluginPath[] = [];
-let sessionStatus = "idle";
-let lastToolCall = "";
-let lastAssistantText = "";
-let sessionMessageCount = 0;
-let sessionError = "";
-let lastStderr = "";
-let currentSessionId = "";
-let sessionStartTime = 0;
-let lastMessageTime = 0;
 
-// Token usage tracking
-let totalInputTokens = 0;
-let totalOutputTokens = 0;
-let totalCacheReadTokens = 0;
-let totalCacheCreationTokens = 0;
-let totalCostUsd = 0;
-let lastUserPrompt = "";  // Track most recent user message for logging
-let turnUsageLog: Array<{
-  turn: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  costUsd: number;
-  promptSnippet?: string;
-  outputSnippet?: string;
-}> = [];
+async function ensureWorkspace(): Promise<void> {
+  if (workspaceReady) return;
+
+  lifecycle.state.sessionStatus = "cloning";
+  const result = await setupWorkspace({
+    repos: config.repos,
+    githubToken: config.githubToken,
+    roleConfig,
+    phoneHome: (msg) => lifecycle.phoneHome(msg),
+  });
+
+  agentCwd = result.agentCwd;
+  additionalDirs = result.additionalDirs;
+  loadedPlugins = result.plugins;
+  process.chdir(agentCwd);
+
+  workspaceReady = true;
+}
+
+// ── Message generator ────────────────────────────────────────────────────
+
+let messageYielder: ((msg: SDKUserMessage) => void) | null = null;
 
 function createMessageGenerator(): AsyncGenerator<SDKUserMessage> {
   const queue: SDKUserMessage[] = [];
@@ -420,93 +138,58 @@ function createMessageGenerator(): AsyncGenerator<SDKUserMessage> {
   })();
 }
 
-async function cloneRepos() {
-  if (repoCloned) return;
-  sessionStatus = "cloning";
+// ── Drain buffered events ────────────────────────────────────────────────
 
-  console.log("[Agent] Setting up .netrc for GitHub auth...");
-  const home = process.env.HOME || "/home/agent";
-  const netrc = `machine github.com\nlogin x-access-token\npassword ${config.githubToken}\n`;
-  await Bun.write(`${home}/.netrc`, netrc);
-  const chmod = Bun.spawn(["chmod", "600", `${home}/.netrc`]);
-  await chmod.exited;
-
-  await Promise.all(config.repos.map(async (repo) => {
-    const repoName = repo.split("/").pop()!;
-    if (!/^[a-zA-Z0-9._-]+$/.test(repoName)) {
-      throw new Error(`Invalid repo name: ${repoName}`);
-    }
-    console.log(`[Agent] Cloning ${repo}...`);
-    const proc = Bun.spawn([
-      "git",
-      "clone",
-      `https://github.com/${repo}.git`,
-      `/workspace/${repoName}`,
-    ]);
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) {
-      const stderr = proc.stderr ? await new Response(proc.stderr).text() : "no stderr";
-      console.error(`[Agent] Clone failed: ${stderr}`);
-      throw new Error(`Failed to clone ${repo}: exit code ${exitCode} — ${stderr}`);
-    }
-    console.log(`[Agent] Cloned ${repo} successfully`);
-    phoneHome(`clone_done repo=${repoName}`);
-  }));
-
-  // Set working directory to the first repo so Agent SDK tools operate on it
-  const primaryRepo = config.repos[0].split("/").pop()!;
-  if (!/^[a-zA-Z0-9._-]+$/.test(primaryRepo)) {
-    throw new Error(`Invalid repo name: ${primaryRepo}`);
+async function drainBufferedEvents() {
+  const maxWaitMs = 5000;
+  const intervalMs = 100;
+  let waited = 0;
+  while (!messageYielder && waited < maxWaitMs) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    waited += intervalMs;
   }
-  process.chdir(`/workspace/${primaryRepo}`);
-  console.log(`[Agent] Working directory: /workspace/${primaryRepo}`);
+  if (!messageYielder) {
+    console.warn("[Agent] messageYielder not ready after 5s; skipping drain");
+    return;
+  }
 
-  // Load plugins from the target repo's .claude/settings.json
-  phoneHome("loading_plugins");
+  // ProjectAgents use a different drain endpoint than TicketAgents
+  const drainUrl = roleConfig.isProjectLead
+    ? `${config.workerUrl}/api/project-agent/drain-events?product=${encodeURIComponent(config.product)}`
+    : `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketUUID)}/drain-events`;
+
   try {
-    loadedPlugins = await loadPlugins(`/workspace/${primaryRepo}`);
-    if (loadedPlugins.length > 0) {
-      phoneHome(`plugins_loaded count=${loadedPlugins.length} names=${loadedPlugins.map(p => p.path.split("/").pop()).join(",")}`);
+    let batch = 0;
+    const maxBatches = 10;
+    while (batch < maxBatches) {
+      const drainRes = await fetch(drainUrl, {
+        headers: { "X-Internal-Key": config.apiKey },
+      });
+      if (!drainRes.ok) break;
+
+      const { events } = (await drainRes.json()) as { events: TicketEvent[] };
+      if (!events || events.length === 0) break;
+
+      batch++;
+      console.log(`[Agent] Drained ${events.length} buffered events (batch ${batch})`);
+
+      for (const event of events) {
+        const prompt = await buildEventPrompt(event, config.slackBotToken);
+        messageYielder(userMessage(prompt));
+      }
     }
   } catch (err) {
-    console.error("[Agent] Plugin loading failed (non-fatal):", err);
-    phoneHome("plugins_failed");
-    // Continue without plugins — agent can still work, just missing plugin skills
+    console.warn("[Agent] Failed to drain buffered events:", err);
   }
-
-  repoCloned = true;
 }
 
-async function checkAndCheckoutWorkBranch(): Promise<string | null> {
-  const branchPrefixes = [`ticket/${config.ticketUUID}`, `feedback/${config.ticketUUID}`];
-
-  for (const branch of branchPrefixes) {
-    const check = Bun.spawn(["git", "ls-remote", "--heads", "origin", branch]);
-    const output = await new Response(check.stdout).text();
-    const exitCode = await check.exited;
-
-    if (exitCode === 0 && output.trim().length > 0) {
-      console.log(`[Agent] Found existing branch on remote: ${branch}`);
-      const checkout = Bun.spawn(["git", "checkout", branch]);
-      const checkoutExit = await checkout.exited;
-      if (checkoutExit !== 0) {
-        // Branch doesn't exist locally, create tracking branch
-        const track = Bun.spawn(["git", "checkout", "-b", branch, `origin/${branch}`]);
-        await track.exited;
-      }
-      return branch;
-    }
-  }
-
-  return null;
-}
+// ── Session ──────────────────────────────────────────────────────────────
 
 async function startSession(initialPrompt: MessageContent) {
-  if (sessionActive) return;
-  sessionStatus = "starting_session";
-
-  sessionStartTime = Date.now();
-  lastMessageTime = Date.now();
+  if (lifecycle.state.sessionActive) return;
+  lifecycle.state.sessionStatus = "starting_session";
+  lifecycle.state.sessionStartTime = Date.now();
+  lifecycle.state.lastMessageTime = Date.now();
 
   console.log("[Agent] Creating tools and MCP servers...");
   const { tools } = createTools(config);
@@ -515,201 +198,127 @@ async function startSession(initialPrompt: MessageContent) {
   console.log(`[Agent] MCP servers: ${Object.keys(externalMcpServers).join(", ")}`);
 
   const messages = createMessageGenerator();
-  // messageYielder is now assigned — safe to mark session active
-  sessionActive = true;
+  lifecycle.state.sessionActive = true;
 
   messageYielder!(userMessage(initialPrompt));
-  console.log(`[Agent] Initial prompt queued (${typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length} chars)`);
+  const promptLen = typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length;
+  console.log(`[Agent] Initial prompt queued (${promptLen} chars)`);
 
-  phoneHome(`session_starting prompt_chars=${typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length}`);
+  lifecycle.phoneHome(`session_starting prompt_chars=${promptLen}`);
   console.log("[Agent] Starting Agent SDK query()...");
 
-  // Build query options
-  // settingSources: ["project"] loads CLAUDE.md, .claude/rules/ (alwaysApply), and
-  // .claude/skills/ from the target repo. Plugins are loaded separately via loadPlugins()
-  // in cloneRepos() — settingSources does NOT resolve enabledPlugins from settings.json.
-  // To keep context lean, target repos should only use alwaysApply rules that are
-  // headless-compatible (no interactive prompts, no TodoWrite, no plan mode).
-  // See templates/ for headless-optimized templates.
   const queryOptions: any = {
     systemPrompt: { type: "preset", preset: "claude_code" },
     settingSources: ["project"],
-    maxTurns: 200,
+    cwd: agentCwd || undefined,
+    ...(additionalDirs.length > 0 ? { additionalDirectories: additionalDirs } : {}),
+    maxTurns: roleConfig.maxTurns,
     permissionMode: "bypassPermissions",
     mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
     ...(loadedPlugins.length > 0 ? { plugins: loadedPlugins } : {}),
-    // Force node runtime — cli.js is a Node bundle, Bun may have compat issues
     executable: "node",
     stderr: (data: string) => {
-      lastStderr = data.slice(0, 500);
+      lifecycle.state.lastStderr = data.slice(0, 500);
       console.error(`[Agent][SDK stderr] ${data.slice(0, 300)}`);
-      // Don't phone home every stderr chunk — it's available via /status
     },
     hooks: {
-      SessionEnd: [
-        {
-          hooks: [async (input: any, _toolUseID: any, _options: any) => {
-            // Upload all transcripts to R2 when session ends (force to capture final state)
-            await uploadTranscripts(true);
-            return { continue: true };
-          }],
-        },
-      ],
+      SessionEnd: [{
+        hooks: [async () => {
+          await transcriptMgr.upload(true);
+          return { continue: true };
+        }],
+      }],
     },
   };
 
-  // Set model if configured (sonnet, opus, haiku)
   if (config.model) {
     queryOptions.model = config.model;
     console.log(`[Agent] Using model: ${config.model}`);
   }
 
-  const session = query({
-    prompt: messages,
-    options: queryOptions,
-  });
+  const session = query({ prompt: messages, options: queryOptions });
   console.log("[Agent] query() returned, starting consumption loop...");
 
   (async () => {
     try {
-      sessionStatus = "running";
-      phoneHome("session_running");
-      for await (const message of session) {
-        sessionMessageCount++;
-        lastMessageTime = Date.now();
+      lifecycle.state.sessionStatus = "running";
+      lifecycle.phoneHome("session_running");
 
-        // Capture session ID from first message for logging
-        if (sessionMessageCount === 1) {
+      for await (const message of session) {
+        lifecycle.state.sessionMessageCount++;
+        lifecycle.recordActivity();
+
+        if (lifecycle.state.sessionMessageCount === 1) {
           if (message.session_id) {
-            currentSessionId = message.session_id;
-            console.log(`[Agent] Session ID: ${currentSessionId}`);
+            lifecycle.state.currentSessionId = message.session_id;
+            console.log(`[Agent] Session ID: ${lifecycle.state.currentSessionId}`);
           }
-          phoneHome(`first_message session_id=${currentSessionId}`);
+          lifecycle.phoneHome(`first_message session_id=${lifecycle.state.currentSessionId}`);
         }
 
         if (message.type === "assistant" && message.message?.content) {
-          // Extract output snippet for logging
           let outputSnippet = "";
           for (const block of message.message.content) {
-            if (block.type === "text") {
-              outputSnippet = block.text.slice(0, 100);
-              break;
-            }
+            if (block.type === "text") { outputSnippet = block.text.slice(0, 100); break; }
           }
 
-          // Track token usage per turn
           const usage = (message.message as any).usage;
           if (usage) {
-            const inputTokens = usage.input_tokens || 0;
-            const outputTokens = usage.output_tokens || 0;
-            const cacheReadTokens = usage.cache_read_input_tokens || 0;
-            const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
-
-            totalInputTokens += inputTokens;
-            totalOutputTokens += outputTokens;
-            totalCacheReadTokens += cacheReadTokens;
-            totalCacheCreationTokens += cacheCreationTokens;
-
-            // Calculate cost based on Sonnet 4.6 pricing: $3/MTok input, $15/MTok output
-            // (Opus 4.6: $5/$25, Haiku 4.5: $1/$5)
-            // Cache reads are 10% of input cost, cache creation is same as input
-            // Note: This uses Sonnet pricing for all models - actual costs may vary
-            const turnCost =
-              (inputTokens * 3.0 / 1_000_000) +
-              (outputTokens * 15.0 / 1_000_000) +
-              (cacheReadTokens * 0.3 / 1_000_000) +
-              (cacheCreationTokens * 3.0 / 1_000_000);
-
-            totalCostUsd += turnCost;
-
-            turnUsageLog.push({
-              turn: sessionMessageCount,
-              inputTokens,
-              outputTokens,
-              cacheReadTokens,
-              cacheCreationTokens,
-              costUsd: turnCost,
-              promptSnippet: lastUserPrompt.slice(0, 100),
+            tokenTracker.recordTurn({
+              inputTokens: usage.input_tokens || 0,
+              outputTokens: usage.output_tokens || 0,
+              cacheReadTokens: usage.cache_read_input_tokens || 0,
+              cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+              promptSnippet: lifecycle.state.lastUserPrompt.slice(0, 100),
               outputSnippet,
             });
-
-            console.log(`[Agent] Turn ${sessionMessageCount} usage: ${inputTokens} in / ${outputTokens} out / $${turnCost.toFixed(4)}`);
-            console.log(`[Agent]   Prompt: ${lastUserPrompt.slice(0, 100)}`);
-            console.log(`[Agent]   Output: ${outputSnippet}`);
           }
 
           for (const block of message.message.content) {
             if (block.type === "text") {
-              lastAssistantText = block.text.slice(0, 500);
+              lifecycle.state.lastAssistantText = block.text.slice(0, 500);
               console.log(`[Agent] ${block.text.slice(0, 200)}`);
+              slackEcho.echoAssistantText(block.text);
             }
             if (block.type === "tool_use") {
-              lastToolCall = `${block.name}(${JSON.stringify(block.input).slice(0, 100)})`;
+              lifecycle.state.lastToolCall = `${block.name}(${JSON.stringify(block.input).slice(0, 100)})`;
               console.log(`[Agent] Tool: ${block.name}`);
+              slackEcho.echoToolUse(block.name, block.input as Record<string, unknown>);
             }
           }
         } else if (message.type === "user") {
-          // Capture user message for next turn's logging
           const userMsg = message as SDKUserMessage;
           if (typeof userMsg.message.content === "string") {
-            lastUserPrompt = userMsg.message.content;
+            lifecycle.state.lastUserPrompt = userMsg.message.content;
           }
         } else if (message.type === "result") {
           const result = message as Record<string, unknown>;
-
-          // Extract final usage totals from result message if available
           if (result.total_cost_usd) {
-            totalCostUsd = result.total_cost_usd as number;
-            console.log(`[Agent] Final cost from SDK: $${totalCostUsd.toFixed(2)}`);
+            tokenTracker.overrideCost(result.total_cost_usd as number);
           }
-
           console.log(`[Agent] Result message: ${JSON.stringify(result).slice(0, 300)}`);
-          phoneHome(`result ${JSON.stringify(result).slice(0, 200)}`);
+          lifecycle.phoneHome(`result ${JSON.stringify(result).slice(0, 200)}`);
         }
-        // Periodic phone-home every 5th message so we can track progress
-        if (sessionMessageCount % 5 === 0) {
-          phoneHome(`progress msgs=${sessionMessageCount} tool=${lastToolCall.slice(0, 80)}`);
+
+        if (lifecycle.state.sessionMessageCount % 5 === 0) {
+          lifecycle.phoneHome(`progress msgs=${lifecycle.state.sessionMessageCount} tool=${lifecycle.state.lastToolCall.slice(0, 80)}`);
         }
       }
-      console.log("[Agent] Session ended normally");
-      sessionStatus = "completed";
-      sessionActive = false;
-      phoneHome(`session_completed msgs=${sessionMessageCount}`);
 
-      // Report token usage
-      await reportTokenUsage();
-
-      // Exit the container so it stops using resources
-      // The 15m sleepAfter is a safety net, but we should exit immediately when done
-      console.log("[Agent] Exiting container after successful completion");
-      clearInterval(heartbeatInterval);
-      clearInterval(transcriptBackupInterval);
-      clearInterval(timeoutWatchdog);
-      process.exit(0);
+      await lifecycle.handleSessionEnd();
+      if (roleConfig.persistAfterSession) {
+        messageYielder = null;
+      }
     } catch (err) {
-      console.error("[Agent] Session error:", err);
-      sessionError = String(err);
-      sessionStatus = "error";
-      sessionActive = false;
-      phoneHome(`session_error ${String(err).slice(0, 150)} | stderr=${lastStderr.slice(0, 100)}`);
-
-      // Upload transcripts on error to capture work done before crash
-      try {
-        await uploadTranscripts(true);
-      } catch (uploadErr) {
-        console.error("[Agent] Failed to upload transcript after error:", uploadErr);
+      await lifecycle.handleSessionError(err as Error);
+      if (roleConfig.persistAfterSession) {
+        messageYielder = null;
       }
-
-      // Exit the container so it stops using resources
-      console.log("[Agent] Exiting container after error");
-      clearInterval(heartbeatInterval);
-      clearInterval(transcriptBackupInterval);
-      clearInterval(timeoutWatchdog);
-      // Use exit code 1 for errors so monitoring can distinguish success vs failure
-      process.exit(1);
     }
   })();
 }
+
+// ── HTTP routes ──────────────────────────────────────────────────────────
 
 app.post("/event", async (c) => {
   const key = c.req.header("X-Internal-Key");
@@ -719,27 +328,26 @@ app.post("/event", async (c) => {
 
   const event = await c.req.json<TicketEvent>();
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
-
-  // Update last activity time for idle timeout tracking
-  lastMessageTime = Date.now();
+  lifecycle.recordActivity();
 
   try {
-    // Capture thread_ts from event so Slack tools reply in-thread
     if (event.slackThreadTs) {
       config.slackThreadTs = event.slackThreadTs;
+      slackEcho.setThreadTs(event.slackThreadTs);
+    }
+    if (roleConfig.isProjectLead && event.slackChannel) {
+      config.slackChannel = event.slackChannel;
     }
 
-    await cloneRepos();
+    await ensureWorkspace();
 
-    if (!sessionActive) {
+    if (!lifecycle.state.sessionActive) {
       const taskType: TaskPayload["type"] =
-        event.type === "ticket_created"
-          ? "ticket"
-          : event.type === "slack_mention" || event.type === "slack_reply"
-            ? "command"
-            : event.type === "feedback"
-              ? "feedback"
+        event.type === "ticket_created" ? "ticket"
+          : event.type === "slack_mention" || event.type === "slack_reply" ? "command"
+            : event.type === "feedback" ? "feedback"
               : "ticket";
+
       const taskPayload: TaskPayload = {
         type: taskType,
         product: config.product,
@@ -747,16 +355,14 @@ app.post("/event", async (c) => {
         data: event.payload as TaskPayload["data"],
       };
 
-      // Extract ticket metadata for Slack status updates
       if (taskType === "ticket") {
         const ticketData = event.payload as any;
         config.ticketIdentifier = ticketData.identifier;
         config.ticketTitle = ticketData.title;
       }
 
-      const prompt = await buildPrompt(taskPayload, config.slackBotToken);
+      const prompt = await buildPrompt(taskPayload, config.slackBotToken, process.env.MODE);
       await startSession(prompt);
-      // Drain any events buffered while the container was unreachable
       drainBufferedEvents();
     } else if (messageYielder) {
       const continuationPrompt = await buildEventPrompt(event, config.slackBotToken);
@@ -768,7 +374,7 @@ app.post("/event", async (c) => {
     return c.json({ ok: true });
   } catch (err) {
     console.error("[Agent] Event handling error:", err);
-    phoneHome(`event_error ${String(err).slice(0, 200)}`);
+    lifecycle.phoneHome(`event_error ${String(err).slice(0, 200)}`);
     return c.json({ error: String(err) }, 500);
   }
 });
@@ -782,11 +388,11 @@ app.get("/status", (c) =>
     service: "ticket-agent-container",
     ticketUUID: config.ticketUUID,
     product: config.product,
-    sessionActive,
-    sessionStatus,
-    sessionMessageCount,
-    sessionError,
-    repoCloned,
+    sessionActive: lifecycle.state.sessionActive,
+    sessionStatus: lifecycle.state.sessionStatus,
+    sessionMessageCount: lifecycle.state.sessionMessageCount,
+    sessionError: lifecycle.state.sessionError,
+    repoCloned: workspaceReady,
   }),
 );
 
@@ -797,31 +403,28 @@ app.post("/shutdown", async (c) => {
   }
 
   console.log("[Agent] Shutdown requested - exiting container");
-  phoneHome(`shutdown_requested status=${sessionStatus} msgs=${sessionMessageCount}`);
-
-  // Clear intervals immediately to prevent concurrent work during shutdown
-  clearInterval(heartbeatInterval);
-  clearInterval(transcriptBackupInterval);
-  clearInterval(timeoutWatchdog);
+  lifecycle.phoneHome(`shutdown_requested status=${lifecycle.state.sessionStatus} msgs=${lifecycle.state.sessionMessageCount}`);
+  lifecycle.stopTimers();
 
   const SHUTDOWN_TIMEOUT_MS = 15000;
-
-  // Perform shutdown work (upload transcripts, report tokens) with a bounded timeout
   const shutdownWork = (async () => {
-    // Upload transcripts before shutdown
-    await uploadTranscripts(true);
-
-    // Report final token usage if session was active
-    if (sessionActive || sessionMessageCount > 0) {
-      await reportTokenUsage();
+    await transcriptMgr.upload(true);
+    if (lifecycle.state.sessionActive || lifecycle.state.sessionMessageCount > 0) {
+      await tokenTracker.report({
+        ticketUUID: config.ticketUUID,
+        workerUrl: config.workerUrl,
+        apiKey: config.apiKey,
+        slackBotToken: config.slackBotToken,
+        slackChannel: config.slackChannel,
+        slackThreadTs: config.slackThreadTs,
+        sessionMessageCount: lifecycle.state.sessionMessageCount,
+      });
     }
   })();
 
   const timeoutPromise = new Promise<void>((resolve) => {
     setTimeout(() => {
-      console.warn(
-        `[Agent] Shutdown work exceeded ${SHUTDOWN_TIMEOUT_MS}ms timeout; proceeding with exit`,
-      );
+      console.warn(`[Agent] Shutdown work exceeded ${SHUTDOWN_TIMEOUT_MS}ms timeout`);
       resolve();
     }, SHUTDOWN_TIMEOUT_MS);
   });
@@ -829,11 +432,9 @@ app.post("/shutdown", async (c) => {
   try {
     await Promise.race([shutdownWork, timeoutPromise]);
   } finally {
-    // Schedule process exit regardless of shutdown work outcome
     setTimeout(() => process.exit(0), 100);
   }
 
-  // Return response after shutdown sequence has been initiated
   return c.json({ ok: true });
 });
 
@@ -842,18 +443,17 @@ export default {
   fetch: app.fetch,
 };
 
-// Auto-resume: if container restarts with a ticket config, check for existing
-// work branch and resume the session without waiting for an event.
-// This fires after the server is listening, so /health can respond while we resume.
+// ── Auto-resume ──────────────────────────────────────────────────────────
+
 setTimeout(async () => {
-  if (sessionActive) return; // Event already triggered a session
+  if (lifecycle.state.sessionActive) return;
 
   try {
-    await cloneRepos();
-    const branch = await checkAndCheckoutWorkBranch();
+    await ensureWorkspace();
+    const branch = await checkAndCheckoutWorkBranch(config.ticketUUID);
 
     if (branch) {
-      // Check orchestrator state before resuming — skip if ticket is inactive
+      // Check orchestrator state before resuming
       try {
         const statusRes = await fetch(
           `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketUUID)}`,
@@ -866,33 +466,23 @@ setTimeout(async () => {
             terminal?: boolean;
           };
           if (ticketStatus.agent_active === 0 || ticketStatus.terminal) {
-            console.log(
-              `[Agent] Ticket ${config.ticketUUID} is inactive (agent_active=${ticketStatus.agent_active}, status=${ticketStatus.status}) — skipping auto-resume`,
-            );
-            phoneHome(`auto_resume_skipped reason=inactive status=${ticketStatus.status}`);
+            console.log(`[Agent] Ticket ${config.ticketUUID} is inactive — skipping auto-resume`);
+            lifecycle.phoneHome(`auto_resume_skipped reason=inactive status=${ticketStatus.status}`);
             process.exit(0);
             return;
           }
         }
       } catch (err) {
-        // Fail-open: if we can't reach orchestrator, proceed with resume
-        console.warn(
-          "[Agent] Could not check orchestrator status, proceeding with resume:",
-          err,
-        );
+        console.warn("[Agent] Could not check orchestrator status, proceeding with resume:", err);
       }
 
       console.log(`[Agent] Auto-resuming from branch: ${branch}`);
-      phoneHome(`auto_resume branch=${branch}`);
+      lifecycle.phoneHome(`auto_resume branch=${branch}`);
 
-      // Get git state for context
       const logProc = Bun.spawn(["git", "log", "--oneline", "-10"]);
       const gitLog = await new Response(logProc.stdout).text();
-
       const statusProc = Bun.spawn(["git", "status", "--short"]);
       const gitStatus = await new Response(statusProc.stdout).text();
-
-      // Check for existing PR
       const prProc = Bun.spawn(["gh", "pr", "view", "--json", "url,state,title", branch]);
       const prOutput = await new Response(prProc.stdout).text();
       const prExit = await prProc.exited;
@@ -900,7 +490,6 @@ setTimeout(async () => {
 
       const resumePrompt = buildResumePrompt(branch, gitLog.trim(), gitStatus.trim(), prInfo);
 
-      // Notify Slack about recovery
       if (config.slackChannel && config.slackBotToken) {
         await fetch("https://slack.com/api/chat.postMessage", {
           method: "POST",
@@ -917,13 +506,12 @@ setTimeout(async () => {
       }
 
       await startSession(resumePrompt);
-      // Drain any events buffered while the container was restarting
       drainBufferedEvents();
     } else {
       console.log("[Agent] No existing work branch found — waiting for event");
     }
   } catch (err) {
     console.error("[Agent] Auto-resume failed:", err);
-    phoneHome(`auto_resume_failed ${String(err).slice(0, 200)}`);
+    lifecycle.phoneHome(`auto_resume_failed ${String(err).slice(0, 200)}`);
   }
-}, 5000); // Wait 5s for container to stabilize
+}, 5000);

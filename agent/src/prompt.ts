@@ -11,6 +11,7 @@
 
 import Mustache from "mustache";
 import initialTemplate from "./prompts/task-initial.mustache";
+import researchTemplate from "./prompts/task-research.mustache";
 import resumeTemplate from "./prompts/task-resume.mustache";
 
 import type {
@@ -24,6 +25,19 @@ import type {
   ContentBlock,
 } from "./config";
 import { normalizeImageMediaType } from "./config";
+
+/**
+ * Wrap untrusted input with a secret delimiter.
+ * The delimiter is a per-environment secret (PROMPT_DELIMITER env var) that
+ * marks boundaries between trusted prompt and untrusted user data. If an
+ * attacker doesn't know the delimiter, they can't craft input that escapes
+ * the boundary. Falls back to <user_input> tags if no secret is configured.
+ */
+const DELIMITER = process.env.PROMPT_DELIMITER || "user_input";
+
+function wrapUntrusted(content: string): string {
+  return `<${DELIMITER}>\n${content}\n</${DELIMITER}>`;
+}
 
 /**
  * Fetch Slack image files and convert to base64 content blocks.
@@ -76,15 +90,20 @@ async function fetchSlackFiles(
 export async function buildPrompt(
   task: TaskPayload,
   slackBotToken: string,
+  mode?: string,
 ): Promise<MessageContent> {
-  const header = Mustache.render(initialTemplate, {
+  const template = mode === "research" ? researchTemplate : initialTemplate;
+
+  const header = Mustache.render(template, {
     product: task.product,
     taskDescription: formatTask(task),
     reposList: task.repos.map((r) => `- \`${r}\``).join("\n"),
     reposContext:
       task.repos.length > 1
         ? "The repos are already cloned into /workspace/. Work across them as needed."
-        : "The repo is already cloned into /workspace/.",
+        : task.repos.length === 1
+          ? "The repo is already cloned into /workspace/."
+          : "",
   });
 
   // If task has files (from Slack), fetch and append images
@@ -113,9 +132,9 @@ function formatTask(task: TaskPayload): string {
 function formatFeedback(data: FeedbackData): string {
   const parts = [
     `**Type:** User feedback`,
-    data.text && `**Feedback:**\n<user_input>\n${data.text}\n</user_input>`,
+    data.text && `**Feedback:**\n${wrapUntrusted(data.text)}`,
     data.page_url && `**Page URL:** ${data.page_url}`,
-    data.annotations && `**Annotations:**\n<user_input>\n${data.annotations}\n</user_input>`,
+    data.annotations && `**Annotations:**\n${wrapUntrusted(data.annotations)}`,
     data.screenshot && `**Screenshot:** (attached)`,
     `**Feedback ID:** ${data.id}`,
   ];
@@ -126,8 +145,8 @@ function formatTicket(data: TicketData): string {
   const parts = [
     `**Type:** Linear ticket`,
     data.identifier && `**Ticket:** ${data.identifier} (https://linear.app/issue/${data.identifier})`,
-    `**Title:**\n<user_input>\n${data.title ?? "(no title)"}\n</user_input>`,
-    `**Description:**\n<user_input>\n${data.description ?? "(no description)"}\n</user_input>`,
+    `**Title:**\n${wrapUntrusted(data.title ?? "(no title)")}`,
+    `**Description:**\n${wrapUntrusted(data.description ?? "(no description)")}`,
     `**Priority:** ${data.priority ?? "unset"}`,
     (data.labels?.length ?? 0) > 0 && `**Labels:** ${data.labels.join(", ")}`,
     `**Ticket ID:** ${data.id}`,
@@ -143,7 +162,7 @@ function formatCommand(data: CommandData): string {
   const parts = [
     `**Type:** Slack command`,
     `**From:** <@${data.user}>`,
-    `**Message:**\n<user_input>\n${data.text}\n</user_input>`,
+    `**Message:**\n${wrapUntrusted(data.text)}`,
   ];
 
   if (data.files && data.files.length > 0) {
@@ -163,11 +182,11 @@ export async function buildEventPrompt(
 
   switch (event.type) {
     case "pr_review":
-      return `A PR review was submitted:\n\n**State:** ${payload.review_state || payload.state}\n**Reviewer:** ${payload.reviewer || "unknown"}\n**Body:**\n<user_input>\n${payload.review_body || payload.body || "(no comment)"}\n</user_input>\n\nRespond to the review. If changes are requested, make them, push, and notify Slack.`;
+      return `A PR review was submitted:\n\n**State:** ${payload.review_state || payload.state}\n**Reviewer:** ${payload.reviewer || "unknown"}\n**Body:**\n${wrapUntrusted(String(payload.review_body || payload.body || "(no comment)"))}\n\nRespond to the review. If changes are requested, make them, push, and notify Slack.`;
     case "pr_review_comment":
-      return `A review comment was posted on your PR:\n\n**Commenter:** ${payload.commenter || "unknown"}\n**File:** ${payload.file_path || "unknown"}\n**Line:** ${payload.line || "unknown"}\n**Comment:**\n<user_input>\n${payload.comment_body || "(no comment)"}\n</user_input>\n\nRespond to the comment. If changes are needed, make them, push, and notify Slack.`;
+      return `A review comment was posted on your PR:\n\n**Commenter:** ${payload.commenter || "unknown"}\n**File:** ${payload.file_path || "unknown"}\n**Line:** ${payload.line || "unknown"}\n**Comment:**\n${wrapUntrusted(String(payload.comment_body || "(no comment)"))}\n\nRespond to the comment. If changes are needed, make them, push, and notify Slack.`;
     case "pr_comment":
-      return `A comment was posted on your PR:\n\n**Commenter:** ${payload.commenter || "unknown"}\n**Comment:**\n<user_input>\n${payload.comment_body || "(no comment)"}\n</user_input>\n\nRespond to the comment. If changes are needed, make them, push, and notify Slack.`;
+      return `A comment was posted on your PR:\n\n**Commenter:** ${payload.commenter || "unknown"}\n**Comment:**\n${wrapUntrusted(String(payload.comment_body || "(no comment)"))}\n\nRespond to the comment. If changes are needed, make them, push, and notify Slack.`;
     case "pr_merged":
       return `The PR has been merged. Update the task status to "merged", notify Slack, and do a brief retro.`;
     case "pr_closed":
@@ -175,10 +194,10 @@ export async function buildEventPrompt(
     case "ci_status":
       return `CI status update:\n\n**Status:** ${payload.status}\n**Description:** ${payload.description || ""}\n\nIf CI failed, investigate and fix. If it passed, continue with the workflow.`;
     case "linear_comment":
-      return `A comment was posted on your Linear ticket:\n\n**Author:** ${payload.author}\n**Comment:**\n<user_input>\n${payload.body || "(no comment)"}\n</user_input>\n\nProcess this information and continue your work.`;
+      return `A comment was posted on your Linear ticket:\n\n**Author:** ${payload.author}\n**Comment:**\n${wrapUntrusted(String(payload.body || "(no comment)"))}\n\nProcess this information and continue your work.`;
     case "slack_reply": {
       const files = payload.files as CommandData["files"];
-      let message = `The user replied via Slack:\n\n<user_input>\n${payload.text}\n</user_input>`;
+      let message = `The user replied via Slack:\n\n${wrapUntrusted(String(payload.text))}`;
 
       if (files && files.length > 0) {
         message += `\n\n**Attachments:**\n${formatFileList(files)}`;

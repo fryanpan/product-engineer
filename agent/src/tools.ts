@@ -8,8 +8,20 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { normalizeImageMediaType, type AgentConfig } from "./config";
+import { checkCIStatus, mergePR } from "./merge-gate";
+import { StatusUpdater } from "./status-updater";
 
 type ToolResult = { content: { type: "text"; text: string }[] };
+
+/** Extract non-empty Slack persona fields for spreading into API payloads. */
+function slackPersonaFields(config: AgentConfig): Record<string, string> {
+  if (!config.slackPersona) return {};
+  const fields: Record<string, string> = {};
+  if (config.slackPersona.username) fields.username = config.slackPersona.username;
+  if (config.slackPersona.icon_emoji) fields.icon_emoji = config.slackPersona.icon_emoji;
+  if (config.slackPersona.icon_url) fields.icon_url = config.slackPersona.icon_url;
+  return fields;
+}
 
 export async function persistSlackThreadTs(
   config: AgentConfig,
@@ -64,6 +76,7 @@ async function postToSlack(
       channel: config.slackChannel,
       text,
       ...(config.slackThreadTs && { thread_ts: config.slackThreadTs }),
+      ...slackPersonaFields(config),
     }),
   });
 
@@ -83,37 +96,19 @@ async function postToSlack(
   return { content: [{ type: "text", text: "Message posted to Slack" }] };
 }
 
-async function updateSlackMessage(
-  text: string,
-  ts: string,
-  config: AgentConfig,
-): Promise<ToolResult> {
-  const res = await fetch("https://slack.com/api/chat.update", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.slackBotToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      channel: config.slackChannel,
-      ts,
-      text,
-    }),
+export function createTools(config: AgentConfig) {
+  const statusUpdater = new StatusUpdater({
+    workerUrl: config.workerUrl,
+    apiKey: config.apiKey,
+    ticketUUID: config.ticketUUID,
+    slackBotToken: config.slackBotToken,
+    slackChannel: config.slackChannel,
+    slackThreadTs: config.slackThreadTs,
+    linearAppToken: config.linearAppToken,
+    ticketIdentifier: config.ticketIdentifier,
+    ticketTitle: config.ticketTitle,
   });
 
-  if (!res.ok) {
-    return { content: [{ type: "text", text: `Slack update failed: ${res.status}` }] };
-  }
-
-  const data = (await res.json()) as { ok: boolean; error?: string };
-  if (!data.ok) {
-    return { content: [{ type: "text", text: `Slack update error: ${data.error}` }] };
-  }
-
-  return { content: [{ type: "text", text: "Slack message updated" }] };
-}
-
-export function createTools(config: AgentConfig) {
   const notifySlack = tool(
     "notify_slack",
     "Send a notification message to the product's Slack channel. Use this to keep the team informed of progress.",
@@ -155,148 +150,11 @@ export function createTools(config: AgentConfig) {
         .optional()
         .describe("ID of the created or referenced Linear ticket"),
     },
-    async ({ status, reason, pr_url, linear_ticket_id: explicitTicketId }) => {
-      const linear_ticket_id = explicitTicketId || config.ticketUUID;
-      console.log(
-        `[Agent] Status update: ${status}`,
-        JSON.stringify({ reason, pr_url, linear_ticket_id }),
-      );
-
-      // Update orchestrator
-      try {
-        await fetch(`${config.workerUrl}/api/internal/status`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-Key": config.apiKey,
-          },
-          body: JSON.stringify({
-            ticketUUID: config.ticketUUID,
-            status,
-            pr_url,
-            branch_name: undefined,
-          }),
-        });
-      } catch (err) {
-        console.error("[Agent] Failed to update orchestrator status:", err);
-      }
-
-      // Map status to Linear workflow state
-      const linearStateMap: Record<string, string> = {
-        in_progress: "In Progress",
-        pr_open: "In Review",
-        in_review: "In Review",
-        needs_revision: "In Progress",
-        merged: "Done",
-        closed: "Done",
-        deferred: "Canceled",
-        failed: "Canceled",
-        asking: "In Progress",
-      };
-
-      const linearState = linearStateMap[status] || "In Progress";
-
-      // Update Linear ticket if we have the ticket ID and API key
-      if (linear_ticket_id && config.linearAppToken) {
-        try {
-          // First, look up the workflow state ID by name from the issue's team
-          const stateRes = await fetch("https://api.linear.app/graphql", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${config.linearAppToken}`,
-            },
-            body: JSON.stringify({
-              query: `query($issueId: String!) {
-                issue(id: $issueId) {
-                  team { states { nodes { id name } } }
-                }
-              }`,
-              variables: { issueId: linear_ticket_id },
-            }),
-          });
-          const stateData = await stateRes.json() as {
-            data?: { issue?: { team?: { states?: { nodes?: { id: string; name: string }[] } } } };
-          };
-          const states = stateData.data?.issue?.team?.states?.nodes || [];
-          const targetState = states.find((s) => s.name === linearState);
-
-          if (!targetState) {
-            console.warn(`[Agent] Could not find Linear state "${linearState}" for ticket ${linear_ticket_id}`);
-          } else {
-            await fetch("https://api.linear.app/graphql", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${config.linearAppToken}`,
-              },
-              body: JSON.stringify({
-                query: `mutation($issueId: String!, $stateId: String!) {
-                  issueUpdate(id: $issueId, input: { stateId: $stateId }) {
-                    success
-                    issue { id state { name } }
-                  }
-                }`,
-                variables: {
-                  issueId: linear_ticket_id,
-                  stateId: targetState.id,
-                },
-              }),
-            });
-            console.log(`[Agent] Updated Linear ticket ${linear_ticket_id} to ${linearState}`);
-          }
-        } catch (err) {
-          console.error("[Agent] Failed to update Linear ticket:", err);
-        }
-      }
-
-      // Update top-level Slack message with status
-      if (config.slackThreadTs) {
-        try {
-          // Build status indicator
-          let statusEmoji = "⏳";
-          let statusText = status.replace(/_/g, " ").toUpperCase();
-          if (["merged", "closed"].includes(status)) {
-            statusEmoji = "✅";
-            statusText = "DONE";
-          } else if (status === "pr_open" || status === "in_review") {
-            statusEmoji = "👀";
-            statusText = "IN REVIEW";
-          } else if (status === "failed") {
-            statusEmoji = "❌";
-            statusText = "FAILED";
-          }
-
-          // Generate brief summary from ticket title (first sentence or first 100 chars)
-          const ticketIdentifier = config.ticketIdentifier || config.ticketUUID;
-          let briefSummary = config.ticketTitle || "Working on task";
-
-          // Truncate to ~100 chars and ensure it ends cleanly
-          if (briefSummary.length > 100) {
-            const firstSentence = briefSummary.match(/^[^.!?]+[.!?]/);
-            briefSummary = firstSentence ? firstSentence[0] : briefSummary.slice(0, 100) + "...";
-          }
-
-          // Compact format: emoji STATUS - TICKET-ID: brief summary
-          const updatedText = `${statusEmoji} ${statusText} - ${ticketIdentifier}: ${briefSummary}`;
-
-          const updateResult = await updateSlackMessage(updatedText, config.slackThreadTs, config);
-          const resultText = updateResult.content[0]?.text || "";
-          if (resultText.includes("failed") || resultText.includes("error")) {
-            console.error(`[Agent] Failed to update Slack thread: ${resultText}`);
-          } else {
-            console.log(`[Agent] Updated Slack thread ${config.slackThreadTs} with status: ${status}`);
-          }
-        } catch (err) {
-          console.error("[Agent] Failed to update Slack message:", err);
-        }
-      }
-
-      return {
-        content: [
-          { type: "text" as const, text: `Task status updated to ${status}` },
-        ],
-      };
+    async ({ status, reason, pr_url, linear_ticket_id }) => {
+      const ticketId = linear_ticket_id || config.ticketUUID;
+      console.log(`[Agent] Status update: ${status}`, JSON.stringify({ reason, pr_url, ticketId }));
+      await statusUpdater.updateAll(status, { pr_url, linearTicketId: ticketId });
+      return { content: [{ type: "text" as const, text: `Task status updated to ${status}` }] };
     },
   );
 
@@ -433,5 +291,201 @@ export function createTools(config: AgentConfig) {
     },
   );
 
-  return { tools: [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript, fetchSlackFile] };
+  const checkCiStatus = tool(
+    "check_ci_status",
+    "Check CI status for a PR. Returns commit statuses (passing/failing/pending/none). Use after opening a PR to monitor CI.",
+    {
+      pr_url: z.string().describe("The GitHub PR URL to check CI for"),
+    },
+    async ({ pr_url }) => {
+      if (!config.githubToken) {
+        return { content: [{ type: "text" as const, text: "No GitHub token configured" }] };
+      }
+      const result = await checkCIStatus(pr_url, config.githubToken);
+      return {
+        content: [{
+          type: "text" as const,
+          text: `CI Status: ${result.ciStatus}\nReady: ${result.ready}\nReason: ${result.reason}${result.retryAfterMs ? `\nRetry in: ${result.retryAfterMs / 1000}s` : ""}`,
+        }],
+      };
+    },
+  );
+
+  const mergePr = tool(
+    "merge_pr",
+    "Merge a PR using squash merge. Only call when CI passes and PR is ready. This is IRREVERSIBLE.",
+    {
+      pr_url: z.string().describe("The GitHub PR URL to merge"),
+    },
+    async ({ pr_url }) => {
+      if (!config.githubToken) {
+        return { content: [{ type: "text" as const, text: "No GitHub token configured" }] };
+      }
+      const result = await mergePR(pr_url, config.githubToken);
+      if (result.merged) {
+        // Report merged status to orchestrator
+        try {
+          await fetch(`${config.workerUrl}/api/internal/status`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Internal-Key": config.apiKey,
+            },
+            body: JSON.stringify({
+              ticketUUID: config.ticketUUID,
+              status: "merged",
+            }),
+          });
+        } catch { /* best effort */ }
+        return { content: [{ type: "text" as const, text: "PR merged successfully!" }] };
+      }
+      return { content: [{ type: "text" as const, text: `Merge failed: ${result.error}` }] };
+    },
+  );
+
+  // --- Conductor-specific tools ---
+
+  const listTasks = tool(
+    "list_tasks",
+    "List all active tasks across all products. Returns ticket IDs, products, statuses, and last activity.",
+    {
+      status_filter: z.string().optional().describe("Filter by status (e.g., 'active', 'pr_open')"),
+      product_filter: z.string().optional().describe("Filter by product slug"),
+    },
+    async ({ status_filter, product_filter }) => {
+      try {
+        const params = new URLSearchParams();
+        if (product_filter) params.append("product", product_filter);
+
+        const res = await fetch(`${config.workerUrl}/api/orchestrator/status`, {
+          headers: { "X-API-Key": config.apiKey },
+        });
+        if (!res.ok) {
+          return { content: [{ type: "text" as const, text: `Failed to list tasks: ${res.status}` }] };
+        }
+        const data = await res.json() as {
+          activeAgents?: Array<{
+            ticket_uuid: string; ticket_id: string; product: string;
+            status: string; agent_message: string | null; pr_url: string | null;
+            last_heartbeat: string | null;
+          }>;
+          tickets?: Array<{
+            ticket_uuid: string; ticket_id: string; product: string;
+            status: string; agent_message: string | null; pr_url: string | null;
+          }>;
+        };
+
+        let agents = data.activeAgents || data.tickets || [];
+        if (status_filter) {
+          agents = agents.filter(a => a.status === status_filter);
+        }
+        if (product_filter) {
+          agents = agents.filter(a => a.product === product_filter);
+        }
+
+        if (agents.length === 0) {
+          return { content: [{ type: "text" as const, text: "No active tasks found." }] };
+        }
+
+        const summary = agents.map(a =>
+          `- **${a.product}** [${a.status}] ${a.ticket_id || a.ticket_uuid}: ${(a.agent_message || "no recent message").slice(0, 100)}${a.pr_url ? ` | PR: ${a.pr_url}` : ""}`
+        ).join("\n");
+
+        return { content: [{ type: "text" as const, text: `Tasks (${agents.length}):\n\n${summary}` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
+  const spawnTask = tool(
+    "spawn_task",
+    "Create a new task for a specific product. The product's project lead will receive and handle the task.",
+    {
+      product: z.string().describe("Product slug (e.g., 'staging-test-app')"),
+      description: z.string().describe("Task description — what should be done"),
+    },
+    async ({ product, description }) => {
+      try {
+        const ticketUUID = `conductor-task-${Date.now()}`;
+        const res = await fetch(`${config.workerUrl}/api/project-agent/spawn-task`, {
+          method: "POST",
+          headers: {
+            "X-Internal-Key": config.apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            product,
+            ticketUUID,
+            ticketTitle: description.slice(0, 80),
+            ticketDescription: description,
+            mode: "coding",
+          }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          return { content: [{ type: "text" as const, text: `Failed to spawn task: ${res.status} ${text}` }] };
+        }
+        const data = await res.json() as { ticketUUID?: string };
+        return { content: [{ type: "text" as const, text: `Task spawned for ${product}: ${data.ticketUUID || ticketUUID}` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
+  const sendMessageToTask = tool(
+    "send_message_to_task",
+    "Send a message/instructions to a product's project lead agent. Use to relay user directions or provide context.",
+    {
+      product: z.string().describe("Product slug to send the message to"),
+      message: z.string().describe("The message to relay to the project lead"),
+    },
+    async ({ product, message }) => {
+      try {
+        const res = await fetch(`${config.workerUrl}/api/project-agent/relay-to-project`, {
+          method: "POST",
+          headers: {
+            "X-Internal-Key": config.apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            product,
+            event: {
+              type: "conductor_message",
+              source: "internal",
+              ticketUUID: `conductor-relay-${Date.now()}`,
+              product,
+              payload: { text: message, from: "conductor" },
+            },
+          }),
+        });
+        if (!res.ok) {
+          return { content: [{ type: "text" as const, text: `Failed to send message: ${res.status}` }] };
+        }
+        return { content: [{ type: "text" as const, text: `Message sent to ${product}'s project lead.` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
+  // Build tool list based on agent role
+  const agentRole = process.env.AGENT_ROLE || "ticket";
+  const isConductorRole = agentRole === "conductor";
+  const isProjectLeadRole = agentRole === "project-lead" || isConductorRole;
+
+  const allTools = [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript, fetchSlackFile];
+
+  // Conductor and project leads can spawn/relay tasks
+  if (isProjectLeadRole) {
+    allTools.push(listTasks, spawnTask, sendMessageToTask);
+  }
+
+  // All non-conductor roles get CI/merge tools (project leads need them for direct coding)
+  if (!isConductorRole) {
+    allTools.push(checkCiStatus, mergePr);
+  }
+
+  return { tools: allTools };
 }
