@@ -2044,39 +2044,13 @@ export class Orchestrator extends Container<Bindings> {
       }
     }
 
-    // Only create tickets from app_mention events
-    if (slackEvent.type !== "app_mention") {
-      // This shouldn't happen (Socket Mode only forwards app_mention and thread messages),
-      // but if it does, let the user know
-      await this.postSlackMessage(
-        slackEvent.channel || "",
-        `ℹ️ I only respond to direct mentions (@product-engineer).\n\n` +
-        `Please mention me to start a new task.`,
-        slackEvent.ts || ""
-      );
-      return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
-    }
-
-    // New mention — resolve product from channel
-    // Load all products from database
-    const productRows = this.ctx.storage.sql.exec(
-      "SELECT slug, config FROM products",
-    ).toArray() as Array<{ slug: string; config: string }>;
-
-    const products = productRows.reduce((acc, row) => {
-      acc[row.slug] = JSON.parse(row.config);
-      return acc;
-    }, {} as Record<string, ProductConfig>);
-
-    // Check if this mention is in the conductor's dedicated channel
+    // Check if this message is in the conductor's dedicated channel.
+    // Conductor channel accepts ALL messages (no @-mention required).
     const conductorChannelRows = this.ctx.storage.sql.exec(
       "SELECT value FROM settings WHERE key = 'conductor_channel'",
     ).toArray() as Array<{ value: string }>;
     const conductorChannelId = conductorChannelRows.length > 0 ? conductorChannelRows[0].value : null;
 
-    const product = resolveProductFromChannel(products, slackEvent.channel || "");
-
-    // Route to conductor if mention is in the conductor's dedicated channel
     if (conductorChannelId && slackEvent.channel === conductorChannelId) {
       console.log(`[Orchestrator] Mention in conductor channel ${conductorChannelId} — routing to Conductor`);
 
@@ -2108,6 +2082,23 @@ export class Orchestrator extends Container<Bindings> {
         return Response.json({ error: "conductor_routing_failed" }, { status: 500 });
       }
     }
+
+    // For non-conductor channels, require @-mention
+    if (slackEvent.type !== "app_mention") {
+      return Response.json({ ok: true, ignored: true, reason: "not an app mention" });
+    }
+
+    // Resolve product from channel
+    const productRows = this.ctx.storage.sql.exec(
+      "SELECT slug, config FROM products",
+    ).toArray() as Array<{ slug: string; config: string }>;
+
+    const products = productRows.reduce((acc, row) => {
+      acc[row.slug] = JSON.parse(row.config);
+      return acc;
+    }, {} as Record<string, ProductConfig>);
+
+    const product = resolveProductFromChannel(products, slackEvent.channel || "");
 
     if (!product) {
       console.log(`[Orchestrator] No product mapped to channel ${slackEvent.channel} — ignoring mention`);
