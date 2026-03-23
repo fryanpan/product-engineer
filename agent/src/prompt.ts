@@ -104,6 +104,7 @@ export async function buildPrompt(
   const header = Mustache.render(template, {
     product: task.product,
     taskDescription: formatTask(task),
+    ticketUUID: task.ticketUUID || "",
     reposList: task.repos.map((r) => `- \`${r}\``).join("\n"),
     reposContext:
       task.repos.length > 1
@@ -130,7 +131,7 @@ function formatTask(task: TaskPayload): string {
     case "feedback":
       return formatFeedback(task.data as FeedbackData);
     case "ticket":
-      return formatTicket(task.data as TicketData);
+      return formatTicket(task.data as TicketData, task.ticketUUID);
     case "command":
       return formatCommand(task.data as CommandData);
   }
@@ -148,7 +149,7 @@ function formatFeedback(data: FeedbackData): string {
   return parts.filter(Boolean).join("\n");
 }
 
-function formatTicket(data: TicketData): string {
+function formatTicket(data: TicketData, ticketUUID?: string): string {
   const parts = [
     `**Type:** Linear ticket`,
     data.identifier && `**Ticket:** ${data.identifier} (https://linear.app/issue/${data.identifier})`,
@@ -157,6 +158,7 @@ function formatTicket(data: TicketData): string {
     `**Priority:** ${data.priority ?? "unset"}`,
     (data.labels?.length ?? 0) > 0 && `**Labels:** ${data.labels.join(", ")}`,
     `**Ticket ID:** ${data.id}`,
+    ticketUUID && `**Ticket UUID:** ${ticketUUID}`,
   ];
   return parts.filter(Boolean).join("\n");
 }
@@ -221,8 +223,10 @@ export async function buildEventPrompt(
 
       return message + `\n\nContinue processing with this information.`;
     }
+    case "ticket_created":
+      return `A new ticket was created and assigned to you.\n\n**ticketUUID:** ${event.ticketUUID}\n**Product:** ${event.product}\n**Title:** ${wrapUntrusted(String(payload.title || "(no title)"))}\n**Description:** ${wrapUntrusted(String(payload.description || "(no description)"))}\n\nSpawn a ticket agent to work on this. Pass the ticketUUID above to spawn_task so the agent works on the existing ticket.`;
     default:
-      return `New event: ${event.type}\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
+      return `New event: ${event.type} (ticketUUID: ${event.ticketUUID})\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
   }
 }
 

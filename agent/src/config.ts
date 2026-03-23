@@ -11,6 +11,8 @@ export interface TaskPayload {
   product: string;
   repos: string[];
   data: FeedbackData | TicketData | CommandData;
+  /** Ticket UUID from the orchestrator — needed so project leads can pass it to spawn_task. */
+  ticketUUID?: string;
 }
 
 export interface FeedbackData {

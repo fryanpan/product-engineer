@@ -353,6 +353,7 @@ app.post("/event", async (c) => {
         product: config.product,
         repos: config.repos,
         data: event.payload as TaskPayload["data"],
+        ticketUUID: event.ticketUUID,
       };
 
       if (taskType === "ticket") {
