@@ -79,6 +79,28 @@ describe("TokenTracker", () => {
       expect(summary.turnLog[0].promptSnippet).toBe("What is 2+2?");
       expect(summary.turnLog[0].outputSnippet).toBe("The answer is 4.");
     });
+
+    test("stores model from first turn", () => {
+      tracker.recordTurn({
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        model: "sonnet",
+      });
+      tracker.recordTurn({
+        inputTokens: 200,
+        outputTokens: 100,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        model: "opus",
+      });
+
+      const summary = tracker.getSummary();
+      expect(summary.model).toBe("sonnet");
+      expect(summary.turnLog[0].model).toBe("sonnet");
+      expect(summary.turnLog[1].model).toBe("opus");
+    });
   });
 
   describe("overrideCost", () => {
@@ -128,6 +150,20 @@ describe("TokenTracker", () => {
       expect(msg).toContain("Input:");
       expect(msg).toContain("Output:");
       expect(msg).toContain("Conversation Turns:** 1");
+    });
+
+    test("includes model when provided", () => {
+      tracker.recordTurn({ inputTokens: 10000, outputTokens: 5000, cacheReadTokens: 0, cacheCreationTokens: 0, model: "sonnet" });
+
+      const msg = tracker.formatSlackSummary();
+      expect(msg).toContain("Model:** sonnet");
+    });
+
+    test("omits model when not provided", () => {
+      tracker.recordTurn({ inputTokens: 10000, outputTokens: 5000, cacheReadTokens: 0, cacheCreationTokens: 0 });
+
+      const msg = tracker.formatSlackSummary();
+      expect(msg).not.toContain("Model:");
     });
 
     test("omits cache sections when zero", () => {

@@ -157,6 +157,7 @@ export class AgentLifecycle {
       slackChannel: this.config.slackChannel,
       slackThreadTs: this.config.slackThreadTs,
       sessionMessageCount: this.state.sessionMessageCount,
+      model: this.config.model,
     });
 
     if (this.roleConfig.persistAfterSession) {

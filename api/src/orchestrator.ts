@@ -383,6 +383,7 @@ Respond with ONLY the JSON object, no other text.`,
         total_cost_usd REAL NOT NULL DEFAULT 0.0,
         turns INTEGER NOT NULL DEFAULT 0,
         session_message_count INTEGER NOT NULL DEFAULT 0,
+        model TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       )
@@ -1506,8 +1507,9 @@ Respond with ONLY the JSON object, no other text.`,
       totalCostUsd: number;
       turns: number;
       sessionMessageCount: number;
+      model?: string;
     }>();
-    const { ticketUUID, totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheCreationTokens, totalCostUsd, turns, sessionMessageCount } = body;
+    const { ticketUUID, totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheCreationTokens, totalCostUsd, turns, sessionMessageCount, model } = body;
 
     console.log(
       `[Orchestrator] Token usage: ticket=${ticketUUID} input=${totalInputTokens} output=${totalOutputTokens} cost=$${totalCostUsd.toFixed(2)}`
@@ -1518,9 +1520,9 @@ Respond with ONLY the JSON object, no other text.`,
       `INSERT INTO token_usage (
         ticket_uuid, total_input_tokens, total_output_tokens,
         total_cache_read_tokens, total_cache_creation_tokens,
-        total_cost_usd, turns, session_message_count
+        total_cost_usd, turns, session_message_count, model
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(ticket_uuid) DO UPDATE SET
         total_input_tokens = excluded.total_input_tokens,
         total_output_tokens = excluded.total_output_tokens,
@@ -1529,6 +1531,7 @@ Respond with ONLY the JSON object, no other text.`,
         total_cost_usd = excluded.total_cost_usd,
         turns = excluded.turns,
         session_message_count = excluded.session_message_count,
+        model = excluded.model,
         updated_at = datetime('now')`,
       ticketUUID,
       totalInputTokens,
@@ -1538,6 +1541,7 @@ Respond with ONLY the JSON object, no other text.`,
       totalCostUsd,
       turns,
       sessionMessageCount,
+      model,
     );
 
     // Sync cost to ticket_metrics for unified reporting

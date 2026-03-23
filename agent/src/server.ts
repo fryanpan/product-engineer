@@ -269,6 +269,7 @@ async function startSession(initialPrompt: MessageContent) {
               outputTokens: usage.output_tokens || 0,
               cacheReadTokens: usage.cache_read_input_tokens || 0,
               cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+              model: config.model,
               promptSnippet: lifecycle.state.lastUserPrompt.slice(0, 100),
               outputSnippet,
             });
