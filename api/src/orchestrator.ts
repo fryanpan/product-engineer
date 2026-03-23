@@ -652,6 +652,7 @@ Respond with ONLY the JSON object, no other text.`,
     const registry = await request.json<{
       linear_team_id?: string;
       linear_app_user_id?: string;
+      conductor_channel?: string;
       cloudflare_ai_gateway?: { account_id: string; gateway_id: string };
       products: Record<string, unknown>;
     }>();
@@ -664,6 +665,7 @@ Respond with ONLY the JSON object, no other text.`,
     const settingsToUpsert: [string, string][] = [];
     if (registry.linear_team_id) settingsToUpsert.push(["linear_team_id", registry.linear_team_id]);
     if (registry.linear_app_user_id) settingsToUpsert.push(["linear_app_user_id", registry.linear_app_user_id]);
+    if (registry.conductor_channel) settingsToUpsert.push(["conductor_channel", registry.conductor_channel]);
     if (registry.cloudflare_ai_gateway) settingsToUpsert.push(["cloudflare_ai_gateway", JSON.stringify(registry.cloudflare_ai_gateway)]);
 
     for (const [key, value] of settingsToUpsert) {
@@ -2132,6 +2134,12 @@ Respond with ONLY the JSON object, no other text.`,
       "SELECT value FROM settings WHERE key = 'conductor_channel'",
     ).toArray() as Array<{ value: string }>;
     const conductorChannelId = conductorChannelRows.length > 0 ? conductorChannelRows[0].value : null;
+
+    if (!conductorChannelId) {
+      console.log(`[Orchestrator] No conductor_channel configured in settings — conductor routing skipped for channel ${slackEvent.channel}`);
+    } else if (slackEvent.channel !== conductorChannelId) {
+      console.log(`[Orchestrator] Message in channel ${slackEvent.channel} does not match conductor channel ${conductorChannelId}`);
+    }
 
     if (conductorChannelId && slackEvent.channel === conductorChannelId) {
       console.log(`[Orchestrator] Mention in conductor channel ${conductorChannelId} — routing to Conductor`);
