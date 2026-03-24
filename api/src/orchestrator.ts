@@ -350,7 +350,8 @@ Respond with ONLY the JSON object, no other text.`,
         updated_at TEXT DEFAULT (datetime('now')),
         agent_active INTEGER NOT NULL DEFAULT 1,
         last_heartbeat TEXT,
-        transcript_r2_key TEXT
+        transcript_r2_key TEXT,
+        session_id TEXT
       )
     `);
 
@@ -443,6 +444,7 @@ Respond with ONLY the JSON object, no other text.`,
     addColumn("tickets", "agent_active INTEGER NOT NULL DEFAULT 1");
     addColumn("tickets", "last_heartbeat TEXT");
     addColumn("tickets", "transcript_r2_key TEXT");
+    addColumn("tickets", "session_id TEXT");
     addColumn("tickets", "identifier TEXT"); // renamed to ticket_id below
     addColumn("tickets", "title TEXT");
     addColumn("tickets", "agent_message TEXT");
@@ -1381,9 +1383,10 @@ Respond with ONLY the JSON object, no other text.`,
       branch_name?: string;
       slack_thread_ts?: string;
       transcript_r2_key?: string;
+      session_id?: string;
       agent_active?: number;
     }>();
-    const { ticketUUID, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, agent_active } = body;
+    const { ticketUUID, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, session_id, agent_active } = body;
 
     // Log payloads so they appear in wrangler tail
     console.log(`[Orchestrator] status update: ticket=${ticketUUID} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
@@ -1437,6 +1440,12 @@ Respond with ONLY the JSON object, no other text.`,
         );
       }
 
+      // Suspended state: mark agent inactive — container has exited
+      if (resolvedStatus === "suspended") {
+        updates.push("agent_active = 0");
+        console.log(`[Orchestrator] Marking agent inactive for suspended state: ${ticketUUID}`);
+      }
+
       // Terminal states: mark agent as inactive so we don't spawn new agents
       // on deployment-triggered events
       if ((TERMINAL_STATUSES as readonly string[]).includes(status)) {
@@ -1481,6 +1490,10 @@ Respond with ONLY the JSON object, no other text.`,
     if (transcript_r2_key) {
       updates.push("transcript_r2_key = ?");
       values.push(transcript_r2_key);
+    }
+    if (session_id) {
+      updates.push("session_id = ?");
+      values.push(session_id);
     }
 
     values.push(ticketUUID);
@@ -2035,6 +2048,41 @@ Respond with ONLY the JSON object, no other text.`,
     }
   }
 
+  /**
+   * Re-spawn a container for a suspended ticket and send the triggering event.
+   * Uses the product config from the registry to reconstruct spawn config.
+   */
+  private async respawnSuspendedAgent(ticketUUID: string, product: string, event: TicketEvent): Promise<void> {
+    const productRow = this.ctx.storage.sql.exec(
+      "SELECT config FROM products WHERE slug = ?", product,
+    ).toArray()[0] as { config: string } | undefined;
+    if (!productRow) throw new Error(`Product ${product} not found in registry`);
+    const productConfig = JSON.parse(productRow.config);
+
+    const gatewayRows = this.ctx.storage.sql.exec(
+      "SELECT value FROM settings WHERE key = 'cloudflare_ai_gateway'"
+    ).toArray() as Array<{ value: string }>;
+    const gatewayConfig = gatewayRows.length > 0 ? JSON.parse(gatewayRows[0].value) : null;
+
+    const ticket = this.agentManager.getTicket(ticketUUID);
+
+    const spawnConfig: SpawnConfig = {
+      product,
+      repos: productConfig.repos,
+      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+      slackThreadTs: event.slackThreadTs || ticket?.slack_thread_ts || undefined,
+      secrets: productConfig.secrets,
+      gatewayConfig,
+      model: productConfig.model || "sonnet",
+      mode: productConfig.mode,
+      slackPersona: productConfig.slack_persona,
+    };
+
+    // spawnAgent accepts active status as a re-spawn (line 164 of agent-manager.ts)
+    await this.agentManager.spawnAgent(ticketUUID, spawnConfig);
+    await this.agentManager.sendEvent(ticketUUID, event);
+  }
+
   private async handleSlackEvent(request: Request): Promise<Response> {
     const slackEvent = await request.json<{
       type: string;
@@ -2102,8 +2150,33 @@ Respond with ONLY the JSON object, no other text.`,
           return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
         }
 
+        // For suspended tickets, read resume context BEFORE transitioning state
+        let resumeSessionId: string | undefined;
+        let resumeTranscriptR2Key: string | undefined;
+        if (ticket.status === "suspended") {
+          const fullTicket = this.ctx.storage.sql.exec(
+            "SELECT session_id, transcript_r2_key FROM tickets WHERE ticket_uuid = ?",
+            ticket.ticket_uuid,
+          ).toArray()[0] as { session_id: string | null; transcript_r2_key: string | null } | undefined;
+          if (fullTicket) {
+            resumeSessionId = fullTicket.session_id || undefined;
+            resumeTranscriptR2Key = fullTicket.transcript_r2_key || undefined;
+          }
+          console.log(`[Orchestrator] Resuming suspended ticket ${ticket.ticket_uuid} session=${resumeSessionId || "none"} transcript=${resumeTranscriptR2Key || "none"}`);
+        }
+
         // Re-activate agent on thread reply — user is explicitly engaging
         this.agentManager.reactivate(ticket.ticket_uuid);
+
+        // Transition suspended → active
+        if (ticket.status === "suspended") {
+          try {
+            this.agentManager.updateStatus(ticket.ticket_uuid, { status: "active" });
+          } catch (err) {
+            console.warn(`[Orchestrator] Failed to transition suspended→active for ${ticket.ticket_uuid}:`, err);
+          }
+        }
+
         const event: TicketEvent = {
           type: "slack_reply",
           source: "slack",
@@ -2112,9 +2185,24 @@ Respond with ONLY the JSON object, no other text.`,
           payload: slackEvent,
           slackThreadTs: slackEvent.thread_ts,
           slackChannel: slackEvent.channel,
+          resumeSessionId,
+          resumeTranscriptR2Key,
         };
-        console.log(`[Orchestrator] Routing thread reply to agent for ticket=${ticket.ticket_uuid}`);
-        await this.agentManager.sendEvent(ticket.ticket_uuid, event);
+
+        // For suspended tickets, the container has exited — re-spawn it.
+        // For active tickets, sendEvent routes to the running container.
+        if (ticket.status === "suspended") {
+          console.log(`[Orchestrator] Re-spawning container for suspended ticket=${ticket.ticket_uuid}`);
+          try {
+            await this.respawnSuspendedAgent(ticket.ticket_uuid, ticket.product, event);
+          } catch (err) {
+            console.error(`[Orchestrator] Failed to re-spawn suspended agent for ${ticket.ticket_uuid}:`, err);
+            return Response.json({ error: "Failed to re-spawn agent" }, { status: 500 });
+          }
+        } else {
+          console.log(`[Orchestrator] Routing thread reply to agent for ticket=${ticket.ticket_uuid}`);
+          await this.agentManager.sendEvent(ticket.ticket_uuid, event);
+        }
         return Response.json({ ok: true, ticketUUID: ticket.ticket_uuid });
       } else {
         console.log(`[Orchestrator] No ticket found for thread_ts=${slackEvent.thread_ts}`);

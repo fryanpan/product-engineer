@@ -5,7 +5,7 @@ export type TerminalStatus = typeof TERMINAL_STATUSES[number];
 /** Valid ticket states — forms a state machine. */
 export const TICKET_STATES = [
   "created", "reviewing", "needs_info", "queued", "spawning",
-  "active", "pr_open", "escalated",
+  "active", "pr_open", "escalated", "suspended",
   "merged", "closed", "deferred", "failed",
 ] as const;
 export type TicketState = typeof TICKET_STATES[number];
@@ -17,9 +17,10 @@ export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
   needs_info:  ["reviewing", "closed", "deferred", "failed"],
   queued:      ["reviewing", "spawning", "closed", "deferred", "failed"],
   spawning:    ["active", "failed"],
-  active:      ["active", "pr_open", "failed"],
+  active:      ["active", "pr_open", "suspended", "failed"],
   pr_open:     ["active", "merged", "escalated", "closed", "failed"],
   escalated:   ["active", "merged", "closed", "failed"],
+  suspended:   ["active", "closed"],
   merged:      [],
   closed:      [],
   deferred:    [],
@@ -34,6 +35,8 @@ export interface TicketEvent {
   payload: unknown;
   slackThreadTs?: string;
   slackChannel?: string;
+  resumeSessionId?: string;
+  resumeTranscriptR2Key?: string;
 }
 
 export interface TicketRecord {
@@ -51,6 +54,7 @@ export interface TicketRecord {
   checks_passed: number;
   last_merge_decision_sha: string | null;
   transcript_r2_key: string | null;
+  session_id: string | null;
   last_heartbeat: string | null;
   created_at: string;
   updated_at: string;

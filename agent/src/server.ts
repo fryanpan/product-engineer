@@ -185,7 +185,7 @@ async function drainBufferedEvents() {
 
 // ── Session ──────────────────────────────────────────────────────────────
 
-async function startSession(initialPrompt: MessageContent) {
+async function startSession(initialPrompt: MessageContent, resumeSessionId?: string) {
   if (lifecycle.state.sessionActive) return;
   lifecycle.state.sessionStatus = "starting_session";
   lifecycle.state.sessionStartTime = Date.now();
@@ -204,7 +204,11 @@ async function startSession(initialPrompt: MessageContent) {
   const promptLen = typeof initialPrompt === "string" ? initialPrompt.length : JSON.stringify(initialPrompt).length;
   console.log(`[Agent] Initial prompt queued (${promptLen} chars)`);
 
-  lifecycle.phoneHome(`session_starting prompt_chars=${promptLen}`);
+  if (resumeSessionId) {
+    console.log(`[Agent] Resuming session: ${resumeSessionId}`);
+  }
+
+  lifecycle.phoneHome(`session_starting prompt_chars=${promptLen}${resumeSessionId ? ` resume=${resumeSessionId}` : ""}`);
   console.log("[Agent] Starting Agent SDK query()...");
 
   const queryOptions: any = {
@@ -216,6 +220,7 @@ async function startSession(initialPrompt: MessageContent) {
     permissionMode: "bypassPermissions",
     mcpServers: { "pe-tools": toolServer, ...externalMcpServers },
     ...(loadedPlugins.length > 0 ? { plugins: loadedPlugins } : {}),
+    ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     executable: "node",
     stderr: (data: string) => {
       lifecycle.state.lastStderr = data.slice(0, 500);
@@ -343,6 +348,19 @@ app.post("/event", async (c) => {
     await ensureWorkspace();
 
     if (!lifecycle.state.sessionActive) {
+      // Check if this is a resume from suspended state
+      let resumeSessionId: string | undefined;
+      if (event.resumeTranscriptR2Key) {
+        console.log(`[Agent] Resume requested: transcript=${event.resumeTranscriptR2Key}`);
+        const downloadedSessionId = await transcriptMgr.download(event.resumeTranscriptR2Key);
+        if (downloadedSessionId) {
+          resumeSessionId = event.resumeSessionId || downloadedSessionId;
+          console.log(`[Agent] Will resume session: ${resumeSessionId}`);
+        } else {
+          console.warn("[Agent] Transcript download failed — starting fresh session");
+        }
+      }
+
       const taskType: TaskPayload["type"] =
         event.type === "ticket_created" ? "ticket"
           : event.type === "slack_mention" || event.type === "slack_reply" ? "command"
@@ -364,7 +382,7 @@ app.post("/event", async (c) => {
       }
 
       const prompt = await buildPrompt(taskPayload, config.slackBotToken, process.env.MODE, roleConfig.role);
-      await startSession(prompt);
+      await startSession(prompt, resumeSessionId);
       drainBufferedEvents();
     } else if (messageYielder) {
       const continuationPrompt = await buildEventPrompt(event, config.slackBotToken);

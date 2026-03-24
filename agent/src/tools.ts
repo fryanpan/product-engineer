@@ -144,6 +144,7 @@ export function createTools(config: AgentConfig) {
           "needs_revision",
           "merged",
           "closed",
+          "suspended",
           "deferred",
           "failed",
         ])
