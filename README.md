@@ -39,7 +39,14 @@ Built on [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-sdk) + [Cl
 ### What's In the Future?
 I fully expect that within 2-8 weeks of anything happening on this repo, Claude Code will also gain that feature, if it's generally useful enough.
 
-So the point of this project is more to explore new ways of working and figuring out how we humans and robots want to adapt our responsibilities to better work together.
+Since this project started, Claude has already picked up the following new features in research preview:
+- Remote control (from mobile phone / laptop)
+- Dispatch (a "lead" agent that helps you coordinate Cowork and Code tasks)
+- PR management agent
+
+And so while this repo provides a more cohesive workflow, with E2E testing of that workflow, Anthropic is clearly building all the same pieces and going in the same direction.  And they've said as much early in 2026 in their predictions for what to expect this year.
+
+So the point of this project is to keep taking an hour every week or two to explore new ways of working for personal entertainment and productivity.
 
 ### v3 Architecture (Current)
 v3 replaced TypeScript decision logic that was triggered when events happen with **persistent Claude agent sessions**, so that all conversations get smarter:
@@ -54,9 +61,9 @@ v3 replaced TypeScript decision logic that was triggered when events happen with
 
 - **Conductor**
   - Cross-project assistant that can help check status and which projects need manual review
-  - And help spin up new projects.
-  - This has it's own dedicated Slack channel.
-  - And was inspired by Claude's research preview of "Dispatch"
+  - Helps manage projects (spin up new projects, review for cross-project learnings)
+  - Has it's own dedicated Slack channel
+  - Was inspired by Claude's research preview of "Dispatch", but I made it more powerful...
 
 ### Agent Roles
 | Role | Scope | Lifetime | Purpose |
@@ -177,7 +184,7 @@ One Durable Object per ticket. Ephemeral container (2-4h) that implements a sing
 - **Self-manages merge:** Calls `merge_pr` tool when CI passes
 - Responds to PR review feedback (events injected via messageYielder)
 
-**Uses ****`ticket-agent`**** or ****`research-agent`**** SKILL.md** depending on mode.
+Uses `ticket-agent` or `research-agent` SKILL.md depending on mode.
 
 ### Conductor (`orchestrator/src/project-agent.ts`, role=conductor)
 A specialized Project Lead that coordinates across all registered products. Runs in its own dedicated Slack channel.
