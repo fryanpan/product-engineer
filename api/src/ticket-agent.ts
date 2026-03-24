@@ -1,76 +1,36 @@
 import { Container } from "@cloudflare/containers";
 import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
 import type { CloudflareAIGateway } from "./registry";
+import { resolveContainerEnvVars } from "./container-env";
+import { EventBuffer } from "./event-buffer";
+import { PersistentConfig } from "./persistent-config";
 
-// Pure helper — exported for testing
-// gatewayConfig is optional — pass null to disable, pass config to enable
+// Pure helper — exported for testing (delegates to shared resolveContainerEnvVars)
 export function resolveAgentEnvVars(
   config: TicketAgentConfig,
   env: Record<string, string>,
   gatewayConfig?: CloudflareAIGateway | null,
 ): Record<string, string> {
-  const vars: Record<string, string> = {
-    PRODUCT: config.product,
+  return resolveContainerEnvVars(config, env, gatewayConfig, {
     TICKET_UUID: config.ticketUUID,
     TICKET_IDENTIFIER: config.ticketId ?? "",
     TICKET_TITLE: config.ticketTitle ?? "",
-    REPOS: JSON.stringify(config.repos),
-    SLACK_CHANNEL: config.slackChannel,
-    SLACK_THREAD_TS: config.slackThreadTs || "", // Populated from database or event
-    SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN || "",
-    LINEAR_APP_TOKEN: env.LINEAR_APP_TOKEN || "",
-    SENTRY_DSN: env.SENTRY_DSN || "",
-    WORKER_URL: env.WORKER_URL || (() => { console.error("[TicketAgent] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
-    API_KEY: env.API_KEY || "",
-    // R2 credentials for transcript backup (not session persistence)
-    R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID || "",
-    R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY || "",
-    CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
-    // Model selection (sonnet, opus, haiku)
-    MODEL: config.model || "",
-    // Agent mode (coding, research, flexible)
-    MODE: config.mode || "coding",
-    // Slack persona for outbound messages
-    SLACK_PERSONA: config.slackPersona ? JSON.stringify(config.slackPersona) : "",
-    // Secret prompt delimiter for wrapping untrusted input (defense-in-depth)
-    PROMPT_DELIMITER: env.PROMPT_DELIMITER || "",
-  };
-
-  for (const [logicalName, bindingName] of Object.entries(config.secrets)) {
-    const value = env[bindingName];
-    if (value) {
-      vars[logicalName] = value;
-    } else {
-      console.warn(`[TicketAgent] Secret not found: ${logicalName}`);
-      vars[logicalName] = "";
-    }
-  }
-
-  // gh CLI reads GH_TOKEN for headless auth
-  if (vars.GITHUB_TOKEN) {
-    vars.GH_TOKEN = vars.GITHUB_TOKEN;
-  }
-
-  // Cloudflare AI Gateway — route all Anthropic API traffic through gateway
-  // The Agent SDK reads ANTHROPIC_BASE_URL automatically to proxy all requests
-  // See docs/cloudflare-ai-gateway.md for setup and analytics features
-  // gatewayConfig is loaded from registry by caller and passed in
-  if (gatewayConfig) {
-    vars.ANTHROPIC_BASE_URL = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(gatewayConfig.account_id)}/${encodeURIComponent(gatewayConfig.gateway_id)}/anthropic`;
-  }
-
-  return vars;
+    SLACK_THREAD_TS: config.slackThreadTs || "",
+  });
 }
 
 export class TicketAgent extends Container<Bindings> {
   defaultPort = 3000;
   sleepAfter = "1h"; // Safety net — agent should exit within 5min of completion
 
-  private configLoaded = false;
+  private persistentConfig: PersistentConfig<TicketAgentConfig>;
+  private eventBuffer: EventBuffer;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     // @ts-expect-error — DurableObjectState generic mismatch between Container SDK and Workers types
     super(ctx, env);
+    this.persistentConfig = new PersistentConfig<TicketAgentConfig>(ctx.storage.sql);
+    this.eventBuffer = new EventBuffer(ctx.storage.sql, "TicketAgent");
     // Container base class initializes envVars={} as a class field, which shadows
     // any getter. Set the real values here so containerFetch auto-restarts work.
     // On first construction (no config yet), envVars stays {} — /initialize sets it.
@@ -84,33 +44,12 @@ export class TicketAgent extends Container<Bindings> {
     }
   }
 
-  private initDb() {
-    if (this.configLoaded) return;
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS config (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `);
-    this.configLoaded = true;
-  }
-
   private getConfig(): TicketAgentConfig | null {
-    this.initDb();
-    const row = this.ctx.storage.sql.exec(
-      "SELECT value FROM config WHERE key = 'agent_config'"
-    ).toArray()[0] as { value: string } | undefined;
-    return row ? JSON.parse(row.value) : null;
+    return this.persistentConfig.get();
   }
 
   private setConfig(config: TicketAgentConfig) {
-    this.initDb();
-    this.ctx.storage.sql.exec(
-      `INSERT INTO config (key, value) VALUES ('agent_config', ?)
-       ON CONFLICT(key) DO UPDATE SET value = ?`,
-      JSON.stringify(config),
-      JSON.stringify(config),
-    );
+    this.persistentConfig.set(config);
     // Update instance envVars so containerFetch auto-restarts use correct values
     this.envVars = resolveAgentEnvVars(
       config,
@@ -128,74 +67,20 @@ export class TicketAgent extends Container<Bindings> {
     throw error;
   }
 
-  // --- Event buffer: stores events that arrive while the container is unreachable ---
-
-  private eventBufferInitialized = false;
-
-  private initEventBuffer() {
-    if (this.eventBufferInitialized) return;
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS event_buffer (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_json TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now'))
-      )
-    `);
-    this.eventBufferInitialized = true;
-  }
-
   private bufferEvent(event: TicketEvent) {
-    this.initEventBuffer();
-    // Cap buffer at 50 events to prevent unbounded growth
-    const countRow = this.ctx.storage.sql.exec(
-      "SELECT COUNT(*) as cnt FROM event_buffer"
-    ).toArray()[0] as { cnt: number };
-    if (countRow.cnt >= 50) {
-      this.ctx.storage.sql.exec(
-        "DELETE FROM event_buffer WHERE id IN (SELECT id FROM event_buffer ORDER BY id ASC LIMIT ?)",
-        countRow.cnt - 49,
-      );
-    }
-    this.ctx.storage.sql.exec(
-      "INSERT INTO event_buffer (event_json) VALUES (?)",
-      JSON.stringify(event),
-    );
-    console.log(`[TicketAgent] Buffered event: ${event.type} for ${event.ticketUUID}`);
+    this.eventBuffer.buffer(event);
   }
 
   private drainEventBuffer(): TicketEvent[] {
-    this.initEventBuffer();
-    const rows = this.ctx.storage.sql.exec(
-      "SELECT id, event_json FROM event_buffer ORDER BY id ASC LIMIT 20"
-    ).toArray() as { id: number; event_json: string }[];
-
-    if (rows.length > 0) {
-      const ids = rows.map(r => r.id);
-      const placeholders = ids.map(() => "?").join(",");
-      this.ctx.storage.sql.exec(
-        `DELETE FROM event_buffer WHERE id IN (${placeholders})`,
-        ...ids,
-      );
-      console.log(`[TicketAgent] Drained ${rows.length} buffered events`);
-    }
-
-    return rows.map(r => JSON.parse(r.event_json));
+    return this.eventBuffer.drain<TicketEvent>();
   }
 
   private isTerminal(): boolean {
-    this.initDb();
-    const row = this.ctx.storage.sql.exec(
-      "SELECT value FROM config WHERE key = 'terminal'"
-    ).toArray()[0] as { value: string } | undefined;
-    return row?.value === "true";
+    return this.persistentConfig.isTerminal();
   }
 
   markTerminal() {
-    this.initDb();
-    this.ctx.storage.sql.exec(
-      `INSERT INTO config (key, value) VALUES ('terminal', 'true')
-       ON CONFLICT(key) DO UPDATE SET value = 'true'`
-    );
+    this.persistentConfig.markTerminal();
   }
 
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {

@@ -12,6 +12,7 @@ import { dashboardRouter } from "./dashboard";
 import type { Bindings } from "./types";
 import { authHandlers, requireAuth } from "./auth";
 import { scanEventFields } from "./security/injection-detector";
+import { getOrchestrator } from "./do-stubs";
 // @ts-ignore - HTML file imported as string
 import dashboardHTML from "./dashboard.html";
 
@@ -733,10 +734,7 @@ app.get("/api/dashboard/metrics", async (c) => {
   return orchestrator.fetch(new Request("http://internal/metrics/summary"));
 });
 
-export function getOrchestrator(env: Bindings): DurableObjectStub {
-  const id = env.ORCHESTRATOR.idFromName("main");
-  return env.ORCHESTRATOR.get(id);
-}
+export { getOrchestrator } from "./do-stubs";
 
 export default Sentry.withSentry(
   (env: Bindings) => ({ dsn: env.SENTRY_DSN }),
