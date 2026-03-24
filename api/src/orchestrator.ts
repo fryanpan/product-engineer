@@ -7,6 +7,15 @@ import { configure as configureInjectionDetector } from "./security/injection-de
 import { normalizeSlackEvent } from "./security/normalized-event";
 import type { ProjectAgentConfig } from "./project-agent";
 import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTicketMetrics } from "./db";
+import {
+  getSystemStatus as getSystemStatusData,
+  getMetrics as getMetricsData,
+  getMetricsSummary as getMetricsSummaryData,
+  checkAgentHealth as checkAgentHealthData,
+  listTickets as listTicketsData,
+  listTranscripts as listTranscriptsData,
+  formatStatusMessage,
+} from "./observability";
 
 function sanitizeTicketUUID(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -1364,38 +1373,8 @@ Respond with ONLY the JSON object, no other text.`,
   }
 
   private async checkAgentHealth(): Promise<Response> {
-    // Report-only: find active tickets with stale heartbeats for diagnostics.
-    // No longer marks agents inactive or creates investigation tickets.
-    const stuckThreshold = 30; // minutes
-    const rows = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid, product, status, last_heartbeat
-       FROM tickets
-       WHERE agent_active = 1
-         AND last_heartbeat IS NOT NULL
-         AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > ?`,
-      stuckThreshold,
-    ).toArray() as Array<{
-      ticket_uuid: string;
-      product: string;
-      status: string;
-      last_heartbeat: string;
-    }>;
-
-    const staleAgents = rows.map((ticket) => ({
-      ticketUUID: ticket.ticket_uuid,
-      product: ticket.product,
-      status: ticket.status,
-      minutesStuck: Math.floor(
-        (Date.now() - new Date(ticket.last_heartbeat).getTime()) / 60000,
-      ),
-      lastHeartbeat: ticket.last_heartbeat,
-    }));
-
-    if (staleAgents.length > 0) {
-      console.log(`[Orchestrator] Health check: ${staleAgents.length} stale agents found`);
-    }
-
-    return Response.json({ ok: true, stale_agents: staleAgents });
+    const result = checkAgentHealthData(this.sqlExec);
+    return Response.json({ ok: true, stale_agents: result.staleAgents });
   }
 
   private async cleanupInactiveAgents(): Promise<Response> {
@@ -1503,216 +1482,24 @@ Respond with ONLY the JSON object, no other text.`,
   }
 
   private listTickets(): Response {
-    const rows = this.ctx.storage.sql.exec(
-      "SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 50",
-    ).toArray();
-    return Response.json({ tickets: rows });
+    return Response.json(listTicketsData(this.sqlExec));
   }
 
   private listTranscripts(request: Request): Response {
     const url = new URL(request.url);
     const limit = parseInt(url.searchParams.get("limit") || "50", 10);
     const sinceHours = url.searchParams.get("sinceHours") ? parseInt(url.searchParams.get("sinceHours")!, 10) : undefined;
-
-    const params: (string | number)[] = [];
-    let query = `
-      SELECT
-        ticket_uuid as ticketUUID,
-        COALESCE(ticket_id, ticket_uuid) as ticketId,
-        product,
-        status,
-        transcript_r2_key as r2Key,
-        updated_at as uploadedAt
-      FROM tickets
-      WHERE transcript_r2_key IS NOT NULL
-    `;
-
-    if (sinceHours) {
-      query += ` AND (julianday('now') - julianday(updated_at)) * 24 < ?`;
-      params.push(sinceHours);
-    }
-
-    query += ` ORDER BY updated_at DESC LIMIT ?`;
-    params.push(limit);
-
-    const rows = this.ctx.storage.sql.exec(query, ...params).toArray() as Array<{
-      ticketUUID: string;
-      product: string;
-      status: string;
-      r2Key: string;
-      uploadedAt: string;
-    }>;
-
-    return Response.json({ transcripts: rows });
+    return Response.json(listTranscriptsData(this.sqlExec, { limit, sinceHours }));
   }
 
   private getSystemStatus(): Response {
-    // Get active agents
-    const activeAgents = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid, ticket_id, product, status, agent_message, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
-       FROM tickets
-       WHERE agent_active = 1
-       ORDER BY updated_at DESC`,
-    ).toArray() as Array<{
-      ticket_uuid: string;
-      ticket_id: string | null;
-      product: string;
-      status: string;
-      agent_message: string | null;
-      last_heartbeat: string | null;
-      created_at: string;
-      updated_at: string;
-      pr_url: string | null;
-      branch_name: string | null;
-      slack_thread_ts: string | null;
-      slack_channel: string | null;
-    }>;
-
-    // Get recent completed tickets (last 24 hours)
-    const recentCompleted = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid, ticket_id, product, status, updated_at, pr_url
-       FROM tickets
-       WHERE agent_active = 0
-         AND (julianday('now') - julianday(updated_at)) * 24 < 24
-       ORDER BY updated_at DESC
-       LIMIT 10`,
-    ).toArray() as Array<{
-      ticket_uuid: string;
-      ticket_id: string | null;
-      product: string;
-      status: string;
-      updated_at: string;
-      pr_url: string | null;
-    }>;
-
-    // Get stale agents (no heartbeat in 30 minutes)
-    const staleAgents = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid, product, status, last_heartbeat
-       FROM tickets
-       WHERE agent_active = 1
-         AND last_heartbeat IS NOT NULL
-         AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > 30`,
-    ).toArray() as Array<{
-      ticket_uuid: string;
-      product: string;
-      status: string;
-      last_heartbeat: string;
-    }>;
-
-    return Response.json({
-      activeAgents,
-      recentCompleted,
-      staleAgents,
-      summary: {
-        totalActive: activeAgents.length,
-        totalCompleted: recentCompleted.length,
-        totalStale: staleAgents.length,
-      },
-    });
+    return Response.json(getSystemStatusData(this.sqlExec));
   }
 
   private async handleStatusCommand(channel: string, threadTs: string): Promise<void> {
     try {
-      const statusData = (await this.getSystemStatus().json()) as {
-        activeAgents: Array<{
-          ticket_uuid: string;
-          ticket_id: string | null;
-          product: string;
-          status: string;
-          agent_message: string | null;
-          last_heartbeat: string | null;
-          created_at: string;
-          updated_at: string;
-          pr_url: string | null;
-          branch_name: string | null;
-          slack_thread_ts: string | null;
-          slack_channel: string | null;
-        }>;
-        recentCompleted: Array<{
-          ticket_uuid: string;
-          ticket_id: string | null;
-          product: string;
-          status: string;
-          updated_at: string;
-          pr_url: string | null;
-        }>;
-        staleAgents: Array<{
-          ticket_uuid: string;
-          product: string;
-          status: string;
-          last_heartbeat: string;
-        }>;
-        summary: {
-          totalActive: number;
-          totalCompleted: number;
-          totalStale: number;
-        };
-      };
-
-      let message = `*🤖 Product Engineer Status*\n\n`;
-
-      // Summary
-      message += `*Summary:*\n`;
-      message += `• Active agents: ${statusData.summary.totalActive}\n`;
-      message += `• Completed (24h): ${statusData.summary.totalCompleted}\n`;
-      if (statusData.summary.totalStale > 0) {
-        message += `• ⚠️ Stale agents: ${statusData.summary.totalStale}\n`;
-      }
-      message += `\n`;
-
-      // Active agents
-      if (statusData.activeAgents.length > 0) {
-        message += `*Active Agents:*\n`;
-        for (const agent of statusData.activeAgents) {
-          const healthEmoji = agent.last_heartbeat
-            ? this.getHealthEmoji(agent.last_heartbeat)
-            : "❓";
-          const statusEmoji = this.getStatusEmoji(agent.status);
-          const timeSinceUpdate = this.getTimeAgo(agent.updated_at);
-          const ticketDisplay = agent.ticket_id ?? agent.ticket_uuid;
-
-          message += `${healthEmoji} ${statusEmoji} \`${ticketDisplay}\` (${agent.product})\n`;
-          const phaseInfo = agent.agent_message ? ` (${agent.agent_message})` : "";
-          message += `   Status: ${agent.status}${phaseInfo} · Updated: ${timeSinceUpdate}\n`;
-          if (agent.pr_url) {
-            message += `   PR: ${agent.pr_url}\n`;
-          }
-          if (agent.slack_thread_ts) {
-            const threadChannel = agent.slack_channel || channel;
-            message += `   Thread: <#${threadChannel}|thread> (${agent.slack_thread_ts})\n`;
-          }
-        }
-        message += `\n`;
-      } else {
-        message += `*No active agents*\n\n`;
-      }
-
-      // Stale agents warning
-      if (statusData.staleAgents.length > 0) {
-        message += `*⚠️ Stale Agents (no heartbeat >30min):*\n`;
-        for (const agent of statusData.staleAgents) {
-          const minutesStale = Math.floor(
-            (Date.now() - new Date(agent.last_heartbeat).getTime()) / 60000
-          );
-          message += `• \`${agent.ticket_uuid}\` (${agent.product}) - ${minutesStale}m ago\n`;
-        }
-        message += `\n`;
-      }
-
-      // Recent completions
-      if (statusData.recentCompleted.length > 0) {
-        message += `*Recent Completions (24h):*\n`;
-        for (const ticket of statusData.recentCompleted.slice(0, 5)) {
-          const statusEmoji = this.getStatusEmoji(ticket.status);
-          const timeAgo = this.getTimeAgo(ticket.updated_at);
-          const ticketDisplay = ticket.ticket_id ?? ticket.ticket_uuid;
-          message += `${statusEmoji} \`${ticketDisplay}\` (${ticket.product}) - ${timeAgo}\n`;
-          if (ticket.pr_url) {
-            message += `   ${ticket.pr_url}\n`;
-          }
-        }
-      }
-
+      const statusData = getSystemStatusData(this.sqlExec);
+      const message = formatStatusMessage(statusData, channel);
       await this.postSlackMessage(channel, message, threadTs);
       console.log(`[Orchestrator] Posted status to channel=${channel}`);
     } catch (err) {
@@ -1720,44 +1507,6 @@ Respond with ONLY the JSON object, no other text.`,
     }
   }
 
-  private getHealthEmoji(lastHeartbeat: string): string {
-    const minutesSinceHeartbeat = Math.floor(
-      (Date.now() - new Date(lastHeartbeat).getTime()) / 60000
-    );
-    if (minutesSinceHeartbeat < 5) return "💚"; // Fresh
-    if (minutesSinceHeartbeat < 15) return "💛"; // Recent
-    if (minutesSinceHeartbeat < 30) return "🧡"; // Getting stale
-    return "❤️"; // Stale
-  }
-
-  private getStatusEmoji(status: string): string {
-    const statusMap: Record<string, string> = {
-      in_progress: "⏳",
-      pr_open: "👀",
-      in_review: "👀",
-      needs_revision: "🔄",
-      merged: "✅",
-      closed: "✅",
-      failed: "❌",
-      deferred: "⏸️",
-      asking: "❓",
-    };
-    return statusMap[status] || "⏳";
-  }
-
-  private getTimeAgo(timestamp: string): string {
-    const now = Date.now();
-    const then = new Date(timestamp).getTime();
-    const diffMs = now - then;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return "just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    return `${diffDays}d ago`;
-  }
 
   /** Post a message to Slack. Returns the message ts on success, null on failure. */
   private async postSlackMessage(
@@ -2235,119 +1984,11 @@ Respond with ONLY the JSON object, no other text.`,
     const limit = Number.isNaN(rawLimit) ? 50 : Math.max(1, Math.min(500, rawLimit));
     const rawDays = parseInt(url.searchParams.get("days") || "30", 10);
     const days = Number.isNaN(rawDays) ? 30 : Math.max(1, Math.min(365, rawDays));
-
-    // Get ticket metrics with joined data
-    const metrics = this.ctx.storage.sql.exec(`
-      SELECT
-        m.*,
-        t.ticket_id,
-        t.title,
-        t.product,
-        t.status as ticket_status,
-        t.created_at as ticket_created_at,
-        u.total_input_tokens,
-        u.total_output_tokens,
-        u.total_cache_read_tokens,
-        u.total_cache_creation_tokens,
-        u.turns,
-        u.session_message_count
-      FROM ticket_metrics m
-      LEFT JOIN tickets t ON m.ticket_uuid = t.ticket_uuid
-      LEFT JOIN token_usage u ON m.ticket_uuid = u.ticket_uuid
-      WHERE t.created_at > datetime('now', '-' || ? || ' days')
-      ORDER BY t.created_at DESC
-      LIMIT ?
-    `, days, limit).toArray();
-
-    return Response.json({ metrics });
+    return Response.json(getMetricsData(this.sqlExec, { limit, days }));
   }
 
   private getMetricsSummary(): Response {
-    // Overall statistics
-    const totalTickets = this.ctx.storage.sql.exec(
-      `SELECT COUNT(*) as count FROM ticket_metrics`
-    ).toArray()[0] as { count: number };
-
-    // Outcome distribution
-    const outcomes = this.ctx.storage.sql.exec(`
-      SELECT
-        outcome,
-        COUNT(*) as count
-      FROM ticket_metrics
-      WHERE outcome IS NOT NULL
-      GROUP BY outcome
-    `).toArray() as Array<{ outcome: string; count: number }>;
-
-    // Calculate automerge rate (automerge_success / total completed)
-    const completed = outcomes.reduce((sum, o) => sum + o.count, 0);
-    const automergeSuccess = outcomes.find(o => o.outcome === "automerge_success")?.count || 0;
-    const automergeRate = completed > 0 ? (automergeSuccess / completed * 100).toFixed(1) : "N/A";
-
-    // Failure rate (failed / total)
-    const failed = outcomes.find(o => o.outcome === "failed")?.count || 0;
-    const failureRate = completed > 0 ? (failed / completed * 100).toFixed(1) : "N/A";
-
-    // Multi-PR rate (tickets needing 2+ PRs)
-    const multiPrTickets = this.ctx.storage.sql.exec(
-      `SELECT COUNT(*) as count FROM ticket_metrics WHERE pr_count >= 2`
-    ).toArray()[0] as { count: number };
-    const multiPrRate = completed > 0 ? (multiPrTickets.count / completed * 100).toFixed(1) : "N/A";
-
-    // Multi-revision rate (tickets sent back 2+ times for 3+ total attempts)
-    const multiRevisionTickets = this.ctx.storage.sql.exec(
-      `SELECT COUNT(*) as count FROM ticket_metrics WHERE revision_count >= 2`
-    ).toArray()[0] as { count: number };
-    const multiRevisionRate = completed > 0 ? (multiRevisionTickets.count / completed * 100).toFixed(1) : "N/A";
-
-    // Cost statistics
-    const costStats = this.ctx.storage.sql.exec(`
-      SELECT
-        SUM(total_cost_usd) as total_cost,
-        AVG(total_cost_usd) as avg_cost,
-        MAX(total_cost_usd) as max_cost
-      FROM ticket_metrics
-      WHERE total_cost_usd > 0
-    `).toArray()[0] as { total_cost: number; avg_cost: number; max_cost: number } | undefined;
-
-    // Daily cost (last 7 days)
-    const dailyCost = this.ctx.storage.sql.exec(`
-      SELECT
-        date(created_at) as day,
-        SUM(total_cost_usd) as cost,
-        COUNT(*) as tickets
-      FROM ticket_metrics
-      WHERE created_at > datetime('now', '-7 days')
-      GROUP BY date(created_at)
-      ORDER BY day DESC
-    `).toArray() as Array<{ day: string; cost: number; tickets: number }>;
-
-    // Average time to completion
-    const avgCompletionTime = this.ctx.storage.sql.exec(`
-      SELECT AVG(
-        (julianday(completed_at) - julianday(created_at)) * 24 * 60
-      ) as avg_minutes
-      FROM ticket_metrics
-      WHERE completed_at IS NOT NULL
-    `).toArray()[0] as { avg_minutes: number | null };
-
-    return Response.json({
-      summary: {
-        totalTickets: totalTickets.count,
-        completed,
-        automergeRate: automergeRate === "N/A" ? "N/A" : `${automergeRate}%`,
-        failureRate: failureRate === "N/A" ? "N/A" : `${failureRate}%`,
-        multiPrRate: multiPrRate === "N/A" ? "N/A" : `${multiPrRate}%`,
-        multiRevisionRate: multiRevisionRate === "N/A" ? "N/A" : `${multiRevisionRate}%`,
-        avgCompletionMinutes: avgCompletionTime.avg_minutes?.toFixed(1) || "N/A",
-      },
-      outcomes,
-      costs: {
-        total: costStats?.total_cost?.toFixed(2) || "0",
-        average: costStats?.avg_cost?.toFixed(2) || "0",
-        max: costStats?.max_cost?.toFixed(2) || "0",
-        daily: dailyCost,
-      },
-    });
+    return Response.json(getMetricsSummaryData(this.sqlExec));
   }
 
 }
