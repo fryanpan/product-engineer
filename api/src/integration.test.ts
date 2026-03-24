@@ -57,7 +57,7 @@ describe("Agent Lifecycle Integration", () => {
     });
 
     test("non-terminal statuses are not in TERMINAL_STATUSES", () => {
-      const nonTerminal = ["in_progress", "in_review", "asking", "idle", ""];
+      const nonTerminal = ["in_progress", "in_review", "asking", "idle", "", "suspended"];
       for (const status of nonTerminal) {
         expect((TERMINAL_STATUSES as readonly string[])).not.toContain(status);
       }
