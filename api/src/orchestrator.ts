@@ -200,61 +200,8 @@ export class Orchestrator extends Container<Bindings> {
     );
   }
 
-  // --- Product registry CRUD methods ---
-
-  private listProducts(): Response {
-    return listProductsHandler(this.sqlExec);
-  }
-
-  private getProduct(request: Request): Response {
-    const url = new URL(request.url);
-    const slug = url.pathname.split("/").pop()!;
-    return getProductHandler(this.sqlExec, slug);
-  }
-
-  private async createProduct(request: Request): Promise<Response> {
-    const { slug, config } = await request.json<{ slug: string; config: unknown }>();
-    return createProductHandler(this.sqlExec, slug, config);
-  }
-
-  private async updateProduct(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const slug = url.pathname.split("/").pop()!;
-    const { config } = await request.json<{ config: unknown }>();
-    return updateProductHandler(this.sqlExec, slug, config);
-  }
-
-  private deleteProduct(request: Request): Response {
-    const url = new URL(request.url);
-    const slug = url.pathname.split("/").pop()!;
-    return deleteProductHandler(this.sqlExec, slug);
-  }
-
-  private listSettings(): Response {
-    return listSettingsHandler(this.sqlExec);
-  }
-
-  private async updateSetting(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const key = url.pathname.split("/").pop()!;
-    const { value } = await request.json<{ value: string }>();
-    return updateSettingHandler(this.sqlExec, key, value);
-  }
-
-  private async seedProducts(request: Request): Promise<Response> {
-    const registry = await request.json<{
-      linear_team_id?: string;
-      linear_app_user_id?: string;
-      conductor_channel?: string;
-      cloudflare_ai_gateway?: { account_id: string; gateway_id: string };
-      products: Record<string, unknown>;
-    }>();
-    return seedProductsHandler(this.sqlExec, registry);
-  }
-
   async fetch(request: Request): Promise<Response> {
     this.initDb();
-    // Start the Slack Socket Mode companion container on first request
     await this.ensureContainerRunning();
     const url = new URL(request.url);
 
@@ -264,7 +211,7 @@ export class Orchestrator extends Container<Bindings> {
       case "/health":
         return Response.json({ ok: true, service: "orchestrator-do" });
       case "/tickets":
-        return this.listTickets();
+        return Response.json(listTicketsData(this.sqlExec));
       case "/ticket/status":
         return this.handleStatusUpdate(request);
       case "/token-usage":
@@ -272,60 +219,73 @@ export class Orchestrator extends Container<Bindings> {
       case "/slack-event":
         return this.handleSlackEvent(request);
       case "/slack-interactive":
-        return this.handleSlackInteractive(request);
+        return Response.json({ ok: true });
       case "/heartbeat":
         return this.handleHeartbeat(request);
       case "/check-health":
-        return this.checkAgentHealth();
-      case "/transcripts":
-        return this.listTranscripts(request);
+        return Response.json({ ok: true, stale_agents: checkAgentHealthData(this.sqlExec).staleAgents });
+      case "/transcripts": {
+        const limit = parseInt(url.searchParams.get("limit") || "50", 10);
+        const sinceHours = url.searchParams.get("sinceHours") ? parseInt(url.searchParams.get("sinceHours")!, 10) : undefined;
+        return Response.json(listTranscriptsData(this.sqlExec, { limit, sinceHours }));
+      }
       case "/status":
-        return this.getSystemStatus();
+        return Response.json(getSystemStatusData(this.sqlExec));
       case "/cleanup-inactive":
         return this.cleanupInactiveAgents();
       case "/shutdown-all":
         return this.shutdownAllAgents();
       case "/restart-project-agents":
-        return this.restartProjectAgents();
+        return restartProjectAgentsImpl(this.env, this.sqlExec);
       case "/products":
-        return request.method === "GET" ? this.listProducts() : this.createProduct(request);
+        if (request.method === "GET") return listProductsHandler(this.sqlExec);
+        { const { slug, config } = await request.json<{ slug: string; config: unknown }>(); return createProductHandler(this.sqlExec, slug, config); }
       case "/settings":
-        return this.listSettings();
-      case "/metrics":
-        return this.getMetrics(request);
+        return listSettingsHandler(this.sqlExec);
+      case "/metrics": {
+        const rawLimit = parseInt(url.searchParams.get("limit") || "50", 10);
+        const limit = Number.isNaN(rawLimit) ? 50 : Math.max(1, Math.min(500, rawLimit));
+        const rawDays = parseInt(url.searchParams.get("days") || "30", 10);
+        const days = Number.isNaN(rawDays) ? 30 : Math.max(1, Math.min(365, rawDays));
+        return Response.json(getMetricsData(this.sqlExec, { limit, days }));
+      }
       case "/metrics/summary":
-        return this.getMetricsSummary();
+        return Response.json(getMetricsSummaryData(this.sqlExec));
       default:
-        // Handle dynamic routes
-        if (url.pathname.startsWith("/ticket-status/")) {
-          const ticketUUID = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
-          const ticket = this.agentManager.getTicket(ticketUUID);
-          if (!ticket) return Response.json({ error: "not found" }, { status: 404 });
-          return Response.json({
-            agent_active: ticket.agent_active,
-            status: ticket.status,
-            product: ticket.product,
-            terminal: this.agentManager.isTerminal(ticketUUID),
-          });
-        }
-        if (url.pathname.startsWith("/products/")) {
-          if (url.pathname === "/products/seed") {
-            return this.seedProducts(request);
-          }
-          if (request.method === "GET") return this.getProduct(request);
-          if (request.method === "PUT") return this.updateProduct(request);
-          if (request.method === "DELETE") return this.deleteProduct(request);
-        }
-        if (url.pathname.startsWith("/settings/")) {
-          if (request.method === "PUT") return this.updateSetting(request);
-        }
-        // Project agent internal endpoints
-        if (url.pathname.startsWith("/project-agent/")) {
-          const subpath = url.pathname.replace("/project-agent/", "");
-          return handleProjectAgentRouteImpl(subpath, request, this.env, this.sqlExec, this.agentManager);
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
+        return this.handleDynamicRoute(url, request);
     }
+  }
+
+  private async handleDynamicRoute(url: URL, request: Request): Promise<Response> {
+    if (url.pathname.startsWith("/ticket-status/")) {
+      const ticketUUID = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
+      const ticket = this.agentManager.getTicket(ticketUUID);
+      if (!ticket) return Response.json({ error: "not found" }, { status: 404 });
+      return Response.json({
+        agent_active: ticket.agent_active,
+        status: ticket.status,
+        product: ticket.product,
+        terminal: this.agentManager.isTerminal(ticketUUID),
+      });
+    }
+    if (url.pathname.startsWith("/products/")) {
+      const slug = url.pathname.split("/").pop()!;
+      if (url.pathname === "/products/seed") {
+        return seedProductsHandler(this.sqlExec, await request.json());
+      }
+      if (request.method === "GET") return getProductHandler(this.sqlExec, slug);
+      if (request.method === "PUT") { const { config } = await request.json<{ config: unknown }>(); return updateProductHandler(this.sqlExec, slug, config); }
+      if (request.method === "DELETE") return deleteProductHandler(this.sqlExec, slug);
+    }
+    if (url.pathname.startsWith("/settings/")) {
+      const key = url.pathname.split("/").pop()!;
+      if (request.method === "PUT") { const { value } = await request.json<{ value: string }>(); return updateSettingHandler(this.sqlExec, key, value); }
+    }
+    if (url.pathname.startsWith("/project-agent/")) {
+      const subpath = url.pathname.replace("/project-agent/", "");
+      return handleProjectAgentRouteImpl(subpath, request, this.env, this.sqlExec, this.agentManager);
+    }
+    return Response.json({ error: "not found" }, { status: 404 });
   }
 
   // --- Project Agent routing (delegated to project-agent-router.ts) ---
@@ -831,10 +791,7 @@ export class Orchestrator extends Container<Bindings> {
     return Response.json({ ok: true });
   }
 
-  private async checkAgentHealth(): Promise<Response> {
-    const result = checkAgentHealthData(this.sqlExec);
-    return Response.json({ ok: true, stale_agents: result.staleAgents });
-  }
+
 
   private async cleanupInactiveAgents(): Promise<Response> {
     // Force shutdown of containers for tickets marked inactive (agent_active = 0)
@@ -907,25 +864,6 @@ export class Orchestrator extends Container<Bindings> {
     });
   }
 
-  private async restartProjectAgents(): Promise<Response> {
-    return restartProjectAgentsImpl(this.env, this.sqlExec);
-  }
-
-  private listTickets(): Response {
-    return Response.json(listTicketsData(this.sqlExec));
-  }
-
-  private listTranscripts(request: Request): Response {
-    const url = new URL(request.url);
-    const limit = parseInt(url.searchParams.get("limit") || "50", 10);
-    const sinceHours = url.searchParams.get("sinceHours") ? parseInt(url.searchParams.get("sinceHours")!, 10) : undefined;
-    return Response.json(listTranscriptsData(this.sqlExec, { limit, sinceHours }));
-  }
-
-  private getSystemStatus(): Response {
-    return Response.json(getSystemStatusData(this.sqlExec));
-  }
-
   private async handleSlackEvent(request: Request): Promise<Response> {
     const slackEvent = await request.json<{
       type: string;
@@ -947,25 +885,6 @@ export class Orchestrator extends Container<Bindings> {
       ensureConductor: () => this.ensureConductor(),
       handleTicketReview: (event) => this.handleTicketReview(event),
     });
-  }
-
-  private async handleSlackInteractive(_request: Request): Promise<Response> {
-    return Response.json({ ok: true });
-  }
-
-  // --- Metrics endpoints ---
-
-  private getMetrics(request: Request): Response {
-    const url = new URL(request.url);
-    const rawLimit = parseInt(url.searchParams.get("limit") || "50", 10);
-    const limit = Number.isNaN(rawLimit) ? 50 : Math.max(1, Math.min(500, rawLimit));
-    const rawDays = parseInt(url.searchParams.get("days") || "30", 10);
-    const days = Number.isNaN(rawDays) ? 30 : Math.max(1, Math.min(365, rawDays));
-    return Response.json(getMetricsData(this.sqlExec, { limit, days }));
-  }
-
-  private getMetricsSummary(): Response {
-    return Response.json(getMetricsSummaryData(this.sqlExec));
   }
 
 }
