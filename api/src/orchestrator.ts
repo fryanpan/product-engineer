@@ -555,7 +555,7 @@ export class Orchestrator extends Container<Bindings> {
       slackThreadTs: event.slackThreadTs || ticket?.slack_thread_ts || undefined,
       secrets: productConfig.secrets,
       gatewayConfig,
-      model: productConfig.model || "sonnet",
+      model: "sonnet",
       mode: productConfig.mode,
       slackPersona: productConfig.slack_persona,
     };

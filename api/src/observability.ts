@@ -116,7 +116,7 @@ export function getSystemStatus(sql: SqlExec): SystemStatusData {
      FROM tickets
      WHERE agent_active = 1
      ORDER BY updated_at DESC`,
-  ).toArray() as ActiveAgent[];
+  ).toArray() as unknown as ActiveAgent[];
 
   // Get recent completed tickets (last 24 hours)
   const recentCompleted = sql.exec(
@@ -126,7 +126,7 @@ export function getSystemStatus(sql: SqlExec): SystemStatusData {
        AND (julianday('now') - julianday(updated_at)) * 24 < 24
      ORDER BY updated_at DESC
      LIMIT 10`,
-  ).toArray() as RecentCompleted[];
+  ).toArray() as unknown as RecentCompleted[];
 
   // Get stale agents (no heartbeat in 30 minutes)
   const staleAgents = sql.exec(
@@ -135,7 +135,7 @@ export function getSystemStatus(sql: SqlExec): SystemStatusData {
      WHERE agent_active = 1
        AND last_heartbeat IS NOT NULL
        AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > 30`,
-  ).toArray() as StaleAgent[];
+  ).toArray() as unknown as StaleAgent[];
 
   return {
     activeAgents,
@@ -211,7 +211,7 @@ export function listTranscripts(sql: SqlExec, opts: { limit: number; sinceHours?
   query += ` ORDER BY updated_at DESC LIMIT ?`;
   params.push(opts.limit);
 
-  const rows = sql.exec(query, ...params).toArray() as TranscriptRow[];
+  const rows = sql.exec(query, ...params).toArray() as unknown as TranscriptRow[];
 
   return { transcripts: rows };
 }
