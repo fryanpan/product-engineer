@@ -83,6 +83,11 @@ export class TicketAgent extends Container<Bindings> {
     this.persistentConfig.markTerminal();
   }
 
+  clearTerminal() {
+    this.persistentConfig.clearTerminal();
+    console.log("[TicketAgent] Terminal flag cleared — ticket reopened");
+  }
+
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
     // Don't restart containers for completed tickets
     if (this.isTerminal()) {
@@ -234,6 +239,10 @@ export class TicketAgent extends Container<Bindings> {
       case "/drain-events": {
         const events = this.drainEventBuffer();
         return Response.json({ events });
+      }
+      case "/clear-terminal": {
+        this.clearTerminal();
+        return Response.json({ ok: true });
       }
       default:
         return Response.json({ error: "not found" }, { status: 404 });

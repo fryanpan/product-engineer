@@ -676,24 +676,22 @@ describe("Terminal state protection in handleEvent", () => {
 function threadReplyRoutingDecision(
   sql: ReturnType<typeof createMockSql>,
   threadTs: string,
-): { found: boolean; terminal: boolean; needsRespawn: boolean; notifyUser: boolean } {
+): { found: boolean; wasTerminal: boolean; needsRespawn: boolean } {
   const rows = sql.exec(
     "SELECT ticket_uuid, product, status, agent_active FROM tickets WHERE slack_thread_ts = ?",
     threadTs,
   ).toArray() as { ticket_uuid: string; product: string; status: string; agent_active: number }[];
 
   if (rows.length === 0) {
-    return { found: false, terminal: false, needsRespawn: false, notifyUser: false };
+    return { found: false, wasTerminal: false, needsRespawn: false };
   }
 
   const ticket = rows[0];
+  const isTerminal = (TERMINAL_STATUSES as readonly string[]).includes(ticket.status);
 
-  if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status)) {
-    return { found: true, terminal: true, needsRespawn: false, notifyUser: true };
-  }
-
-  const needsRespawn = ticket.status === "suspended" || ticket.agent_active === 0;
-  return { found: true, terminal: false, needsRespawn, notifyUser: false };
+  // Terminal tickets get reopened and respawned (not ignored)
+  const needsRespawn = isTerminal || ticket.status === "suspended" || ticket.agent_active === 0;
+  return { found: true, wasTerminal: isTerminal, needsRespawn };
 }
 
 describe("Thread reply routing", () => {
@@ -708,28 +706,27 @@ describe("Thread reply routing", () => {
     expect(result.found).toBe(false);
   });
 
-  it("returns terminal + notifyUser for merged tickets", () => {
+  it("reopens and respawns merged tickets", () => {
     insertTicket(sql, "PE-1", { status: "merged", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
-    expect(result.terminal).toBe(true);
-    expect(result.notifyUser).toBe(true);
-    expect(result.needsRespawn).toBe(false);
+    expect(result.wasTerminal).toBe(true);
+    expect(result.needsRespawn).toBe(true);
   });
 
-  it("returns terminal + notifyUser for closed tickets", () => {
+  it("reopens and respawns closed tickets", () => {
     insertTicket(sql, "PE-1", { status: "closed", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
-    expect(result.terminal).toBe(true);
-    expect(result.notifyUser).toBe(true);
+    expect(result.wasTerminal).toBe(true);
+    expect(result.needsRespawn).toBe(true);
   });
 
   it("needs respawn for suspended tickets", () => {
     insertTicket(sql, "PE-1", { status: "suspended", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
-    expect(result.terminal).toBe(false);
+    expect(result.wasTerminal).toBe(false);
     expect(result.needsRespawn).toBe(true);
   });
 
@@ -737,7 +734,7 @@ describe("Thread reply routing", () => {
     insertTicket(sql, "PE-1", { status: "active", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
-    expect(result.terminal).toBe(false);
+    expect(result.wasTerminal).toBe(false);
     expect(result.needsRespawn).toBe(true);
   });
 
@@ -745,7 +742,7 @@ describe("Thread reply routing", () => {
     insertTicket(sql, "PE-1", { status: "pr_open", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
-    expect(result.terminal).toBe(false);
+    expect(result.wasTerminal).toBe(false);
     expect(result.needsRespawn).toBe(true);
   });
 
@@ -753,7 +750,7 @@ describe("Thread reply routing", () => {
     insertTicket(sql, "PE-1", { status: "active", agent_active: 1, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
-    expect(result.terminal).toBe(false);
+    expect(result.wasTerminal).toBe(false);
     expect(result.needsRespawn).toBe(false);
   });
 });

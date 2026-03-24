@@ -149,9 +149,9 @@ const defaultSpawnConfig: SpawnConfig = {
 };
 
 describe("State machine", () => {
-  it("terminal states have no outgoing transitions", () => {
+  it("terminal states can only transition to active (reopen)", () => {
     for (const state of TERMINAL_STATUSES) {
-      expect(VALID_TRANSITIONS[state]).toEqual([]);
+      expect(VALID_TRANSITIONS[state]).toEqual(["active"]);
     }
   });
 

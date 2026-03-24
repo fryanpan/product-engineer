@@ -322,6 +322,43 @@ export class AgentManager {
     console.log(`[AgentManager] Reactivated agent for ${ticketUUID}`);
   }
 
+  /**
+   * Reopen a terminal ticket (e.g., user replied in a completed thread).
+   * Transitions terminal → active, sets agent_active=1, and clears the
+   * TicketAgent DO's terminal flag so the container can restart.
+   */
+  async reopenTicket(ticketUUID: string): Promise<void> {
+    const ticket = this.getTicket(ticketUUID);
+    if (!ticket) throw new Error(`Ticket ${ticketUUID} not found`);
+    if (!this.isTerminalStatus(ticket.status)) {
+      console.log(`[AgentManager] Ticket ${ticketUUID} is not terminal (${ticket.status}) — skipping reopen`);
+      return;
+    }
+
+    // Transition terminal → active via the state machine
+    this.updateStatus(ticketUUID, { status: "active" });
+    this.sql.exec(
+      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      ticketUUID,
+    );
+
+    // Clear the TicketAgent DO's terminal flag so it accepts events again
+    try {
+      const agentNs = this.env.TICKET_AGENT as any;
+      const id = agentNs.idFromName(ticketUUID);
+      const agent = agentNs.get(id);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      await agent.fetch(
+        new Request("http://internal/clear-terminal", { method: "POST", signal: controller.signal })
+      ).finally(() => clearTimeout(timeout));
+    } catch (err) {
+      console.warn(`[AgentManager] Could not clear terminal flag on DO for ${ticketUUID}:`, err);
+    }
+
+    console.log(`[AgentManager] Reopened terminal ticket ${ticketUUID}`);
+  }
+
   recordHeartbeat(ticketUUID: string): void {
     this.sql.exec(
       "UPDATE tickets SET last_heartbeat = datetime('now'), updated_at = datetime('now') WHERE ticket_uuid = ? AND agent_active = 1",

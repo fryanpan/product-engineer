@@ -21,10 +21,10 @@ export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
   pr_open:     ["active", "merged", "escalated", "closed", "failed"],
   escalated:   ["active", "merged", "closed", "failed"],
   suspended:   ["active", "closed"],
-  merged:      [],
-  closed:      [],
-  deferred:    [],
-  failed:      [],
+  merged:      ["active"],
+  closed:      ["active"],
+  deferred:    ["active"],
+  failed:      ["active"],
 };
 
 export interface TicketEvent {
