@@ -78,7 +78,10 @@ export class StatusUpdater {
    * Skips if no linearAppToken is configured.
    */
   async updateLinear(status: string, ticketId: string): Promise<void> {
-    if (!this.config.linearAppToken) return;
+    if (!this.config.linearAppToken) {
+      console.log(`[StatusUpdater] Skipping Linear update — no token configured`);
+      return;
+    }
 
     const linearState = LINEAR_STATE_MAP[status] || "In Progress";
 
@@ -100,24 +103,43 @@ export class StatusUpdater {
         }),
       });
 
+      if (!stateRes.ok) {
+        const errorText = await stateRes.text();
+        console.error(
+          `[StatusUpdater] Linear state query failed: ${stateRes.status} ${stateRes.statusText}`,
+          errorText.slice(0, 200)
+        );
+        return;
+      }
+
       const stateData = (await stateRes.json()) as {
         data?: {
           issue?: {
             team?: { states?: { nodes?: { id: string; name: string }[] } };
           };
         };
+        errors?: Array<{ message: string; path?: string[] }>;
       };
+
+      if (stateData.errors) {
+        console.error(
+          `[StatusUpdater] Linear GraphQL errors:`,
+          stateData.errors.map(e => e.message).join(", ")
+        );
+        return;
+      }
+
       const states = stateData.data?.issue?.team?.states?.nodes || [];
       const targetState = states.find((s) => s.name === linearState);
 
       if (!targetState) {
         console.warn(
-          `[StatusUpdater] Could not find Linear state "${linearState}" for ticket ${ticketId}`,
+          `[StatusUpdater] Could not find Linear state "${linearState}" for ticket ${ticketId}. Available states: ${states.map(s => s.name).join(", ")}`
         );
         return;
       }
 
-      await this.fetch("https://api.linear.app/graphql", {
+      const updateRes = await this.fetch("https://api.linear.app/graphql", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -137,8 +159,37 @@ export class StatusUpdater {
         }),
       });
 
+      if (!updateRes.ok) {
+        const errorText = await updateRes.text();
+        console.error(
+          `[StatusUpdater] Linear update mutation failed: ${updateRes.status} ${updateRes.statusText}`,
+          errorText.slice(0, 200)
+        );
+        return;
+      }
+
+      const updateData = (await updateRes.json()) as {
+        data?: { issueUpdate?: { success: boolean } };
+        errors?: Array<{ message: string }>;
+      };
+
+      if (updateData.errors) {
+        console.error(
+          `[StatusUpdater] Linear update errors:`,
+          updateData.errors.map(e => e.message).join(", ")
+        );
+        return;
+      }
+
+      if (!updateData.data?.issueUpdate?.success) {
+        console.error(
+          `[StatusUpdater] Linear update returned success=false for ticket ${ticketId}`
+        );
+        return;
+      }
+
       console.log(
-        `[StatusUpdater] Updated Linear ticket ${ticketId} to ${linearState}`,
+        `[StatusUpdater] ✓ Updated Linear ticket ${ticketId} to ${linearState}`
       );
     } catch (err) {
       console.error("[StatusUpdater] Failed to update Linear ticket:", err);
