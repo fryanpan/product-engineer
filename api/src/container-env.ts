@@ -51,19 +51,21 @@ export function resolveContainerEnvVars(
     CF_ACCOUNT_ID: env.CF_ACCOUNT_ID || "",
   };
 
-  // Spread role-specific vars (before secrets so secrets can't override them accidentally)
-  if (extraVars) {
-    Object.assign(vars, extraVars);
-  }
-
-  // Resolve per-product secrets from env bindings
+  // Resolve per-product secrets from env bindings (before extraVars so role-specific
+  // vars like TICKET_UUID can't be overridden by a secret with the same key)
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {
     const value = env[bindingName];
     if (value) {
       vars[logicalName] = value;
     } else {
+      console.warn(`[container-env] Secret not found: ${logicalName} (binding: ${bindingName})`);
       vars[logicalName] = "";
     }
+  }
+
+  // Spread role-specific vars last — these take precedence over everything
+  if (extraVars) {
+    Object.assign(vars, extraVars);
   }
 
   // gh CLI reads GH_TOKEN for headless auth
