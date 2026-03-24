@@ -5,7 +5,7 @@
  * Tools are product-agnostic — they use config values injected by the TicketAgent DO.
  */
 
-import { tool } from "@anthropic-ai/claude-agent-sdk";
+import { tool, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { normalizeImageMediaType, type AgentConfig } from "./config";
 import { checkCIStatus, mergePR } from "./merge-gate";
@@ -484,7 +484,7 @@ export function createTools(config: AgentConfig) {
   const isConductorRole = agentRole === "conductor";
   const isProjectLeadRole = agentRole === "project-lead" || isConductorRole;
 
-  const allTools = [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript, fetchSlackFile];
+  const allTools: SdkMcpToolDefinition<any>[] = [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript, fetchSlackFile];
 
   // Conductor and project leads can spawn/relay tasks
   if (isProjectLeadRole) {
