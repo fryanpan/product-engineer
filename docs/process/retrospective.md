@@ -1,3 +1,42 @@
+## 2026-03-24 - README v3 terminology + thread reply fix (PR #112)
+
+### Time Breakdown
+| Started | Phase | 👤 Hands-On Time | 🤖 Agent Time | Problems |
+|---------|-------|-----------------|---------------|----------|
+| Mar 24 2:34pm | README updates (terminology, diagram, agent modes) | ██ 10m | ███ 15m | ⚠ Bold formatting kept getting mangled by linter |
+| Mar 24 5:53pm | Thread reply investigation (explore codebase, trace flows) | █ 7m | ██████ 40m | |
+| Mar 24 6:32pm | Implement fix (worktree, reopen + respawn, tests) | █ 7m | ████████ 50m | ⚠ Merge conflict from orchestrator decomposition; mock SQL literal handling |
+| Mar 24 7:50pm | Ship-it pipeline (review, PR, CI, merge) | ██ 20m | ██ 12m | ⚠ Both reviewers found blocking bug (terminal guard bypass) |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | 5.5 hours |
+| Hands-on | 45 min (14%) |
+| Automated agent time | ~2 hours (36%) |
+| Idle/away | ~2.8 hours (51%) |
+| Retro analysis time | 10 min |
+
+### Key Observations
+- Dual code review (Claude + Codex) independently found the same blocking bug: `reopenTicket()` called `updateStatus()` which has a terminal guard that silently prevented the transition. Tests only covered routing decisions (pure function), not the integration path.
+- Investigation phase explored multiple hypotheses (dead containers, race conditions, buffer drain) before user clarified the desired behavior ("reopen the ticket"). User's domain knowledge accelerated the design.
+- Mock SQL limitations (no literal string value handling) caused a test failure that required switching to parameterized SQL.
+
+### Feedback
+**What worked:** Ship-it pipeline ran end-to-end autonomously. Dual review caught a real bug. Worktree isolation kept the docs branch clean.
+**What didn't:** Branching before the orchestrator decomposition PR merged caused a merge conflict requiring re-application of changes.
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| `updateStatus()` terminal guard silently blocks transitions | Update learnings.md | Added "updateStatus Terminal Guard" section |
+| Terminal tickets can now be reopened | Update CLAUDE.md | Updated Orchestrator DO description to note thread reply reopening |
+| Terminal→active transition is new | Update learnings.md | Added note to "Status Field vs Agent Lifecycle" + "AgentManager Pattern" sections |
+| Thread replies now respawn dead agents | Update learnings.md | Added "Slack Thread Reply Respawning" section |
+| Mock SQL doesn't handle literal SET values | Update learnings.md | Added "Mock SQL in Tests" section |
+
+---
+
 ## 2026-03-18 - Agent plugin loading support (PR #94 + 7 cross-repo PRs)
 
 ### Time Breakdown

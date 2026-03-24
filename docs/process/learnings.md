@@ -75,6 +75,7 @@ Technical discoveries that should persist across sessions.
 - `stopAgent` must be idempotent: the same ticket might be stopped from supervisor, terminal status, and cleanup paths in the same deploy cycle.
 - State machine validation catches invalid transitions early, but supervisor kill needs a raw SQL fallback since the ticket might be in any state.
 - The `reactivate()` method is needed for thread replies — `sendEvent` checks `agent_active` and skips if 0, so the agent must be re-activated before sending.
+- `reopenTicket()` is the terminal-state counterpart to `reactivate()` — it transitions from any terminal state back to `active` and respawns the container. Only triggered by thread replies, never by automated paths (alarm, deploy, webhooks).
 
 ## GitHub Fine-Grained PATs
 - Fine-grained PATs do NOT have a "Checks" permission. The check-runs API (`/repos/.../commits/.../check-runs`) is inaccessible. Use the commit statuses API (`/repos/.../commits/.../status`) instead, which requires "Commit statuses: Read" permission.
@@ -85,6 +86,12 @@ Technical discoveries that should persist across sessions.
 - Agent lifecycle messages ("starting session", "cloning repos", "pushing to branch") go to `agent_message` via the `/heartbeat` endpoint. These are free-form strings, not state machine states.
 - Old agent containers were writing `agent:*` strings into `status` via `handleStatusUpdate`, polluting the state machine. Fix: `handleStatusUpdate` validates against `TICKET_STATES` and rejects invalid values.
 - The `spawning → active` transition is now automatic: first heartbeat from the agent triggers it in `handleHeartbeat`. No explicit status update needed.
+- Terminal states (`merged`, `closed`, `deferred`, `failed`) can now be reopened via `reopenTicket()`. This adds a `terminal → active` reverse transition to the state machine. `reopenTicket()` bypasses the `updateStatus()` terminal guard by writing directly to SQL, then calls `spawnAgent`. This is the only sanctioned path for reversing a terminal state.
+
+## updateStatus Terminal Guard
+- `updateStatus()` silently returns early if the ticket is in a terminal state. Any code path that needs to transition OUT of a terminal state must bypass it with direct SQL — do not call `updateStatus()`.
+- `reopenTicket()` is the canonical bypass pattern: it writes `status='active', agent_active=1` directly, then clears the TicketAgent DO's terminal flag via `/clear-terminal`, then spawns the agent.
+- Unit tests that mock `updateStatus()` at the routing layer will miss this guard. Integration tests must exercise the full `reopenTicket()` → SQL path to catch silent no-ops.
 
 ## Merge Gate for Repos Without CI
 - The merge gate was only triggered by `check_suite` webhooks (CI). Repos without CI never got a merge gate evaluation, leaving PRs stuck forever.
@@ -97,6 +104,15 @@ Technical discoveries that should persist across sessions.
 ## Slack Thread Routing
 - The Orchestrator looks up existing tickets by `slack_thread_ts` (exact string match). Re-triggers must use the original top-level message `ts`, not a reply `ts` — otherwise a new ticket is created instead of routing to the existing one.
 - For new `app_mention` events, `slackEvent.ts` (not `thread_ts`) becomes the canonical `thread_ts` stored in the DB. Subsequent replies arrive with `thread_ts` matching that original `ts`. The asymmetry is intentional — Slack uses the first message's `ts` as the thread identifier.
+
+## Slack Thread Reply Respawning
+- Thread replies to tickets in terminal, suspended, or dead-container (agent_active=0) states now respawn the agent instead of being silently dropped.
+- The orchestrator calls `reopenTicket()` (for terminal states) or `reactivate()` (for inactive agents) before forwarding the event, ensuring the container is alive to receive it.
+- This is intentional: a user replying in a thread signals they want more work done, even if the agent previously completed or failed.
+
+## Mock SQL in Tests
+- The mock SQL helper used in orchestrator tests only captures parameterized values (`?` placeholders) in SET clauses. Literal string values in SQL (e.g., `SET status = 'active'`) are invisible to the mock and won't update the in-memory store.
+- Always use parameterized SQL (`SET status = ?` with a param) rather than literals when writing code that will be tested with the mock.
 
 ## GitHub Webhooks
 - GitHub PR webhooks have `action: "closed"` with a `merged: true|false` flag. Always handle BOTH cases:

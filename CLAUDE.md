@@ -60,7 +60,7 @@ Singleton Durable Object that owns all coordination:
 - Routes events to the correct TicketAgent container
 - Spawns new TicketAgent containers for new tickets
 - Its companion container (`containers/orchestrator/`) maintains a persistent Slack Socket Mode WebSocket connection, forwarding `@product-engineer` mentions to the DO
-- Tracks `agent_active` per ticket — set to `0` on terminal states (`merged`, `closed`, `deferred`, `failed`) so deployment-triggered webhook events do not re-spawn completed agents (see `docs/deployment-safety.md`)
+- Tracks `agent_active` per ticket — set to `0` on terminal states (`merged`, `closed`, `deferred`, `failed`). Thread replies to terminal tickets trigger `reopenTicket()` which transitions back to `active` and respawns the agent container. All other event paths (deploy resume, alarm, webhooks) still respect the terminal guard.
 
 ### TicketAgent (`api/src/ticket-agent.ts`)
 Container class — one instance per ticket, lives up to 2 hours:
