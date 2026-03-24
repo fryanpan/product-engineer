@@ -8,11 +8,7 @@ import { Hono } from "hono";
 import { getLinearAppUserId, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
 import { normalizeLinearEvent, normalizeGitHubEvent } from "./security/normalized-event";
-
-function getOrchestrator(env: Bindings): DurableObjectStub {
-  const id = env.ORCHESTRATOR.idFromName("main");
-  return env.ORCHESTRATOR.get(id);
-}
+import { getOrchestrator } from "./do-stubs";
 
 // --- Shared helpers (exported for testing) ---
 
