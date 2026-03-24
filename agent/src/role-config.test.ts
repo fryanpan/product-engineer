@@ -29,13 +29,13 @@ describe("resolveRoleConfig", () => {
       const config = resolveRoleConfig(undefined, "research");
       expect(config.role).toBe("ticket-agent");
       expect(config.sessionTimeoutMs).toBe(4 * 60 * 60 * 1000);
-      expect(config.idleTimeoutMs).toBe(30 * 60 * 1000);
+      expect(config.idleTimeoutMs).toBe(60 * 60 * 1000); // 1 hour idle before auto-suspend
     });
 
-    test("research mode does not change non-timeout fields", () => {
+    test("research mode persists after session for followup", () => {
       const config = resolveRoleConfig(undefined, "research");
       expect(config.maxTurns).toBe(200);
-      expect(config.persistAfterSession).toBe(false);
+      expect(config.persistAfterSession).toBe(true); // stays alive for thread replies
       expect(config.exitOnError).toBe(true);
       expect(config.peRepoRequired).toBe(false);
     });

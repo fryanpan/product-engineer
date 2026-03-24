@@ -88,6 +88,8 @@ export interface TicketEvent {
   payload: unknown;
   slackThreadTs?: string;
   slackChannel?: string;
+  resumeSessionId?: string;
+  resumeTranscriptR2Key?: string;
 }
 
 export interface AgentConfig {
