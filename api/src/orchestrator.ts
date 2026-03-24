@@ -6,6 +6,13 @@ import { configure as configureInjectionDetector } from "./security/injection-de
 import type { ProjectAgentConfig } from "./project-agent";
 import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTicketMetrics } from "./db";
 import {
+  ensureProjectAgent as ensureProjectAgentImpl,
+  ensureConductor as ensureConductorImpl,
+  routeToProjectAgent as routeToProjectAgentImpl,
+  handleProjectAgentRoute as handleProjectAgentRouteImpl,
+  restartProjectAgents as restartProjectAgentsImpl,
+} from "./project-agent-router";
+import {
   getSystemStatus as getSystemStatusData,
   getMetrics as getMetricsData,
   getMetricsSummary as getMetricsSummaryData,
@@ -314,313 +321,24 @@ export class Orchestrator extends Container<Bindings> {
         }
         // Project agent internal endpoints
         if (url.pathname.startsWith("/project-agent/")) {
-          return this.handleProjectAgentRoute(url.pathname, request);
+          const subpath = url.pathname.replace("/project-agent/", "");
+          return handleProjectAgentRouteImpl(subpath, request, this.env, this.sqlExec, this.agentManager);
         }
         return Response.json({ error: "not found" }, { status: 404 });
     }
   }
 
-  // --- Project Agent routing ---
+  // --- Project Agent routing (delegated to project-agent-router.ts) ---
 
-  /**
-   * Ensure a ProjectAgent DO is initialized and running for a product.
-   * Returns the DO stub for further interaction.
-   */
-  private async ensureProjectAgent(
-    product: string,
-    productConfig: ProductConfig,
-  ): Promise<DurableObjectStub> {
-    const id = this.env.PROJECT_AGENT.idFromName(product);
-    const stub = this.env.PROJECT_AGENT.get(id);
-
-    // Build ProjectAgentConfig
-    const gatewayConfig = getGatewayConfig(this.sqlExec);
-
-    const config: ProjectAgentConfig = {
-      product,
-      repos: productConfig.repos,
-      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
-      slackPersona: productConfig.slack_persona,
-      secrets: productConfig.secrets,
-      mode: productConfig.mode,
-      gatewayConfig,
-      model: "sonnet",
-    };
-
-    // Initialize (idempotent — if config unchanged and container healthy, returns immediately)
-    const res = await stub.fetch(new Request("http://project-agent/ensure-running", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
-    }));
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "unknown error");
-      console.error(`[Orchestrator] Failed to ensure ProjectAgent for ${product}: ${errText}`);
-    }
-
-    return stub;
-  }
-
-  /**
-   * Ensure the Conductor (cross-product coordinator) is running.
-   * The Conductor is a special ProjectAgent keyed as "__conductor__".
-   */
-  private async ensureConductor(): Promise<DurableObjectStub> {
-    const id = this.env.PROJECT_AGENT.idFromName("__conductor__");
-    const stub = this.env.PROJECT_AGENT.get(id);
-
-    // Read conductor channel from settings
-    const conductorChannel = getSetting(this.sqlExec, "conductor_channel") || "";
-
-    const conductorConfig: ProjectAgentConfig = {
-      product: "__conductor__",
-      repos: [],
-      slackChannel: conductorChannel,
-      secrets: {
-        ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
-      },
-      mode: "flexible",
-      model: "sonnet",
-    };
-
-    const res = await stub.fetch(new Request("http://project-agent/ensure-running", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(conductorConfig),
-    }));
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "unknown error");
-      console.error(`[Orchestrator] Failed to ensure Conductor: ${errText}`);
-    }
-
-    return stub;
-  }
-
-  /**
-   * Route an event to the ProjectAgent for a product.
-   * Ensures the agent is running first, then forwards the event.
-   */
   private async routeToProjectAgent(
     product: string,
     event: TicketEvent,
   ): Promise<void> {
-    // Load product config
-    const productConfig = getProductConfig(this.sqlExec, product);
-
-    if (!productConfig) {
-      throw new Error(`No product config for ${product} — cannot route to ProjectAgent`);
-    }
-
-    const stub = await this.ensureProjectAgent(product, productConfig);
-
-    const res = await stub.fetch(new Request("http://project-agent/event", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-    }));
-
-    if (res.ok) {
-      console.log(`[Orchestrator] Routed ${event.type} to ProjectAgent for ${product}`);
-    } else if (res.status === 202) {
-      console.log(`[Orchestrator] Event buffered in ProjectAgent for ${product} (container starting)`);
-    } else {
-      throw new Error(`ProjectAgent event routing failed: ${res.status}`);
-    }
+    return routeToProjectAgentImpl(product, event, this.env, this.sqlExec);
   }
 
-  /**
-   * Handle internal project agent API requests.
-   * These endpoints are called by the project agent container via the worker.
-   */
-  private async handleProjectAgentRoute(pathname: string, request: Request): Promise<Response> {
-    const subpath = pathname.replace("/project-agent/", "");
-
-    switch (subpath) {
-      case "spawn-task": {
-        // Project agent requests spawning a ticket agent for a task
-        const body = await request.json<{
-          product: string;
-          ticketUUID: string;
-          ticketId?: string;
-          ticketTitle?: string;
-          ticketDescription?: string;
-          slackThreadTs?: string;
-          slackChannel?: string;
-          mode?: "coding" | "research" | "flexible";
-          model?: string;
-        }>();
-
-        // Load product config
-        const productConfig = getProductConfig(this.sqlExec, body.product);
-        if (!productConfig) {
-          return Response.json({ error: "product not found" }, { status: 404 });
-        }
-
-        // Create ticket in DB and transition to reviewing so spawnAgent accepts it
-        try {
-          this.agentManager.createTicket({
-            ticketUUID: body.ticketUUID,
-            product: body.product,
-            slackThreadTs: body.slackThreadTs,
-            slackChannel: body.slackChannel,
-            ticketId: body.ticketId,
-            title: body.ticketTitle,
-          });
-          // Transition from created → reviewing (spawnAgent requires reviewing or queued)
-          this.agentManager.updateStatus(body.ticketUUID, { status: "reviewing" });
-        } catch {
-          // Already exists or already in reviewing — fine
-        }
-
-        // Build spawn config
-        const gatewayConfig = getGatewayConfig(this.sqlExec);
-
-        const spawnConfig: SpawnConfig = {
-          product: body.product,
-          repos: productConfig.repos,
-          slackChannel: body.slackChannel || productConfig.slack_channel_id || productConfig.slack_channel,
-          slackThreadTs: body.slackThreadTs,
-          secrets: productConfig.secrets,
-          gatewayConfig,
-          model: body.model || "sonnet",
-          mode: body.mode || productConfig.mode,
-          slackPersona: productConfig.slack_persona,
-        };
-
-        try {
-          await this.agentManager.spawnAgent(body.ticketUUID, spawnConfig);
-
-          // Send the task description as an event so the ticket agent starts work
-          if (body.ticketDescription || body.ticketTitle) {
-            const taskEvent: TicketEvent = {
-              type: "slack_mention",
-              source: "internal",
-              ticketUUID: body.ticketUUID,
-              product: body.product,
-              payload: {
-                text: body.ticketDescription || body.ticketTitle || "",
-                title: body.ticketTitle || "",
-              },
-            };
-            try {
-              await this.agentManager.sendEvent(body.ticketUUID, taskEvent);
-            } catch (err) {
-              console.warn(`[Orchestrator] spawn-task: event delivery deferred for ${body.ticketUUID}:`, err);
-              // Agent may not be ready yet — it will receive the event via buffer drain
-            }
-          }
-
-          return Response.json({ ok: true, ticketUUID: body.ticketUUID, status: "spawned" });
-        } catch (err) {
-          console.error(`[Orchestrator] spawn-task failed for ${body.ticketUUID}:`, err);
-          return Response.json({ error: "spawn failed" }, { status: 500 });
-        }
-      }
-
-      case "list-tasks": {
-        // List all tickets for a product
-        const url = new URL(request.url);
-        const product = url.searchParams.get("product");
-        if (!product) return Response.json({ error: "product required" }, { status: 400 });
-
-        const rows = this.ctx.storage.sql.exec(
-          `SELECT ticket_uuid, ticket_id, title, status, agent_active, pr_url,
-                  branch_name, agent_message, created_at, updated_at
-           FROM tickets WHERE product = ? ORDER BY created_at DESC LIMIT 50`,
-          product,
-        ).toArray();
-        return Response.json({ tasks: rows });
-      }
-
-      case "send-event": {
-        // Forward an event to a specific ticket agent
-        const body = await request.json<{ ticketUUID: string; event: TicketEvent }>();
-        try {
-          await this.agentManager.sendEvent(body.ticketUUID, body.event);
-          return Response.json({ ok: true });
-        } catch (err) {
-          return Response.json({ error: "send failed" }, { status: 500 });
-        }
-      }
-
-      case "relay-to-project": {
-        // Relay a message/event to a specific product's ProjectAgent DO
-        const body = await request.json<{ product: string; event: TicketEvent }>();
-
-        // Load product config
-        const productConfig = getProductConfig(this.sqlExec, body.product);
-
-        if (!productConfig) {
-          return Response.json({ error: "product not found" }, { status: 404 });
-        }
-
-        try {
-          const stub = await this.ensureProjectAgent(body.product, productConfig);
-          const res = await stub.fetch(new Request("http://project-agent/event", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body.event),
-          }));
-
-          if (res.ok) {
-            return Response.json({ ok: true, routed: body.product });
-          }
-          return Response.json({ error: "relay failed" }, { status: res.status });
-        } catch (err) {
-          console.error(`[Orchestrator] relay-to-project failed for ${body.product}:`, err);
-          return Response.json({ error: "relay failed" }, { status: 500 });
-        }
-      }
-
-      case "stop-task": {
-        // Stop a ticket agent
-        const body = await request.json<{ ticketUUID: string; reason?: string }>();
-        try {
-          await this.agentManager.stopAgent(body.ticketUUID, body.reason || "project_agent_request");
-          return Response.json({ ok: true });
-        } catch (err) {
-          return Response.json({ error: "stop failed" }, { status: 500 });
-        }
-      }
-
-      case "drain-events": {
-        // Drain buffered events from a specific ProjectAgent DO.
-        // Called by the container after starting a session to pick up events
-        // that were buffered while the container was starting/restarting.
-        const url = new URL(request.url);
-        const product = url.searchParams.get("product");
-        if (!product) return Response.json({ error: "product required" }, { status: 400 });
-
-        const id = this.env.PROJECT_AGENT.idFromName(product);
-        const stub = this.env.PROJECT_AGENT.get(id);
-        return stub.fetch(new Request("http://project-agent/drain-events"));
-      }
-
-      case "status": {
-        // Get status of all project agents
-        const productRows = this.ctx.storage.sql.exec(
-          "SELECT slug FROM products",
-        ).toArray() as Array<{ slug: string }>;
-
-        const statuses: Record<string, unknown> = {};
-        for (const row of productRows) {
-          try {
-            const id = this.env.PROJECT_AGENT.idFromName(row.slug);
-            const stub = this.env.PROJECT_AGENT.get(id);
-            const res = await stub.fetch(new Request("http://project-agent/status"));
-            statuses[row.slug] = res.ok ? await res.json() : { error: `${res.status}` };
-          } catch {
-            statuses[row.slug] = { error: "unreachable" };
-          }
-        }
-        return Response.json({ project_agents: statuses });
-      }
-
-      default:
-        return Response.json({ error: "not found" }, { status: 404 });
-    }
+  private async ensureConductor(): Promise<DurableObjectStub> {
+    return ensureConductorImpl(this.env, this.sqlExec);
   }
 
   private async handleEvent(request: Request): Promise<Response> {
@@ -1189,37 +907,8 @@ export class Orchestrator extends Container<Bindings> {
     });
   }
 
-  /**
-   * Force restart all ProjectAgent containers to pick up new code after deploy.
-   */
   private async restartProjectAgents(): Promise<Response> {
-    const productRows = this.ctx.storage.sql.exec(
-      "SELECT slug FROM products",
-    ).toArray() as Array<{ slug: string }>;
-
-    const products = [...productRows.map(r => r.slug), "__conductor__"];
-    const results: Array<{ product: string; success: boolean; error?: string }> = [];
-
-    for (const product of products) {
-      try {
-        const id = this.env.PROJECT_AGENT.idFromName(product);
-        const stub = this.env.PROJECT_AGENT.get(id);
-        const res = await stub.fetch(new Request("http://project-agent/restart", {
-          method: "POST",
-        }));
-        if (res.ok) {
-          results.push({ product, success: true });
-        } else {
-          const errText = await res.text().catch(() => "unknown");
-          results.push({ product, success: false, error: errText });
-        }
-      } catch (err) {
-        results.push({ product, success: false, error: String(err) });
-      }
-    }
-
-    console.log(`[Orchestrator] Restarted ${results.filter(r => r.success).length}/${results.length} ProjectAgents`);
-    return Response.json({ ok: true, results });
+    return restartProjectAgentsImpl(this.env, this.sqlExec);
   }
 
   private listTickets(): Response {
