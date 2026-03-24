@@ -755,6 +755,8 @@ Respond with ONLY the JSON object, no other text.`,
             status: ticket.status,
             product: ticket.product,
             terminal: this.agentManager.isTerminal(ticketUUID),
+            session_id: ticket.session_id,
+            transcript_r2_key: ticket.transcript_r2_key,
           });
         }
         if (url.pathname.startsWith("/products/")) {

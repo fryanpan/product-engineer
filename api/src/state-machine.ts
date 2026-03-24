@@ -43,6 +43,11 @@ export function applyTransition(ticket: TicketRecord, to: TicketState): TicketRe
     updated.agent_active = 0;
   }
 
+  // Suspended state deactivates the agent — container exits on suspend
+  if (to === "suspended") {
+    updated.agent_active = 0;
+  }
+
   // spawning → active activates the agent
   if (ticket.status === "spawning" && to === "active") {
     updated.agent_active = 1;

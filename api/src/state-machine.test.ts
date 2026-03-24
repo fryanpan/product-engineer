@@ -113,13 +113,13 @@ describe("applyTransition", () => {
     expect(ticket.status).toBe(originalStatus);
   });
 
-  test("active → suspended is valid and does not deactivate agent", () => {
+  test("active → suspended is valid and deactivates agent", () => {
     const ticket = makeTicket({ status: "active", agent_active: 1 });
     const result = applyTransition(ticket, "suspended");
     expect(result).not.toBeNull();
     expect(result!.status).toBe("suspended");
-    // suspended is non-terminal, so agent_active should stay as-is
-    expect(result!.agent_active).toBe(1);
+    // suspended stops the container, so agent_active should be 0
+    expect(result!.agent_active).toBe(0);
   });
 
   test("suspended → active is valid", () => {

@@ -121,7 +121,7 @@ export class TranscriptManager {
 
       // Fetch transcript from R2 via worker API
       const res = await fetch(`${this.config.workerUrl}/api/transcripts/${encodeURIComponent(r2Key)}`, {
-        headers: { "X-Internal-Key": this.config.apiKey },
+        headers: { "X-API-Key": this.config.apiKey },
       });
 
       if (!res.ok) {

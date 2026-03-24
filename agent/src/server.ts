@@ -510,6 +510,30 @@ setTimeout(async () => {
 
       const resumePrompt = buildResumePrompt(branch, gitLog.trim(), gitStatus.trim(), prInfo);
 
+      // Try transcript-based session resume for full conversation history
+      let autoResumeSessionId: string | undefined;
+      try {
+        const ticketInfoRes = await fetch(
+          `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketUUID)}`,
+          { headers: { "X-Internal-Key": config.apiKey } },
+        );
+        if (ticketInfoRes.ok) {
+          const ticketInfo = await ticketInfoRes.json() as {
+            session_id?: string;
+            transcript_r2_key?: string;
+          };
+          if (ticketInfo.transcript_r2_key) {
+            const downloadedSessionId = await transcriptMgr.download(ticketInfo.transcript_r2_key);
+            if (downloadedSessionId) {
+              autoResumeSessionId = ticketInfo.session_id || downloadedSessionId;
+              console.log(`[Agent] Auto-resume will use session: ${autoResumeSessionId}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Agent] Could not fetch ticket info for transcript resume:", err);
+      }
+
       if (config.slackChannel && config.slackBotToken) {
         await fetch("https://slack.com/api/chat.postMessage", {
           method: "POST",
@@ -525,7 +549,7 @@ setTimeout(async () => {
         }).catch((err: Error) => console.error("[Agent] Failed to post recovery message:", err));
       }
 
-      await startSession(resumePrompt);
+      await startSession(resumePrompt, autoResumeSessionId);
       drainBufferedEvents();
     } else {
       console.log("[Agent] No existing work branch found — waiting for event");

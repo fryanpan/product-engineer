@@ -125,7 +125,7 @@ export class AgentLifecycle {
 
     // 3. Tell orchestrator to set status to "suspended" with session_id
     try {
-      await fetch(`${this.config.workerUrl}/api/orchestrator/status`, {
+      await fetch(`${this.config.workerUrl}/api/internal/status`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -215,15 +215,17 @@ export class AgentLifecycle {
     });
 
     if (this.roleConfig.persistAfterSession) {
-      // Project leads are persistent — don't exit. Reset session state so
-      // the next /event call starts a fresh SDK session with full context.
-      console.log("[Agent] Project lead session completed — staying alive for next event");
+      // Project lead/research session completed — staying alive for next event
+      console.log("[Agent] Persistent session completed — staying alive for next event");
       this.resetSession();
     } else {
-      // Exit the container so it stops using resources
-      console.log("[Agent] Exiting container after successful completion");
+      // Auto-suspend so the session can be resumed if needed (e.g., after deploys)
+      console.log("[Agent] Session completed — auto-suspending for potential resume");
       this.stopTimers();
-      this.callbacks.onExit(0);
+      this.autoSuspend("session_completed").catch((err) => {
+        console.error("[Agent] autoSuspend failed after session end:", err);
+        this.callbacks.onExit(0);
+      });
     }
   }
 
@@ -287,7 +289,7 @@ export class AgentLifecycle {
   /** Timeout watchdog: exit if session runs too long or becomes idle. */
   private startWatchdog(): void {
     this.watchdogTimer = setInterval(() => {
-      if (!this.state.sessionActive && this.state.sessionStatus === "idle") return; // Not started yet
+      if (!this.state.sessionActive && this.state.sessionStatus === "idle" && this.state.sessionStartTime === 0) return; // Not started yet
       if (this.roleConfig.idleTimeoutMs === Infinity) return; // Project leads never timeout
 
       const now = Date.now();
