@@ -97,6 +97,22 @@ export async function injectSkills(
 }
 
 /**
+ * Add injected skill directories to .git/info/exclude so they are never
+ * staged or committed. This file is local to the clone and not tracked.
+ */
+async function gitExcludeInjectedSkills(
+  repoDir: string,
+  skillNames: string[],
+): Promise<void> {
+  const excludePath = `${repoDir}/.git/info/exclude`;
+  const lines = skillNames.map((name) => `.claude/skills/${name}/`);
+  const block = `\n# Injected agent skills (auto-generated, do not commit)\n${lines.join("\n")}\n`;
+  const existing = await Bun.file(excludePath).text().catch(() => "");
+  await Bun.write(excludePath, existing + block);
+  console.log(`[Workspace] Added ${skillNames.length} skills to .git/info/exclude`);
+}
+
+/**
  * Check for an existing work branch (ticket/* or feedback/*) on the remote
  * and check it out if found.
  *
@@ -187,7 +203,10 @@ export async function setupWorkspace(
   // 5. Inject skills (single code path for both roles)
   const targetSkillsDir = `${agentCwd}/.claude/skills`;
   try {
-    await injectSkills(targetSkillsDir);
+    const injectedNames = await injectSkills(targetSkillsDir);
+    if (injectedNames.length > 0) {
+      await gitExcludeInjectedSkills(agentCwd, injectedNames);
+    }
   } catch (err) {
     console.error("[Workspace] Skill injection failed (non-fatal):", err);
   }

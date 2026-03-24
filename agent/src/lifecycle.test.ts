@@ -134,7 +134,7 @@ describe("AgentLifecycle", () => {
       const s = lifecycle.state;
 
       expect(s.sessionActive).toBe(false);
-      expect(s.sessionStatus).toBe("idle");
+      expect(s.sessionStatus as string).toBe("idle");
       expect(s.sessionMessageCount).toBe(0);
       expect(s.sessionStartTime).toBe(0);
       expect(s.lastMessageTime).toBe(0);
