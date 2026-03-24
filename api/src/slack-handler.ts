@@ -25,6 +25,7 @@ export interface SlackHandlerDeps {
   routeToProjectAgent: (product: string, event: TicketEvent) => Promise<void>;
   ensureConductor: () => Promise<DurableObjectStub>;
   handleTicketReview: (event: TicketEvent) => Promise<void>;
+  respawnSuspendedAgent: (ticketUUID: string, product: string, event: TicketEvent) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,8 +325,29 @@ export async function handleSlackEvent(
         return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
       }
 
+      // For suspended tickets, read resume context BEFORE transitioning state
+      let resumeSessionId: string | undefined;
+      let resumeTranscriptR2Key: string | undefined;
+      if (ticket.status === "suspended") {
+        const fullTicket = sql.exec(
+          "SELECT session_id, transcript_r2_key FROM tickets WHERE ticket_uuid = ?",
+          ticket.ticket_uuid,
+        ).toArray()[0] as { session_id: string | null; transcript_r2_key: string | null } | undefined;
+        if (fullTicket) {
+          resumeSessionId = fullTicket.session_id || undefined;
+          resumeTranscriptR2Key = fullTicket.transcript_r2_key || undefined;
+        }
+        console.log(`[slack-handler] Resuming suspended ticket ${ticket.ticket_uuid} session=${resumeSessionId || "none"} transcript=${resumeTranscriptR2Key || "none"}`);
+      }
+
       // Re-activate agent on thread reply — user is explicitly engaging
       agentManager.reactivate(ticket.ticket_uuid);
+
+      // Transition suspended → active (must succeed before re-spawn)
+      if (ticket.status === "suspended") {
+        agentManager.updateStatus(ticket.ticket_uuid, { status: "active" });
+      }
+
       const event: TicketEvent = {
         type: "slack_reply",
         source: "slack",
@@ -334,9 +356,24 @@ export async function handleSlackEvent(
         payload: slackEvent,
         slackThreadTs: slackEvent.thread_ts,
         slackChannel: slackEvent.channel,
+        resumeSessionId,
+        resumeTranscriptR2Key,
       };
-      console.log(`[slack-handler] Routing thread reply to agent for ticket=${ticket.ticket_uuid}`);
-      await agentManager.sendEvent(ticket.ticket_uuid, event);
+
+      // For suspended tickets, the container has exited — re-spawn it.
+      // For active tickets, sendEvent routes to the running container.
+      if (ticket.status === "suspended") {
+        console.log(`[slack-handler] Re-spawning container for suspended ticket=${ticket.ticket_uuid}`);
+        try {
+          await deps.respawnSuspendedAgent(ticket.ticket_uuid, ticket.product, event);
+        } catch (err) {
+          console.error(`[slack-handler] Failed to re-spawn suspended agent for ${ticket.ticket_uuid}:`, err);
+          return Response.json({ error: "Failed to re-spawn agent" }, { status: 500 });
+        }
+      } else {
+        console.log(`[slack-handler] Routing thread reply to agent for ticket=${ticket.ticket_uuid}`);
+        await agentManager.sendEvent(ticket.ticket_uuid, event);
+      }
       return Response.json({ ok: true, ticketUUID: ticket.ticket_uuid });
     } else {
       console.log(`[slack-handler] No ticket found for thread_ts=${slackEvent.thread_ts}`);

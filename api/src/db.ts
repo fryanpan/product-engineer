@@ -37,7 +37,8 @@ export function initSchema(sql: SqlExec): void {
       updated_at TEXT DEFAULT (datetime('now')),
       agent_active INTEGER NOT NULL DEFAULT 1,
       last_heartbeat TEXT,
-      transcript_r2_key TEXT
+      transcript_r2_key TEXT,
+      session_id TEXT
     )
   `);
 
@@ -131,6 +132,7 @@ export function initSchema(sql: SqlExec): void {
   addColumn("tickets", "agent_active INTEGER NOT NULL DEFAULT 1");
   addColumn("tickets", "last_heartbeat TEXT");
   addColumn("tickets", "transcript_r2_key TEXT");
+  addColumn("tickets", "session_id TEXT");
   addColumn("tickets", "identifier TEXT"); // renamed to ticket_id below
   addColumn("tickets", "title TEXT");
   addColumn("tickets", "agent_message TEXT");

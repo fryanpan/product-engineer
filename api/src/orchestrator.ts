@@ -266,6 +266,8 @@ export class Orchestrator extends Container<Bindings> {
         status: ticket.status,
         product: ticket.product,
         terminal: this.agentManager.isTerminal(ticketUUID),
+        session_id: ticket.session_id,
+        transcript_r2_key: ticket.transcript_r2_key,
       });
     }
     if (url.pathname.startsWith("/products/")) {
@@ -534,6 +536,35 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   /**
+   * Re-spawn a container for a suspended ticket and send the triggering event.
+   * Uses the product config from the registry to reconstruct spawn config.
+   */
+  private async respawnSuspendedAgent(ticketUUID: string, product: string, event: TicketEvent): Promise<void> {
+    const productConfig = getProductConfig(this.sqlExec, product);
+    if (!productConfig) throw new Error(`Product ${product} not found in registry`);
+
+    const gatewayConfig = getGatewayConfig(this.sqlExec);
+
+    const ticket = this.agentManager.getTicket(ticketUUID);
+
+    const spawnConfig: SpawnConfig = {
+      product,
+      repos: productConfig.repos,
+      slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+      slackThreadTs: event.slackThreadTs || ticket?.slack_thread_ts || undefined,
+      secrets: productConfig.secrets,
+      gatewayConfig,
+      model: productConfig.model || "sonnet",
+      mode: productConfig.mode,
+      slackPersona: productConfig.slack_persona,
+    };
+
+    // spawnAgent accepts active status as a re-spawn
+    await this.agentManager.spawnAgent(ticketUUID, spawnConfig);
+    await this.agentManager.sendEvent(ticketUUID, event);
+  }
+
+  /**
    * Supervisor tick — heartbeat-only staleness check.
    *
    * Agents now manage their own PR lifecycle (merge gate, CI checks) via
@@ -570,9 +601,10 @@ export class Orchestrator extends Container<Bindings> {
       branch_name?: string;
       slack_thread_ts?: string;
       transcript_r2_key?: string;
+      session_id?: string;
       agent_active?: number;
     }>();
-    const { ticketUUID, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, agent_active } = body;
+    const { ticketUUID, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, session_id, agent_active } = body;
 
     // Log payloads so they appear in wrangler tail
     console.log(`[Orchestrator] status update: ticket=${ticketUUID} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
@@ -626,6 +658,12 @@ export class Orchestrator extends Container<Bindings> {
         );
       }
 
+      // Suspended state: mark agent inactive — container has exited
+      if (resolvedStatus === "suspended") {
+        updates.push("agent_active = 0");
+        console.log(`[Orchestrator] Marking agent inactive for suspended state: ${ticketUUID}`);
+      }
+
       // Terminal states: mark agent as inactive so we don't spawn new agents
       // on deployment-triggered events
       if ((TERMINAL_STATUSES as readonly string[]).includes(status)) {
@@ -670,6 +708,10 @@ export class Orchestrator extends Container<Bindings> {
     if (transcript_r2_key) {
       updates.push("transcript_r2_key = ?");
       values.push(transcript_r2_key);
+    }
+    if (session_id) {
+      updates.push("session_id = ?");
+      values.push(session_id);
     }
 
     values.push(ticketUUID);
@@ -884,6 +926,7 @@ export class Orchestrator extends Container<Bindings> {
       routeToProjectAgent: (product, event) => this.routeToProjectAgent(product, event),
       ensureConductor: () => this.ensureConductor(),
       handleTicketReview: (event) => this.handleTicketReview(event),
+      respawnSuspendedAgent: (ticketUUID, product, event) => this.respawnSuspendedAgent(ticketUUID, product, event),
     });
   }
 
