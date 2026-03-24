@@ -259,7 +259,8 @@ describe("update_task_status", () => {
       }) as any;
 
       await handler({ status });
-      expect(queriedStateName).toBe(expectedLinearState);
+      expect(queriedStateName).not.toBeNull();
+      expect(queriedStateName!).toBe(expectedLinearState);
     }
   });
 
@@ -476,6 +477,7 @@ describe("update_task_status", () => {
 
     await handler({ status: "in_progress", linear_ticket_id: "explicit-uuid" });
 
-    expect(queriedIssueId).toBe("explicit-uuid");
+    expect(queriedIssueId).not.toBeNull();
+    expect(queriedIssueId!).toBe("explicit-uuid");
   });
 });
