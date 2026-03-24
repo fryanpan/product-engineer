@@ -106,6 +106,66 @@ export class TranscriptManager {
     }
   }
 
+  /**
+   * Download a transcript from R2 and write it to the local transcript directory.
+   * This enables session resumption — the SDK reads transcripts from the local path.
+   * @param r2Key - The R2 key of the transcript (e.g., "{agentUuid}-{sessionId}.jsonl")
+   */
+  async download(r2Key: string): Promise<string | null> {
+    try {
+      const transcriptDir = this.getTranscriptDir();
+
+      // Ensure the directory exists
+      const mkdirProc = Bun.spawn(["mkdir", "-p", transcriptDir]);
+      await mkdirProc.exited;
+
+      // Fetch transcript from R2 via worker API
+      const res = await fetch(`${this.config.workerUrl}/api/transcripts/${encodeURIComponent(r2Key)}`, {
+        headers: { "X-API-Key": this.config.apiKey },
+      });
+
+      if (!res.ok) {
+        console.error(`[Agent] Transcript download failed: ${res.status}`);
+        return null;
+      }
+
+      const content = await res.text();
+
+      // Extract session ID from the transcript content (first line has sessionId field)
+      // Or from the R2 key: format is "{agentUuid}-{sessionId}.jsonl"
+      const firstLine = content.split("\n")[0];
+      let sessionId: string | null = null;
+      try {
+        const parsed = JSON.parse(firstLine);
+        sessionId = parsed.sessionId || null;
+      } catch {
+        // Try extracting from r2Key format: "{agentUuid}-{sessionId}.jsonl"
+        // Both agentUuid and sessionId are UUIDs with hyphens, so split on the
+        // last occurrence of a UUID pattern followed by .jsonl
+        const basename = r2Key.replace(/\.jsonl$/, "");
+        // The sessionId is the last UUID in the key (after the agentUuid prefix)
+        const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+        const uuids = basename.match(uuidPattern);
+        sessionId = uuids && uuids.length >= 2 ? uuids[uuids.length - 1] : null;
+      }
+
+      if (!sessionId) {
+        console.error("[Agent] Could not determine session ID from transcript");
+        return null;
+      }
+
+      // Write to the expected path: {transcriptDir}/{sessionId}.jsonl
+      const localPath = `${transcriptDir}/${sessionId}.jsonl`;
+      await Bun.write(localPath, content);
+      console.log(`[Agent] Transcript downloaded: ${r2Key} → ${localPath} (${content.length} bytes)`);
+
+      return sessionId;
+    } catch (err) {
+      console.error("[Agent] Transcript download error:", err);
+      return null;
+    }
+  }
+
   /** Returns the current uploaded sizes map (for testing/debugging). */
   getUploadedSizes(): Map<string, number> {
     return this.uploadedSizes;

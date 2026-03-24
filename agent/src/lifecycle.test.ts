@@ -251,7 +251,7 @@ describe("AgentLifecycle", () => {
   });
 
   describe("handleSessionEnd", () => {
-    test("ticket agent: reports tokens and exits with code 0", async () => {
+    test("ticket agent: reports tokens and auto-suspends with code 0", async () => {
       const { lifecycle, tokenTracker, callbacks } = createLifecycle();
 
       lifecycle.state.sessionActive = true;
@@ -259,17 +259,19 @@ describe("AgentLifecycle", () => {
       lifecycle.state.sessionMessageCount = 15;
 
       await lifecycle.handleSessionEnd();
+      // autoSuspend runs asynchronously — wait for it to complete
+      await new Promise((r) => setTimeout(r, 10));
 
       // State updated
       expect(lifecycle.state.sessionStatus).toBe("completed");
       expect(lifecycle.state.sessionActive).toBe(false);
 
-      // Token report was called
+      // Token report called once (in autoSuspend only — handleSessionEnd delegates to it)
       expect(tokenTracker.report).toHaveBeenCalledTimes(1);
       expect(tokenTracker.reportCalls[0].ticketUUID).toBe("test-uuid");
       expect(tokenTracker.reportCalls[0].sessionMessageCount).toBe(15);
 
-      // Exit callback was called with 0
+      // Exit callback was called with 0 (from autoSuspend)
       expect(callbacks.onExit).toHaveBeenCalledTimes(1);
       expect(callbacks.onExit).toHaveBeenCalledWith(0);
     });

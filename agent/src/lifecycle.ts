@@ -91,6 +91,60 @@ export class AgentLifecycle {
     }).catch((err) => console.error("[Agent] phoneHome failed:", err));
   }
 
+  // ── Auto-suspend ─────────────────────────────────────────────────────
+
+  /**
+   * Upload transcript, report tokens, notify orchestrator to set "suspended"
+   * status, then exit the container.
+   */
+  async autoSuspend(reason: string): Promise<void> {
+    console.log(`[Agent] Auto-suspending (reason=${reason})`);
+
+    // 1. Upload transcript before exiting
+    try {
+      await this.transcriptMgr.upload(true);
+    } catch (err) {
+      console.error("[Agent] Failed to upload transcript during auto-suspend:", err);
+    }
+
+    // 2. Report token usage
+    try {
+      await this.tokenTracker.report({
+        ticketUUID: this.config.ticketUUID,
+        workerUrl: this.config.workerUrl,
+        apiKey: this.config.apiKey,
+        slackBotToken: this.config.slackBotToken,
+        slackChannel: this.config.slackChannel,
+        slackThreadTs: this.config.slackThreadTs,
+        sessionMessageCount: this.state.sessionMessageCount,
+        model: this.config.model,
+      });
+    } catch (err) {
+      console.error("[Agent] Failed to report tokens during auto-suspend:", err);
+    }
+
+    // 3. Tell orchestrator to set status to "suspended" with session_id
+    try {
+      await fetch(`${this.config.workerUrl}/api/internal/status`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Key": this.config.apiKey,
+        },
+        body: JSON.stringify({
+          ticketUUID: this.config.ticketUUID,
+          status: "suspended",
+          session_id: this.state.currentSessionId,
+        }),
+      });
+    } catch (err) {
+      console.error("[Agent] Failed to notify orchestrator during auto-suspend:", err);
+    }
+
+    // 4. Exit
+    this.callbacks.onExit(0);
+  }
+
   // ── Timers ─────────────────────────────────────────────────────────────
 
   /** Start all timers (heartbeat, watchdog, transcript backup). */
@@ -148,28 +202,29 @@ export class AgentLifecycle {
     this.state.sessionActive = false;
     this.phoneHome(`session_completed msgs=${this.state.sessionMessageCount}`);
 
-    // Report token usage
-    await this.tokenTracker.report({
-      ticketUUID: this.config.ticketUUID,
-      workerUrl: this.config.workerUrl,
-      apiKey: this.config.apiKey,
-      slackBotToken: this.config.slackBotToken,
-      slackChannel: this.config.slackChannel,
-      slackThreadTs: this.config.slackThreadTs,
-      sessionMessageCount: this.state.sessionMessageCount,
-      model: this.config.model,
-    });
-
     if (this.roleConfig.persistAfterSession) {
-      // Project leads are persistent — don't exit. Reset session state so
-      // the next /event call starts a fresh SDK session with full context.
-      console.log("[Agent] Project lead session completed — staying alive for next event");
+      // Project lead/research session completed — report tokens here since
+      // autoSuspend won't be called (persistent agents stay alive).
+      await this.tokenTracker.report({
+        ticketUUID: this.config.ticketUUID,
+        workerUrl: this.config.workerUrl,
+        apiKey: this.config.apiKey,
+        slackBotToken: this.config.slackBotToken,
+        slackChannel: this.config.slackChannel,
+        slackThreadTs: this.config.slackThreadTs,
+        sessionMessageCount: this.state.sessionMessageCount,
+        model: this.config.model,
+      });
+      console.log("[Agent] Persistent session completed — staying alive for next event");
       this.resetSession();
     } else {
-      // Exit the container so it stops using resources
-      console.log("[Agent] Exiting container after successful completion");
+      // Auto-suspend handles token reporting, transcript upload, and orchestrator notification.
+      console.log("[Agent] Session completed — auto-suspending for potential resume");
       this.stopTimers();
-      this.callbacks.onExit(0);
+      this.autoSuspend("session_completed").catch((err) => {
+        console.error("[Agent] autoSuspend failed after session end:", err);
+        this.callbacks.onExit(0);
+      });
     }
   }
 
@@ -233,8 +288,8 @@ export class AgentLifecycle {
   /** Timeout watchdog: exit if session runs too long or becomes idle. */
   private startWatchdog(): void {
     this.watchdogTimer = setInterval(() => {
-      if (!this.state.sessionActive && this.state.sessionStatus === "idle") return; // Not started yet
-      if (this.roleConfig.persistAfterSession) return; // Project leads never timeout
+      if (!this.state.sessionActive && this.state.sessionStatus === "idle" && this.state.sessionStartTime === 0) return; // Not started yet
+      if (this.roleConfig.idleTimeoutMs === Infinity) return; // Project leads never timeout
 
       const now = Date.now();
       const sessionDuration = this.state.sessionStartTime > 0 ? now - this.state.sessionStartTime : 0;
@@ -242,10 +297,12 @@ export class AgentLifecycle {
 
       // Hard timeout: session exceeded max duration (ticket agents only)
       if (sessionDuration > this.roleConfig.sessionTimeoutMs) {
-        console.log(`[Agent] Session timeout after ${Math.floor(sessionDuration / 60000)}m — exiting`);
+        console.log(`[Agent] Session timeout after ${Math.floor(sessionDuration / 60000)}m — auto-suspending`);
         this.phoneHome(`session_timeout duration=${Math.floor(sessionDuration / 60000)}m msgs=${this.state.sessionMessageCount}`);
         this.stopTimers();
-        this.callbacks.onExit(0);
+        this.autoSuspend("session_timeout").catch((err) =>
+          console.error("[Agent] autoSuspend failed:", err),
+        );
         return;
       }
 
@@ -253,10 +310,12 @@ export class AgentLifecycle {
       // Keep sessionStatus guard — during long tool runs (tests, builds), the SDK status stays
       // "running" without producing messages. We only timeout truly idle sessions.
       if (idleDuration > this.roleConfig.idleTimeoutMs && this.state.sessionStatus !== "running") {
-        console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${this.state.sessionStatus} — exiting`);
+        console.log(`[Agent] Idle timeout after ${Math.floor(idleDuration / 60000)}m with status=${this.state.sessionStatus} — auto-suspending`);
         this.phoneHome(`idle_timeout idle=${Math.floor(idleDuration / 60000)}m status=${this.state.sessionStatus} msgs=${this.state.sessionMessageCount}`);
         this.stopTimers();
-        this.callbacks.onExit(0);
+        this.autoSuspend("idle_timeout").catch((err) =>
+          console.error("[Agent] autoSuspend failed:", err),
+        );
         return;
       }
     }, 60_000); // Check every minute
