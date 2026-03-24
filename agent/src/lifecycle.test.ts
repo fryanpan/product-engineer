@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
-import { AgentLifecycle, type LifecycleCallbacks, type SessionState, type SessionStatus } from "./lifecycle";
+import { AgentLifecycle, type LifecycleCallbacks, type SessionState } from "./lifecycle";
 import type { AgentConfig } from "./config";
 import type { RoleConfig } from "./role-config";
 import type { TranscriptManager } from "./transcripts";
@@ -153,7 +153,7 @@ describe("AgentLifecycle", () => {
 
       // Simulate an active session with state
       lifecycle.state.sessionActive = true;
-      lifecycle.state.sessionStatus = "running" as SessionStatus;
+      lifecycle.state.sessionStatus = "running";
       lifecycle.state.sessionMessageCount = 42;
       lifecycle.state.sessionStartTime = Date.now();
       lifecycle.state.lastMessageTime = Date.now();
@@ -166,7 +166,7 @@ describe("AgentLifecycle", () => {
       lifecycle.resetSession();
 
       expect(lifecycle.state.sessionActive).toBe(false);
-      expect(lifecycle.state.sessionStatus).toBe("idle" as SessionStatus);
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
       expect(lifecycle.state.sessionMessageCount).toBe(0);
       expect(lifecycle.state.sessionStartTime).toBe(0);
       expect(lifecycle.state.sessionError).toBe("");
@@ -255,7 +255,7 @@ describe("AgentLifecycle", () => {
       const { lifecycle, tokenTracker, callbacks } = createLifecycle();
 
       lifecycle.state.sessionActive = true;
-      lifecycle.state.sessionStatus = "running" as SessionStatus;
+      lifecycle.state.sessionStatus = "running";
       lifecycle.state.sessionMessageCount = 15;
 
       await lifecycle.handleSessionEnd();
@@ -263,7 +263,7 @@ describe("AgentLifecycle", () => {
       await new Promise((r) => setTimeout(r, 10));
 
       // State updated
-      expect(lifecycle.state.sessionStatus).toBe("completed" as SessionStatus);
+      expect(lifecycle.state.sessionStatus as string).toBe("completed");
       expect(lifecycle.state.sessionActive).toBe(false);
 
       // Token report called once (in autoSuspend only — handleSessionEnd delegates to it)
@@ -282,7 +282,7 @@ describe("AgentLifecycle", () => {
       });
 
       lifecycle.state.sessionActive = true;
-      lifecycle.state.sessionStatus = "running" as SessionStatus;
+      lifecycle.state.sessionStatus = "running";
       lifecycle.state.sessionMessageCount = 10;
       lifecycle.state.lastToolCall = "Bash";
       lifecycle.state.lastStderr = "warning";
@@ -293,7 +293,7 @@ describe("AgentLifecycle", () => {
       expect(tokenTracker.report).toHaveBeenCalledTimes(1);
 
       // Session was reset (not exited)
-      expect(lifecycle.state.sessionStatus).toBe("idle" as SessionStatus);
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
       expect(lifecycle.state.sessionActive).toBe(false);
       expect(lifecycle.state.sessionMessageCount).toBe(0);
       expect(lifecycle.state.lastToolCall).toBe("");
@@ -329,14 +329,14 @@ describe("AgentLifecycle", () => {
       const { lifecycle, callbacks } = createLifecycle({ transcriptMgr });
 
       lifecycle.state.sessionActive = true;
-      lifecycle.state.sessionStatus = "running" as SessionStatus;
+      lifecycle.state.sessionStatus = "running";
       lifecycle.state.lastStderr = "some stderr";
 
       const error = new Error("SDK crashed");
       await lifecycle.handleSessionError(error);
 
       // State updated
-      expect(lifecycle.state.sessionStatus).toBe("error" as SessionStatus);
+      expect(lifecycle.state.sessionStatus as string).toBe("error");
       expect(lifecycle.state.sessionActive).toBe(false);
       expect(lifecycle.state.sessionError).toBe("Error: SDK crashed");
 
@@ -354,14 +354,14 @@ describe("AgentLifecycle", () => {
       });
 
       lifecycle.state.sessionActive = true;
-      lifecycle.state.sessionStatus = "running" as SessionStatus;
+      lifecycle.state.sessionStatus = "running";
       lifecycle.state.lastToolCall = "Edit";
 
       const error = new Error("something broke");
       await lifecycle.handleSessionError(error);
 
       // Session was reset
-      expect(lifecycle.state.sessionStatus).toBe("idle" as SessionStatus);
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
       expect(lifecycle.state.sessionActive).toBe(false);
       expect(lifecycle.state.sessionMessageCount).toBe(0);
       expect(lifecycle.state.lastToolCall).toBe("");
