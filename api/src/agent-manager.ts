@@ -335,10 +335,11 @@ export class AgentManager {
       return;
     }
 
-    // Transition terminal → active via the state machine
-    this.updateStatus(ticketUUID, { status: "active" });
+    // Bypass updateStatus() which has a terminal guard — direct SQL update.
+    // The state machine allows terminal → active (types.ts VALID_TRANSITIONS).
     this.sql.exec(
-      "UPDATE tickets SET agent_active = 1, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      "UPDATE tickets SET status = ?, agent_active = 1, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      "active",
       ticketUUID,
     );
 
