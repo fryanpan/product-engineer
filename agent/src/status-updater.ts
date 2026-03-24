@@ -210,6 +210,9 @@ export class StatusUpdater {
       if (["merged", "closed"].includes(status)) {
         statusEmoji = "✅";
         statusText = "DONE";
+      } else if (status === "suspended") {
+        statusEmoji = "💤";
+        statusText = "SUSPENDED";
       } else if (status === "pr_open" || status === "in_review") {
         statusEmoji = "👀";
         statusText = "IN REVIEW";

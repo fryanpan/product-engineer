@@ -37,6 +37,7 @@ function createMockSql() {
           title: title || null,
           agent_active: 0,
           transcript_r2_key: null,
+          session_id: null,
           last_heartbeat: null,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),

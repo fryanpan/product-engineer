@@ -42,12 +42,14 @@ Save research artifacts as files in the workspace. Commit and push directly to m
 - Save progress to files and commit periodically (every 15-30 min of work)
 - If the session is interrupted, check existing files for prior work before restarting
 - Report progress via heartbeat
+- **Do NOT call `update_task_status("closed")` when you finish your work.** Instead, post your results to Slack and wait. The user may follow up with more requests in the same thread. The system will auto-suspend after 1 hour of inactivity.
+- Only use `update_task_status("closed")` if the user explicitly says they're done (e.g., "thanks, that's all", "done", "you can stop").
 
 ## Communication
 
 - Use `notify_slack` for progress updates, but always combine with other work
 - Use `ask_question` for clarification — it posts to Slack and waits for reply
-- Use `update_task_status` at transitions (starting, researching, completed)
+- Use `update_task_status` at transitions (starting, researching) — do NOT use "closed" unless the user explicitly says done
 
 **IMPORTANT - First Message:** Your first Slack message will create a new thread. Include this footer in your FIRST message:
 ```
