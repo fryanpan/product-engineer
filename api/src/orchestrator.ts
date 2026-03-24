@@ -2,9 +2,7 @@ import { Container } from "@cloudflare/containers";
 import { TERMINAL_STATUSES, TICKET_STATES, type TicketEvent, type HeartbeatPayload, type Bindings } from "./types";
 import type { ProductConfig, CloudflareAIGateway } from "./registry";
 import { AgentManager, type SpawnConfig } from "./agent-manager";
-import { addReaction } from "./slack-utils";
 import { configure as configureInjectionDetector } from "./security/injection-detector";
-import { normalizeSlackEvent } from "./security/normalized-event";
 import type { ProjectAgentConfig } from "./project-agent";
 import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTicketMetrics } from "./db";
 import {
@@ -14,7 +12,6 @@ import {
   checkAgentHealth as checkAgentHealthData,
   listTickets as listTicketsData,
   listTranscripts as listTranscriptsData,
-  formatStatusMessage,
 } from "./observability";
 import {
   listProducts as listProductsHandler,
@@ -26,24 +23,14 @@ import {
   updateSetting as updateSettingHandler,
   seedProducts as seedProductsHandler,
 } from "./product-crud";
+import { handleSlackEvent as handleSlackEventImpl, refreshLinearToken } from "./slack-handler";
 
 function sanitizeTicketUUID(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
 }
 
-// Pure helper — exported for testing
-export function resolveProductFromChannel(
-  products: Record<string, ProductConfig>,
-  channel: string,
-): string | null {
-  for (const [name, config] of Object.entries(products)) {
-    // Match on channel ID (from Socket Mode events) or channel name
-    if (config.slack_channel_id === channel || config.slack_channel === channel) {
-      return name;
-    }
-  }
-  return null;
-}
+// Re-export from slack-handler for backward compatibility with tests
+export { resolveProductFromChannel } from "./slack-handler";
 
 // Pure helper — exported for testing
 export function buildTicketEvent(
@@ -127,7 +114,7 @@ export class Orchestrator extends Container<Bindings> {
       const lastRefresh = lastRefreshValue ? parseInt(lastRefreshValue, 10) : 0;
       const twelveHours = 12 * 60 * 60 * 1000;
       if (Date.now() - lastRefresh > twelveHours) {
-        const refreshed = await this.refreshLinearToken();
+        const refreshed = await refreshLinearToken(this.sqlExec, this.env as Record<string, unknown>);
         if (refreshed) {
           setSetting(this.sqlExec, "linear_token_refreshed_at", String(Date.now()));
         }
@@ -191,144 +178,6 @@ export class Orchestrator extends Container<Bindings> {
     return tokens;
   }
 
-  /** Get the Linear OAuth app token — checks SQLite settings for a stored token, falls back to env binding. */
-  private getLinearAppToken(): string {
-    try {
-      const value = getSetting(this.sqlExec, "linear_app_token");
-      if (value) return value;
-    } catch {
-      // Settings table may not exist yet during early init
-    }
-    return (this.env.LINEAR_APP_TOKEN as string) || "";
-  }
-
-  /** Use LLM to generate a structured ticket title and description from a Slack message. */
-  private async generateTicketSummary(
-    rawText: string,
-    product: string,
-    slackUser: string,
-  ): Promise<{ title: string; description: string }> {
-    if (!rawText) {
-      return { title: "Slack request (no description)", description: `**Slack request from <@${slackUser}>**` };
-    }
-
-    const apiKey = (this.env.ANTHROPIC_API_KEY as string) || "";
-    if (!apiKey) {
-      throw new Error("No ANTHROPIC_API_KEY configured");
-    }
-
-    // Check for AI Gateway config
-    const gatewayConfig = getGatewayConfig(this.sqlExec);
-    const baseUrl = gatewayConfig
-      ? `https://gateway.ai.cloudflare.com/v1/${gatewayConfig.account_id}/${gatewayConfig.gateway_id}/anthropic`
-      : "https://api.anthropic.com";
-
-    const response = await fetch(`${baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 512,
-        messages: [{
-          role: "user",
-          content: `You are generating a Linear ticket from a Slack message for the "${product}" product.
-
-Given this Slack message:
-<message>
-${rawText}
-</message>
-
-Generate a JSON object with:
-- "title": A concise ticket title (imperative form, max 120 chars). Capture WHAT the request is.
-- "description": A well-structured ticket description that captures WHY the user is asking (their goal) and any relevant context from the message. Include the original Slack message as a quote block for reference. Format with markdown.
-
-Respond with ONLY the JSON object, no other text.`,
-        }],
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Anthropic API error ${response.status}`);
-    }
-
-    const data = (await response.json()) as {
-      content: Array<{ type: string; text: string }>;
-    };
-    const textBlock = data.content.find((b) => b.type === "text");
-    if (!textBlock) throw new Error("No text in Anthropic response");
-
-    // Parse JSON from response, handling potential markdown code fences
-    let jsonText = textBlock.text.trim();
-    const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) jsonText = fenceMatch[1].trim();
-
-    const parsed = JSON.parse(jsonText) as { title: string; description: string };
-
-    // Ensure title isn't too long
-    const title = parsed.title.length > 200 ? parsed.title.slice(0, 197) + "..." : parsed.title;
-
-    return {
-      title,
-      description: parsed.description || `**Slack request from <@${slackUser}>:**\n\n${rawText}`,
-    };
-  }
-
-  /** Get the Slack bot token from env. */
-  private getSlackBotToken(): string {
-    return (this.env.SLACK_BOT_TOKEN as string) || "";
-  }
-
-  /** Refresh the Linear OAuth token using the stored refresh token. */
-  private async refreshLinearToken(): Promise<boolean> {
-    try {
-      const refreshToken = getSetting(this.sqlExec, "linear_refresh_token");
-
-      if (!refreshToken) {
-        console.log("[Orchestrator] No Linear refresh token stored, skipping refresh");
-        return false;
-      }
-
-      const clientId = (this.env.LINEAR_APP_CLIENT_ID as string) || "";
-      const clientSecret = (this.env.LINEAR_APP_CLIENT_SECRET as string) || "";
-      if (!clientId || !clientSecret) {
-        console.warn("[Orchestrator] LINEAR_APP_CLIENT_ID or LINEAR_APP_CLIENT_SECRET not set, cannot refresh");
-        return false;
-      }
-
-      const res = await fetch("https://api.linear.app/oauth/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          client_id: clientId,
-          client_secret: clientSecret,
-          refresh_token: refreshToken,
-        }),
-      });
-
-      if (!res.ok) {
-        console.error(`[Orchestrator] Linear token refresh failed: ${res.status}`);
-        return false;
-      }
-
-      const data = await res.json() as { access_token: string; refresh_token?: string };
-      setSetting(this.sqlExec, "linear_app_token", data.access_token);
-
-      if (data.refresh_token) {
-        setSetting(this.sqlExec, "linear_refresh_token", data.refresh_token);
-      }
-
-      console.log("[Orchestrator] Linear token refreshed successfully");
-      return true;
-    } catch (err) {
-      console.error("[Orchestrator] Linear token refresh error:", err);
-      return false;
-    }
-  }
 
   private initDb() {
     if (this.dbInitialized) return;
@@ -1388,55 +1237,6 @@ Respond with ONLY the JSON object, no other text.`,
     return Response.json(getSystemStatusData(this.sqlExec));
   }
 
-  private async handleStatusCommand(channel: string, threadTs: string): Promise<void> {
-    try {
-      const statusData = getSystemStatusData(this.sqlExec);
-      const message = formatStatusMessage(statusData, channel);
-      await this.postSlackMessage(channel, message, threadTs);
-      console.log(`[Orchestrator] Posted status to channel=${channel}`);
-    } catch (err) {
-      console.error("[Orchestrator] Failed to handle status command:", err);
-    }
-  }
-
-
-  /** Post a message to Slack. Returns the message ts on success, null on failure. */
-  private async postSlackMessage(
-    channel: string,
-    text: string,
-    threadTs?: string | null,
-  ): Promise<string | null> {
-    try {
-      const res = await fetch("https://slack.com/api/chat.postMessage", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${(this.env as any).SLACK_BOT_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          channel,
-          text,
-          ...(threadTs && { thread_ts: threadTs }),
-        }),
-      });
-
-      if (!res.ok) {
-        console.error(`[Orchestrator] Slack API error: ${res.status}`);
-        return null;
-      }
-
-      const data = await res.json() as { ok: boolean; ts?: string; error?: string };
-      if (!data.ok) {
-        console.error(`[Orchestrator] Slack API error: ${data.error}`);
-        return null;
-      }
-      return data.ts || null;
-    } catch (err) {
-      console.error("[Orchestrator] Failed to post Slack message:", err);
-      return null;
-    }
-  }
-
   private async handleSlackEvent(request: Request): Promise<Response> {
     const slackEvent = await request.json<{
       type: string;
@@ -1446,422 +1246,18 @@ Respond with ONLY the JSON object, no other text.`,
       thread_ts?: string;
       ts?: string;
       slash_command?: string;
-      // Reaction event fields
       reaction?: string;
       item?: { ts: string; channel: string };
     }>();
 
-    // Fast-ack: immediately add 👀 reaction so user knows we received the event
-    if (slackEvent.ts && slackEvent.channel && slackEvent.type === "app_mention") {
-      addReaction({
-        token: this.getSlackBotToken(),
-        channel: slackEvent.channel,
-        timestamp: slackEvent.ts,
-        name: "eyes",
-      }); // Fire-and-forget — don't await
-    }
-
-    // Scan for injection attacks before processing
-    if (slackEvent.text) {
-      const scanResult = await normalizeSlackEvent(slackEvent as Record<string, unknown>);
-      if (!scanResult.ok) {
-        console.warn(`[Orchestrator] Slack event rejected: ${scanResult.error}`);
-        return Response.json({ ok: true, rejected: true, reason: "injection detected" });
-      }
-    }
-
-    // Handle slash commands or /pe-status mentions
-    const isStatusCommand =
-      slackEvent.slash_command === "agent-status" ||
-      (slackEvent.type === "app_mention" &&
-        typeof slackEvent.text === "string" &&
-        /(^|\s)\/agent-status(\s|$)/.test(slackEvent.text));
-
-    if (isStatusCommand) {
-      console.log(
-        `[Orchestrator] Received /agent-status command from user=${slackEvent.user} channel=${slackEvent.channel}`,
-      );
-      const targetTs = slackEvent.thread_ts || slackEvent.ts || "";
-      await this.handleStatusCommand(slackEvent.channel || "", targetTs);
-      return Response.json({ ok: true, handled: "status_command" });
-    }
-
-    // If it's a thread reply, look up existing ticket by thread_ts
-    if (slackEvent.thread_ts) {
-      console.log(`[Orchestrator] Thread reply received: thread_ts=${slackEvent.thread_ts} type=${slackEvent.type} user=${slackEvent.user || "unknown"}`);
-      const rows = this.ctx.storage.sql.exec(
-        "SELECT ticket_uuid, product, status, agent_active FROM tickets WHERE slack_thread_ts = ?",
-        slackEvent.thread_ts,
-      ).toArray() as { ticket_uuid: string; product: string; status: string; agent_active: number }[];
-
-      if (rows.length > 0) {
-        const ticket = rows[0];
-        console.log(`[Orchestrator] Thread reply matched ticket=${ticket.ticket_uuid} product=${ticket.product}`);
-
-        // Don't re-activate terminal tickets
-        if (this.agentManager.isTerminalStatus(ticket.status)) {
-          console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.ticket_uuid} (status=${ticket.status}) — ignoring`);
-          return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
-        }
-
-        // Re-activate agent on thread reply — user is explicitly engaging
-        this.agentManager.reactivate(ticket.ticket_uuid);
-        const event: TicketEvent = {
-          type: "slack_reply",
-          source: "slack",
-          ticketUUID: ticket.ticket_uuid,
-          product: ticket.product,
-          payload: slackEvent,
-          slackThreadTs: slackEvent.thread_ts,
-          slackChannel: slackEvent.channel,
-        };
-        console.log(`[Orchestrator] Routing thread reply to agent for ticket=${ticket.ticket_uuid}`);
-        await this.agentManager.sendEvent(ticket.ticket_uuid, event);
-        return Response.json({ ok: true, ticketUUID: ticket.ticket_uuid });
-      } else {
-        console.log(`[Orchestrator] No ticket found for thread_ts=${slackEvent.thread_ts}`);
-      }
-
-      // Thread reply but no ticket found — silently ignore.
-      // Previously this posted an info message, but that was too noisy
-      // (deploy restarts, Socket Mode re-deliveries, etc. caused spam).
-      if (slackEvent.type === "message") {
-        return Response.json({ ok: true, ignored: true, reason: "thread not tracked" });
-      }
-    }
-
-    // Check if this message is in the conductor's dedicated channel.
-    // Conductor channel accepts ALL messages (no @-mention required).
-    const conductorChannelId = getSetting(this.sqlExec, "conductor_channel");
-
-    if (!conductorChannelId) {
-      console.log(`[Orchestrator] No conductor_channel configured in settings — conductor routing skipped for channel ${slackEvent.channel}`);
-    } else if (slackEvent.channel !== conductorChannelId) {
-      console.log(`[Orchestrator] Message in channel ${slackEvent.channel} does not match conductor channel ${conductorChannelId}`);
-    }
-
-    if (conductorChannelId && slackEvent.channel === conductorChannelId) {
-      console.log(`[Orchestrator] Mention in conductor channel ${conductorChannelId} — routing to Conductor`);
-
-      try {
-        const conductorStub = await this.ensureConductor();
-        const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-        const event: TicketEvent = {
-          type: "slack_mention",
-          source: "slack",
-          ticketUUID: `conductor-${slackEvent.ts || Date.now()}`,
-          product: "__conductor__",
-          payload: {
-            text: rawText,
-            user: slackEvent.user,
-            channel: slackEvent.channel,
-            ts: slackEvent.ts,
-          },
-          slackThreadTs: slackEvent.thread_ts || slackEvent.ts,
-          slackChannel: slackEvent.channel,
-        };
-        await conductorStub.fetch(new Request("http://project-agent/event", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(event),
-        }));
-        return Response.json({ ok: true, routed: "conductor" });
-      } catch (err) {
-        console.error("[Orchestrator] Failed to route to Conductor:", err);
-        return Response.json({ error: "conductor_routing_failed" }, { status: 500 });
-      }
-    }
-
-    // Resolve product from channel (needed for both @-mentions and plain messages)
-    const products = getAllProductConfigs(this.sqlExec);
-
-    const product = resolveProductFromChannel(products, slackEvent.channel || "");
-
-    if (!product) {
-      // Unmapped channel — only respond on @-mention, silently ignore plain messages
-      if (slackEvent.type === "app_mention") {
-        console.log(`[Orchestrator] No product mapped to channel ${slackEvent.channel} — replying to mention`);
-        await this.postSlackMessage(
-          slackEvent.channel || "",
-          `ℹ️ This channel is not configured for any product. Ask an admin to register it.`,
-          slackEvent.ts || ""
-        );
-      }
-      return Response.json({ ok: true, ignored: true, reason: "unmapped_channel" });
-    }
-
-    // Product channel: route ALL messages to ProjectAgent.
-    // For plain messages (no @-mention), route directly — no Linear ticket.
-    // For @-mentions, create a Linear ticket first (existing flow below).
-    if (slackEvent.type !== "app_mention") {
-      console.log(`[Orchestrator] Plain message in ${product} channel — routing to ProjectAgent`);
-      const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-      const event: TicketEvent = {
-        type: "slack_mention",
-        source: "slack",
-        ticketUUID: `chat-${slackEvent.ts || Date.now()}`,
-        product,
-        payload: {
-          text: rawText,
-          user: slackEvent.user,
-          channel: slackEvent.channel,
-          ts: slackEvent.ts,
-        },
-        slackThreadTs: slackEvent.thread_ts || slackEvent.ts,
-        slackChannel: slackEvent.channel,
-      };
-      this.routeToProjectAgent(product, event).catch(err =>
-        console.error(`[Orchestrator] ProjectAgent routing failed for ${product}:`, err)
-      );
-      return Response.json({ ok: true, routed: "project_agent", product });
-    }
-
-    const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
-
-    const productConfig = products[product];
-    const projectName = productConfig.triggers?.linear?.project_name;
-
-    // Products without Linear (e.g., research mode) route directly to ProjectAgent
-    // without creating a Linear ticket. A ticket record is still created in the DB
-    // so that thread replies can be routed back to the agent.
-    if (!projectName) {
-      console.log(`[Orchestrator] No Linear project for ${product} — routing directly to ProjectAgent`);
-
-      const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-      const ticketUUID = `slack-${slackEvent.ts || Date.now()}`;
-
-      // Create ticket record so thread replies can be routed
-      try {
-        this.agentManager.createTicket({
-          ticketUUID,
-          product,
-          slackThreadTs: slackThreadTs || undefined,
-          slackChannel: slackEvent.channel || undefined,
-          title: rawText.slice(0, 100),
-        });
-      } catch {
-        // Already exists — fine (e.g. re-delivery)
-      }
-
-      const directEvent: TicketEvent = {
-        type: "slack_mention",
-        source: "slack",
-        ticketUUID,
-        product,
-        payload: {
-          text: rawText,
-          user: slackEvent.user,
-          channel: slackEvent.channel,
-          ts: slackEvent.ts,
-        },
-        slackThreadTs: slackThreadTs || undefined,
-        slackChannel: slackEvent.channel || undefined,
-      };
-
-      // Route to ProjectAgent (fire-and-forget — don't block Slack response)
-      this.routeToProjectAgent(product, directEvent).catch(err =>
-        console.error(`[Orchestrator] Direct ProjectAgent routing failed for ${product}:`, err)
-      );
-
-      return Response.json({ ok: true, routed: "project_agent", product });
-    }
-
-    // Load settings for Linear API
-    const settings = this.ctx.storage.sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
-    const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
-    const teamId: string | undefined = settingsMap.linear_team_id;
-    const appUserId: string | undefined = settingsMap.linear_app_user_id;
-    const linearToken = this.getLinearAppToken();
-
-    if (!teamId || !linearToken) {
-      await this.postSlackMessage(
-        slackEvent.channel || "",
-        `❌ Linear integration not configured (missing team ID or token).`,
-        slackThreadTs || "",
-      );
-      return Response.json({ error: "linear not configured" }, { status: 500 });
-    }
-
-    // Strip the @mention from the text to get the raw request
-    const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-
-    // Use LLM to generate a structured title and description from the Slack message
-    let title: string;
-    let description: string;
-    try {
-      const generated = await this.generateTicketSummary(rawText, product, slackEvent.user || "unknown");
-      title = generated.title;
-      description = generated.description;
-    } catch (err) {
-      console.error("[Orchestrator] LLM title generation failed, using fallback:", err);
-      // Fallback: normalize whitespace and truncate
-      const normalized = rawText.replace(/\s+/g, " ").trim();
-      title = normalized
-        ? (normalized.length <= 200 ? normalized : normalized.slice(0, 197) + "...")
-        : "Slack request (no description)";
-      description = `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`;
-    }
-
-    // Look up the Linear project ID by name
-    const projectRes = await fetch("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${linearToken}`,
-      },
-      body: JSON.stringify({
-        query: `query($teamId: String!) {
-          team(id: $teamId) {
-            projects { nodes { id name } }
-          }
-        }`,
-        variables: { teamId },
-      }),
+    return handleSlackEventImpl(slackEvent, {
+      sql: this.sqlExec,
+      env: this.env as Record<string, unknown>,
+      agentManager: this.agentManager,
+      routeToProjectAgent: (product, event) => this.routeToProjectAgent(product, event),
+      ensureConductor: () => this.ensureConductor(),
+      handleTicketReview: (event) => this.handleTicketReview(event),
     });
-
-    let projectId: string | null = null;
-    if (projectRes.ok) {
-      const projectData = await projectRes.json() as {
-        data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } };
-        errors?: Array<{ message: string }>;
-      };
-      if (projectData.errors) {
-        console.error(`[Orchestrator] Linear project lookup errors:`, JSON.stringify(projectData.errors));
-      }
-      const normalizedName = projectName.toLowerCase();
-      const projects = projectData.data?.team?.projects?.nodes || [];
-      projectId = projects.find(p => p.name.toLowerCase() === normalizedName)?.id || null;
-      console.log(`[Orchestrator] Project lookup: name="${projectName}" found=${!!projectId} (${projects.length} projects in team)`);
-    } else {
-      console.error(`[Orchestrator] Linear project lookup failed: ${projectRes.status} ${await projectRes.text().catch(() => "")}`);
-    }
-
-    // Create the Linear issue
-    console.log(`[Orchestrator] Creating Linear issue: team=${teamId} project=${projectId} assignee=${appUserId} title="${title}"`);
-    const createRes = await fetch("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${linearToken}`,
-      },
-      body: JSON.stringify({
-        query: `mutation($input: IssueCreateInput!) {
-          issueCreate(input: $input) {
-            success
-            issue { id identifier url }
-          }
-        }`,
-        variables: {
-          input: {
-            teamId,
-            title,
-            description,
-            ...(projectId && { projectId }),
-            ...(appUserId && { assigneeId: appUserId }),
-          },
-        },
-      }),
-    });
-
-    if (!createRes.ok) {
-      const errText = await createRes.text();
-      console.error(`[Orchestrator] Failed to create Linear issue: ${createRes.status} ${errText}`);
-      await this.postSlackMessage(
-        slackEvent.channel || "",
-        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
-        slackThreadTs || "",
-      );
-      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
-    }
-
-    const createData = await createRes.json() as {
-      data?: { issueCreate?: { success: boolean; issue?: { id: string; identifier: string; url: string } } }
-    };
-    const issue = createData.data?.issueCreate?.issue;
-
-    if (!issue) {
-      console.error("[Orchestrator] Linear issueCreate returned no issue:", JSON.stringify(createData));
-      await this.postSlackMessage(
-        slackEvent.channel || "",
-        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
-        slackThreadTs || "",
-      );
-      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
-    }
-
-    console.log(`[Orchestrator] Created Linear issue ${issue.identifier} (${issue.id}) from Slack mention`);
-
-    // Post acknowledgment as a NEW top-level message (not a reply).
-    // This message becomes the ticket thread — all future updates reply here.
-    const ticketThreadTs = await this.postSlackMessage(
-      slackEvent.channel!,
-      `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
-    );
-
-    // Reply briefly in the user's original thread pointing to the ticket thread
-    if (ticketThreadTs) {
-      this.postSlackMessage(
-        slackEvent.channel!,
-        `👋 On it! Follow progress in the thread above.`,
-        slackThreadTs,
-      ).catch(err => console.warn("[Orchestrator] Failed to post thread pointer:", err));
-    }
-
-    // Store the Slack thread association so the Linear webhook handler can link them.
-    // Use the ack message ts (ticket thread) — NOT the user's original message ts.
-    const threadTsToStore = ticketThreadTs || slackThreadTs || null;
-    this.ctx.storage.sql.exec(
-      `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
-       VALUES (?, ?, ?)
-       ON CONFLICT(linear_issue_id) DO UPDATE SET
-         slack_thread_ts = excluded.slack_thread_ts,
-         slack_channel = excluded.slack_channel`,
-      issue.id, threadTsToStore, slackEvent.channel || null,
-    );
-
-    // Dispatch ticket review directly instead of waiting for the Linear webhook
-    // roundtrip. This is more resilient — works even if assignee can't be set (OAuth app
-    // users can't be assigned in Linear) or the webhook is delayed/fails.
-    const ticketEvent: TicketEvent = {
-      type: "ticket_created",
-      source: "slack",
-      ticketUUID: issue.id,
-      product,
-      payload: {
-        id: issue.id,
-        identifier: issue.identifier,
-        title,
-        description: rawText,
-        priority: 3,
-        labels: [],
-      },
-      slackThreadTs: threadTsToStore || undefined,
-      slackChannel: slackEvent.channel || undefined,
-    };
-
-    // Create ticket in DB before review — handleTicketReview requires the ticket to exist
-    // for updateStatus/spawnAgent. Use createTicket which is safe if Linear webhook
-    // already created it (handles terminal re-creation and throws for active duplicates).
-    try {
-      this.agentManager.createTicket({
-        ticketUUID: issue.id,
-        product,
-        slackThreadTs: threadTsToStore || undefined,
-        slackChannel: slackEvent.channel || undefined,
-        ticketId: issue.identifier,
-        title,
-      });
-    } catch {
-      // Ticket already exists (from a fast Linear webhook) — safe to proceed
-    }
-
-    // Initialize ticket_metrics row
-    ensureTicketMetrics(this.sqlExec, issue.id);
-
-    this.handleTicketReview(ticketEvent)
-      .catch(err => console.error("[Orchestrator] Direct ticket review failed:", err));
-
-    return Response.json({ ok: true, linearIssue: issue.identifier });
   }
 
   private async handleSlackInteractive(_request: Request): Promise<Response> {
