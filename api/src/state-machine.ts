@@ -48,8 +48,8 @@ export function applyTransition(ticket: TicketRecord, to: TicketState): TicketRe
     updated.agent_active = 0;
   }
 
-  // spawning → active activates the agent
-  if (ticket.status === "spawning" && to === "active") {
+  // Reactivate agent when transitioning to active from inactive states
+  if (to === "active" && (ticket.status === "spawning" || isTerminal(ticket.status))) {
     updated.agent_active = 1;
   }
 

@@ -36,6 +36,11 @@ function createMockSql(): SqlExec {
         store["terminal"] = "true";
         return { toArray: () => [] };
       }
+      // DELETE FROM config WHERE key = 'terminal'
+      if (sql.includes("DELETE FROM config") && sql.includes("'terminal'")) {
+        delete store["terminal"];
+        return { toArray: () => [] };
+      }
       return { toArray: () => [] };
     },
   };
@@ -83,5 +88,22 @@ describe("PersistentConfig", () => {
     pc.markTerminal();
     pc.markTerminal();
     expect(pc.isTerminal()).toBe(true);
+  });
+
+  test("clearTerminal() resets terminal flag", () => {
+    const sql = createMockSql();
+    const pc = new PersistentConfig<unknown>(sql);
+    pc.markTerminal();
+    expect(pc.isTerminal()).toBe(true);
+
+    pc.clearTerminal();
+    expect(pc.isTerminal()).toBe(false);
+  });
+
+  test("clearTerminal() is safe when not terminal", () => {
+    const sql = createMockSql();
+    const pc = new PersistentConfig<unknown>(sql);
+    pc.clearTerminal(); // should not throw
+    expect(pc.isTerminal()).toBe(false);
   });
 });
