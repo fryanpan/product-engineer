@@ -2170,13 +2170,9 @@ Respond with ONLY the JSON object, no other text.`,
         // Re-activate agent on thread reply — user is explicitly engaging
         this.agentManager.reactivate(ticket.ticket_uuid);
 
-        // Transition suspended → active
+        // Transition suspended → active (must succeed before re-spawn)
         if (ticket.status === "suspended") {
-          try {
-            this.agentManager.updateStatus(ticket.ticket_uuid, { status: "active" });
-          } catch (err) {
-            console.warn(`[Orchestrator] Failed to transition suspended→active for ${ticket.ticket_uuid}:`, err);
-          }
+          this.agentManager.updateStatus(ticket.ticket_uuid, { status: "active" });
         }
 
         const event: TicketEvent = {

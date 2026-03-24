@@ -202,24 +202,23 @@ export class AgentLifecycle {
     this.state.sessionActive = false;
     this.phoneHome(`session_completed msgs=${this.state.sessionMessageCount}`);
 
-    // Report token usage
-    await this.tokenTracker.report({
-      ticketUUID: this.config.ticketUUID,
-      workerUrl: this.config.workerUrl,
-      apiKey: this.config.apiKey,
-      slackBotToken: this.config.slackBotToken,
-      slackChannel: this.config.slackChannel,
-      slackThreadTs: this.config.slackThreadTs,
-      sessionMessageCount: this.state.sessionMessageCount,
-      model: this.config.model,
-    });
-
     if (this.roleConfig.persistAfterSession) {
-      // Project lead/research session completed — staying alive for next event
+      // Project lead/research session completed — report tokens here since
+      // autoSuspend won't be called (persistent agents stay alive).
+      await this.tokenTracker.report({
+        ticketUUID: this.config.ticketUUID,
+        workerUrl: this.config.workerUrl,
+        apiKey: this.config.apiKey,
+        slackBotToken: this.config.slackBotToken,
+        slackChannel: this.config.slackChannel,
+        slackThreadTs: this.config.slackThreadTs,
+        sessionMessageCount: this.state.sessionMessageCount,
+        model: this.config.model,
+      });
       console.log("[Agent] Persistent session completed — staying alive for next event");
       this.resetSession();
     } else {
-      // Auto-suspend so the session can be resumed if needed (e.g., after deploys)
+      // Auto-suspend handles token reporting, transcript upload, and orchestrator notification.
       console.log("[Agent] Session completed — auto-suspending for potential resume");
       this.stopTimers();
       this.autoSuspend("session_completed").catch((err) => {

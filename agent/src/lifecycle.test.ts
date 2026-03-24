@@ -266,8 +266,8 @@ describe("AgentLifecycle", () => {
       expect(lifecycle.state.sessionStatus).toBe("completed");
       expect(lifecycle.state.sessionActive).toBe(false);
 
-      // Token report called twice: once in handleSessionEnd, once in autoSuspend
-      expect(tokenTracker.report).toHaveBeenCalledTimes(2);
+      // Token report called once (in autoSuspend only — handleSessionEnd delegates to it)
+      expect(tokenTracker.report).toHaveBeenCalledTimes(1);
       expect(tokenTracker.reportCalls[0].ticketUUID).toBe("test-uuid");
       expect(tokenTracker.reportCalls[0].sessionMessageCount).toBe(15);
 
