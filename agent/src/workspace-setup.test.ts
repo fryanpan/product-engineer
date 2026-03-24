@@ -140,6 +140,46 @@ describe("injectSkills", () => {
   });
 });
 
+// ─── git exclude for injected skills ─────────────────────────────────────────
+
+describe("setupWorkspace git exclude", () => {
+  it("writes injected skill names to .git/info/exclude", async () => {
+    const phoneHome = mock(() => {});
+    globResults = ["ticket-agent/SKILL.md", "task-retro/SKILL.md"];
+
+    // Clone
+    spawnCalls.push({
+      cmd: ["git", "clone", "https://github.com/org/my-app.git", "/workspace/my-app"],
+      exitCode: 0,
+    });
+    // cp -r for each skill
+    spawnCalls.push({
+      cmd: ["cp", "-r", "/app/src/skills/ticket-agent", "/workspace/my-app/.claude/skills/ticket-agent"],
+      exitCode: 0,
+    });
+    spawnCalls.push({
+      cmd: ["cp", "-r", "/app/src/skills/task-retro", "/workspace/my-app/.claude/skills/task-retro"],
+      exitCode: 0,
+    });
+
+    // Provide existing .git/info/exclude content
+    fileContents.set("/workspace/my-app/.git/info/exclude", "# existing excludes\n");
+
+    await setupWorkspace({
+      repos: ["org/my-app"],
+      roleConfig: makeRoleConfig(),
+      phoneHome,
+    });
+
+    const excludeContent = writtenFiles.get("/workspace/my-app/.git/info/exclude");
+    expect(excludeContent).toContain("# Injected agent skills");
+    expect(excludeContent).toContain(".claude/skills/ticket-agent/");
+    expect(excludeContent).toContain(".claude/skills/task-retro/");
+    // Preserves existing content
+    expect(excludeContent).toContain("# existing excludes");
+  });
+});
+
 // ─── checkAndCheckoutWorkBranch ──────────────────────────────────────────────
 
 describe("checkAndCheckoutWorkBranch", () => {

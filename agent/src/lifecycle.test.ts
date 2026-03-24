@@ -121,7 +121,7 @@ describe("AgentLifecycle", () => {
     globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
       fetchCalls.push({ url: String(url), init: init! });
       return Promise.resolve(new Response("ok", { status: 200 }));
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
   });
 
   afterEach(() => {
@@ -134,7 +134,7 @@ describe("AgentLifecycle", () => {
       const s = lifecycle.state;
 
       expect(s.sessionActive).toBe(false);
-      expect(s.sessionStatus).toBe("idle");
+      expect(s.sessionStatus as string).toBe("idle");
       expect(s.sessionMessageCount).toBe(0);
       expect(s.sessionStartTime).toBe(0);
       expect(s.lastMessageTime).toBe(0);
@@ -166,7 +166,7 @@ describe("AgentLifecycle", () => {
       lifecycle.resetSession();
 
       expect(lifecycle.state.sessionActive).toBe(false);
-      expect(lifecycle.state.sessionStatus).toBe("idle");
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
       expect(lifecycle.state.sessionMessageCount).toBe(0);
       expect(lifecycle.state.sessionStartTime).toBe(0);
       expect(lifecycle.state.sessionError).toBe("");
@@ -213,7 +213,7 @@ describe("AgentLifecycle", () => {
     });
 
     test("does not throw when fetch fails", () => {
-      globalThis.fetch = mock(() => Promise.reject(new Error("network error"))) as typeof fetch;
+      globalThis.fetch = mock(() => Promise.reject(new Error("network error"))) as unknown as typeof fetch;
       const { lifecycle } = createLifecycle();
 
       // Should not throw
@@ -263,7 +263,7 @@ describe("AgentLifecycle", () => {
       await new Promise((r) => setTimeout(r, 10));
 
       // State updated
-      expect(lifecycle.state.sessionStatus).toBe("completed");
+      expect(lifecycle.state.sessionStatus as string).toBe("completed");
       expect(lifecycle.state.sessionActive).toBe(false);
 
       // Token report called once (in autoSuspend only — handleSessionEnd delegates to it)
@@ -293,7 +293,7 @@ describe("AgentLifecycle", () => {
       expect(tokenTracker.report).toHaveBeenCalledTimes(1);
 
       // Session was reset (not exited)
-      expect(lifecycle.state.sessionStatus).toBe("idle");
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
       expect(lifecycle.state.sessionActive).toBe(false);
       expect(lifecycle.state.sessionMessageCount).toBe(0);
       expect(lifecycle.state.lastToolCall).toBe("");
@@ -336,7 +336,7 @@ describe("AgentLifecycle", () => {
       await lifecycle.handleSessionError(error);
 
       // State updated
-      expect(lifecycle.state.sessionStatus).toBe("error");
+      expect(lifecycle.state.sessionStatus as string).toBe("error");
       expect(lifecycle.state.sessionActive).toBe(false);
       expect(lifecycle.state.sessionError).toBe("Error: SDK crashed");
 
@@ -361,7 +361,7 @@ describe("AgentLifecycle", () => {
       await lifecycle.handleSessionError(error);
 
       // Session was reset
-      expect(lifecycle.state.sessionStatus).toBe("idle");
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
       expect(lifecycle.state.sessionActive).toBe(false);
       expect(lifecycle.state.sessionMessageCount).toBe(0);
       expect(lifecycle.state.lastToolCall).toBe("");

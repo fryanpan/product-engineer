@@ -80,6 +80,18 @@ If a Notion URL appeared earlier in the session, default to writing there unless
   2. Codex CLI review: `codex review -c 'model="gpt-5.4"' --base <base-branch>` (run via Bash tool in background)
 - Combine findings from both reviewers before presenting results
 
+### Review Criteria
+
+Every code review (whether reviewing your own work or someone else's) must evaluate:
+
+1. **Goal completeness** — Does the change fully achieve its intended goal or use case? Are there edge cases, error paths, or user flows that aren't handled? A partial solution that looks clean is still incomplete.
+
+2. **Simplicity** — Is this the simplest change that achieves the goal? Look for: unnecessary abstractions, premature generalization, features not requested, over-engineering. If the same result could be achieved with less code or fewer moving parts, flag it.
+
+3. **Testing sufficiency** — Has enough testing been done? Key interfaces, non-trivial logic, and data transformations should be tested. Integration paths that could break should be covered. "It works on my machine" is not sufficient — what evidence exists that it works?
+
+4. **Coupling and cohesion** — Does each module/class/function have a single clear responsibility (high cohesion)? Are dependencies between modules minimal and well-defined (low coupling)? If a change touches many unrelated files, or a single file handles many unrelated concerns, flag the opportunity to restructure. This applies to both new code AND existing code touched by the change.
+
 ## Commit Discipline
 
 Commit early and often to create an incremental record. Key checkpoints:
@@ -90,6 +102,10 @@ Commit early and often to create an incremental record. Key checkpoints:
 - **After retro/learnings updates**: Commit changes to `docs/process/` files
 
 Use descriptive commit messages that explain *why*, not just *what*.
+
+## Post-Implementation
+
+When all implementation tasks are complete and tests pass, invoke the `ship-it` skill **before** handing control back to the user. This runs code review, creates the PR, and monitors CI/Copilot feedback automatically.
 
 ## Diagrams
 

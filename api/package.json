@@ -13,13 +13,13 @@
     "@andersmyrmel/vard": "^1.2.0",
     "@cloudflare/containers": "^0.1.1",
     "@sentry/cloudflare": "^10.40.0",
-    "hono": "^4.12.5"
+    "hono": "^4.12.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241205.0",
     "@types/bun": "^1.3.9",
     "@types/node": "^25.3.5",
     "typescript": "^5.9.3",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.77.0"
   }
 }

@@ -622,3 +622,32 @@ When gathering context for LLM decisions, failing with clear error is better tha
 - Consider adding Linear comment sync as a recurring check (not just on webhook)
 - Add integration test that verifies agent receives ticket comments
 - Document the ticket data flow: Linear webhook → orchestrator → agent event → prompt builder
+
+---
+
+## 2026-03-24 - Linear Status Synchronization Fix
+
+**Context**: Fixed agents not updating Linear ticket status properly
+
+**What worked:**
+- Systematic investigation: traced complete flow from agent → orchestrator → Linear API
+- Found root cause quickly: silent failures in StatusUpdater with inadequate logging
+- Comprehensive testing: created 7 integration tests covering all error scenarios
+- Clear documentation: wrote diagnostic guide for operators
+
+**What didn't:**
+- Pre-existing typecheck errors in main branch blocked CI
+- Should have checked CI status on main before starting work
+- Could have committed skill files separately (they were added automatically)
+
+**Action:**
+- Enhanced StatusUpdater with detailed error logging for all failure paths
+- Created integration tests to prevent regression
+- Documented diagnostic patterns in `docs/linear-status-sync-fix.md`
+- PR ready for review despite CI typecheck failures (unrelated to changes)
+
+**Learnings:**
+- Always check CI status on target branch before starting
+- StatusUpdater pattern is solid: parallel updates with graceful error handling
+- Linear GraphQL API requires issue ID (UUID), not identifier (e.g., "PE-42")
+- Silent failures are debugging nightmares - log everything with context
