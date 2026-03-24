@@ -60,4 +60,10 @@ export class PersistentConfig<T> {
        ON CONFLICT(key) DO UPDATE SET value = 'true'`,
     );
   }
+
+  /** Clear the terminal flag so the container can accept events again. */
+  clearTerminal(): void {
+    this.ensureTable();
+    this.sql.exec("DELETE FROM config WHERE key = 'terminal'");
+  }
 }

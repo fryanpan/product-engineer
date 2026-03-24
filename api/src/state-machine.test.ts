@@ -39,10 +39,11 @@ describe("canTransition", () => {
     expect(canTransition("active", "active")).toBe(true);
   });
 
-  test("returns false for any transition out of terminal states", () => {
+  test("terminal states can only transition to active (reopen)", () => {
     for (const terminal of TERMINAL_STATUSES) {
+      expect(canTransition(terminal, "active")).toBe(true);
       expect(canTransition(terminal, "created")).toBe(false);
-      expect(canTransition(terminal, "active")).toBe(false);
+      expect(canTransition(terminal, "spawning")).toBe(false);
     }
   });
 });
@@ -98,11 +99,12 @@ describe("applyTransition", () => {
     expect(result!.status).toBe("active");
   });
 
-  test("no transitions out of terminal states", () => {
+  test("terminal states can transition to active (reopen)", () => {
     for (const terminal of TERMINAL_STATUSES) {
-      const ticket = makeTicket({ status: terminal });
+      const ticket = makeTicket({ status: terminal, agent_active: 0 });
       const result = applyTransition(ticket, "active");
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result!.status).toBe("active");
     }
   });
 

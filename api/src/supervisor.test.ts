@@ -59,6 +59,13 @@ function createMockSql() {
         return { toArray: () => (row ? [{ ...row }] : []) };
       }
 
+      // SELECT ... FROM tickets WHERE slack_thread_ts = ?
+      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE slack_thread_ts =")) {
+        const threadTs = params[0] as string;
+        const row = [...tickets.values()].find((t) => t.slack_thread_ts === threadTs);
+        return { toArray: () => (row ? [{ ...row }] : []) };
+      }
+
       // SELECT stale agents (supervisor tick query)
       if (trimmed.includes("agent_active = 1") && trimmed.includes("last_heartbeat IS NOT NULL") && trimmed.includes("-5 minutes")) {
         // For testing, we compare last_heartbeat against 5 minutes ago
@@ -656,5 +663,94 @@ describe("Terminal state protection in handleEvent", () => {
   it("allows events for non-existent tickets (will be created)", () => {
     const result = checkEventTerminalGuard(sql, "nonexistent");
     expect(result.ignored).toBe(false);
+  });
+});
+
+// ─── Thread reply routing decision ──────────────────────────────────────────
+
+/**
+ * Mirrors the thread reply routing logic in orchestrator.ts handleSlackEvent.
+ * Determines whether a thread reply should respawn the container or route to
+ * an existing one.
+ */
+function threadReplyRoutingDecision(
+  sql: ReturnType<typeof createMockSql>,
+  threadTs: string,
+): { found: boolean; wasTerminal: boolean; needsRespawn: boolean } {
+  const rows = sql.exec(
+    "SELECT ticket_uuid, product, status, agent_active FROM tickets WHERE slack_thread_ts = ?",
+    threadTs,
+  ).toArray() as { ticket_uuid: string; product: string; status: string; agent_active: number }[];
+
+  if (rows.length === 0) {
+    return { found: false, wasTerminal: false, needsRespawn: false };
+  }
+
+  const ticket = rows[0];
+  const isTerminal = (TERMINAL_STATUSES as readonly string[]).includes(ticket.status);
+
+  // Terminal tickets get reopened and respawned (not ignored)
+  const needsRespawn = isTerminal || ticket.status === "suspended" || ticket.agent_active === 0;
+  return { found: true, wasTerminal: isTerminal, needsRespawn };
+}
+
+describe("Thread reply routing", () => {
+  let sql: ReturnType<typeof createMockSql>;
+
+  beforeEach(() => {
+    sql = createMockSql();
+  });
+
+  it("returns not-found for unknown thread_ts", () => {
+    const result = threadReplyRoutingDecision(sql, "unknown-ts");
+    expect(result.found).toBe(false);
+  });
+
+  it("reopens and respawns merged tickets", () => {
+    insertTicket(sql, "PE-1", { status: "merged", agent_active: 0, slack_thread_ts: "thread-1" });
+
+    const result = threadReplyRoutingDecision(sql, "thread-1");
+    expect(result.wasTerminal).toBe(true);
+    expect(result.needsRespawn).toBe(true);
+  });
+
+  it("reopens and respawns closed tickets", () => {
+    insertTicket(sql, "PE-1", { status: "closed", agent_active: 0, slack_thread_ts: "thread-1" });
+
+    const result = threadReplyRoutingDecision(sql, "thread-1");
+    expect(result.wasTerminal).toBe(true);
+    expect(result.needsRespawn).toBe(true);
+  });
+
+  it("needs respawn for suspended tickets", () => {
+    insertTicket(sql, "PE-1", { status: "suspended", agent_active: 0, slack_thread_ts: "thread-1" });
+
+    const result = threadReplyRoutingDecision(sql, "thread-1");
+    expect(result.wasTerminal).toBe(false);
+    expect(result.needsRespawn).toBe(true);
+  });
+
+  it("needs respawn for active tickets with agent_active=0 (dead container)", () => {
+    insertTicket(sql, "PE-1", { status: "active", agent_active: 0, slack_thread_ts: "thread-1" });
+
+    const result = threadReplyRoutingDecision(sql, "thread-1");
+    expect(result.wasTerminal).toBe(false);
+    expect(result.needsRespawn).toBe(true);
+  });
+
+  it("needs respawn for pr_open tickets with agent_active=0 (post-deploy)", () => {
+    insertTicket(sql, "PE-1", { status: "pr_open", agent_active: 0, slack_thread_ts: "thread-1" });
+
+    const result = threadReplyRoutingDecision(sql, "thread-1");
+    expect(result.wasTerminal).toBe(false);
+    expect(result.needsRespawn).toBe(true);
+  });
+
+  it("routes to existing container for active tickets with agent_active=1", () => {
+    insertTicket(sql, "PE-1", { status: "active", agent_active: 1, slack_thread_ts: "thread-1" });
+
+    const result = threadReplyRoutingDecision(sql, "thread-1");
+    expect(result.wasTerminal).toBe(false);
+    expect(result.needsRespawn).toBe(false);
   });
 });

@@ -149,9 +149,9 @@ const defaultSpawnConfig: SpawnConfig = {
 };
 
 describe("State machine", () => {
-  it("terminal states have no outgoing transitions", () => {
+  it("terminal states can only transition to active (reopen)", () => {
     for (const state of TERMINAL_STATUSES) {
-      expect(VALID_TRANSITIONS[state]).toEqual([]);
+      expect(VALID_TRANSITIONS[state]).toEqual(["active"]);
     }
   });
 
@@ -765,6 +765,26 @@ describe("AgentManager", () => {
 
       manager.reactivate("PE-1");
       expect(manager.getTicket("PE-1")!.agent_active).toBe(0);
+    });
+  });
+
+  describe("reopenTicket", () => {
+    it("transitions terminal ticket to active with agent_active=1", async () => {
+      manager.createTicket(defaultParams);
+      manager.updateStatus("PE-1", { status: "failed" });
+      expect(manager.getTicket("PE-1")!.status).toBe("failed");
+      expect(manager.getTicket("PE-1")!.agent_active).toBe(0);
+
+      await manager.reopenTicket("PE-1");
+      const ticket = manager.getTicket("PE-1")!;
+      expect(ticket.status).toBe("active");
+      expect(ticket.agent_active).toBe(1);
+    });
+
+    it("no-ops for non-terminal ticket", async () => {
+      manager.createTicket(defaultParams);
+      await manager.reopenTicket("PE-1");
+      expect(manager.getTicket("PE-1")!.status).toBe("created");
     });
   });
 
