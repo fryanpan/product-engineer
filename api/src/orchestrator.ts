@@ -2146,16 +2146,25 @@ Respond with ONLY the JSON object, no other text.`,
         const ticket = rows[0];
         console.log(`[Orchestrator] Thread reply matched ticket=${ticket.ticket_uuid} product=${ticket.product}`);
 
-        // Don't re-activate terminal tickets
+        // Don't re-activate terminal tickets — but tell the user
         if (this.agentManager.isTerminalStatus(ticket.status)) {
-          console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.ticket_uuid} (status=${ticket.status}) — ignoring`);
+          console.log(`[Orchestrator] Thread reply for terminal ticket ${ticket.ticket_uuid} (status=${ticket.status}) — notifying user`);
+          const channel = slackEvent.channel;
+          if (channel) {
+            await this.postSlackMessage(
+              channel,
+              `This task has already been completed (status: ${ticket.status}). To start new work, send a new message in the channel.`,
+              slackEvent.thread_ts,
+            );
+          }
           return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
         }
 
-        // For suspended tickets, read resume context BEFORE transitioning state
+        // Read resume context for suspended or inactive tickets (container likely dead)
+        const needsRespawn = ticket.status === "suspended" || ticket.agent_active === 0;
         let resumeSessionId: string | undefined;
         let resumeTranscriptR2Key: string | undefined;
-        if (ticket.status === "suspended") {
+        if (needsRespawn) {
           const fullTicket = this.ctx.storage.sql.exec(
             "SELECT session_id, transcript_r2_key FROM tickets WHERE ticket_uuid = ?",
             ticket.ticket_uuid,
@@ -2164,7 +2173,7 @@ Respond with ONLY the JSON object, no other text.`,
             resumeSessionId = fullTicket.session_id || undefined;
             resumeTranscriptR2Key = fullTicket.transcript_r2_key || undefined;
           }
-          console.log(`[Orchestrator] Resuming suspended ticket ${ticket.ticket_uuid} session=${resumeSessionId || "none"} transcript=${resumeTranscriptR2Key || "none"}`);
+          console.log(`[Orchestrator] Will respawn for ticket ${ticket.ticket_uuid} (status=${ticket.status}, agent_active=${ticket.agent_active}) session=${resumeSessionId || "none"} transcript=${resumeTranscriptR2Key || "none"}`);
         }
 
         // Re-activate agent on thread reply — user is explicitly engaging
@@ -2187,18 +2196,18 @@ Respond with ONLY the JSON object, no other text.`,
           resumeTranscriptR2Key,
         };
 
-        // For suspended tickets, the container has exited — re-spawn it.
-        // For active tickets, sendEvent routes to the running container.
-        if (ticket.status === "suspended") {
-          console.log(`[Orchestrator] Re-spawning container for suspended ticket=${ticket.ticket_uuid}`);
+        // Respawn if container is likely dead (suspended or was inactive).
+        // For active tickets with a running container, sendEvent routes directly.
+        if (needsRespawn) {
+          console.log(`[Orchestrator] Re-spawning container for ticket=${ticket.ticket_uuid} (was ${ticket.status}, agent_active=${ticket.agent_active})`);
           try {
             await this.respawnSuspendedAgent(ticket.ticket_uuid, ticket.product, event);
           } catch (err) {
-            console.error(`[Orchestrator] Failed to re-spawn suspended agent for ${ticket.ticket_uuid}:`, err);
+            console.error(`[Orchestrator] Failed to re-spawn agent for ${ticket.ticket_uuid}:`, err);
             return Response.json({ error: "Failed to re-spawn agent" }, { status: 500 });
           }
         } else {
-          console.log(`[Orchestrator] Routing thread reply to agent for ticket=${ticket.ticket_uuid}`);
+          console.log(`[Orchestrator] Routing thread reply to active agent for ticket=${ticket.ticket_uuid}`);
           await this.agentManager.sendEvent(ticket.ticket_uuid, event);
         }
         return Response.json({ ok: true, ticketUUID: ticket.ticket_uuid });
