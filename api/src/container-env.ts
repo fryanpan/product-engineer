@@ -16,7 +16,6 @@ export interface ContainerEnvConfig {
   model?: string;
   mode?: "coding" | "research" | "flexible";
   slackPersona?: { username: string; icon_emoji?: string; icon_url?: string };
-  gatewayConfig?: CloudflareAIGateway | null;
 }
 
 /**
@@ -24,7 +23,7 @@ export interface ContainerEnvConfig {
  *
  * @param config  - Agent config (product, repos, secrets, etc.)
  * @param env     - Platform env bindings (secrets store values)
- * @param gatewayConfig - Optional AI Gateway config (overrides config.gatewayConfig)
+ * @param gatewayConfig - AI Gateway config (pass null to disable)
  * @param extraVars - Role-specific vars (e.g., TICKET_UUID, AGENT_ROLE)
  */
 export function resolveContainerEnvVars(

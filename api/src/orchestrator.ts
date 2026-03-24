@@ -171,16 +171,17 @@ export class Orchestrator extends Container<Bindings> {
 
 
   private getGithubTokens(): Record<string, string> {
-    // Build product→token map from per-product token bindings in env
     const tokens: Record<string, string> = {};
-    // Load product configs to map slug → secret binding name
-    const allProducts = getAllProductConfigs(this.sqlExec);
-
-    for (const [slug, config] of Object.entries(allProducts)) {
-      const tokenBinding = config.secrets?.GITHUB_TOKEN;
-      if (tokenBinding && (this.env as Record<string, unknown>)[tokenBinding]) {
-        tokens[slug] = (this.env as Record<string, unknown>)[tokenBinding] as string;
+    try {
+      const allProducts = getAllProductConfigs(this.sqlExec);
+      for (const [slug, config] of Object.entries(allProducts)) {
+        const tokenBinding = config.secrets?.GITHUB_TOKEN;
+        if (tokenBinding && (this.env as Record<string, unknown>)[tokenBinding]) {
+          tokens[slug] = (this.env as Record<string, unknown>)[tokenBinding] as string;
+        }
       }
+    } catch (err) {
+      console.error("[Orchestrator] Failed to load product configs for GitHub tokens:", err);
     }
     return tokens;
   }

@@ -167,15 +167,15 @@ export function seedProducts(
 
   // Upsert products
   for (const [slug, config] of Object.entries(registry.products)) {
+    const exists = sql.exec("SELECT 1 FROM products WHERE slug = ?", slug).toArray().length > 0;
     sql.exec(
       `INSERT INTO products (slug, config) VALUES (?, ?)
        ON CONFLICT(slug) DO UPDATE SET config = excluded.config, updated_at = datetime('now')`,
       slug,
       JSON.stringify(config),
     );
-    // Count as created or updated based on whether rows changed
-    const changes = sql.exec("SELECT changes() as count").toArray() as Array<{ count: number }>;
-    if (changes[0].count > 0) productsCreated++;
+    if (exists) productsUpdated++;
+    else productsCreated++;
   }
 
   return Response.json({
