@@ -18,16 +18,16 @@
 
 | Repo | PR | Status | alwaysApply Before | alwaysApply After | Reduction |
 |------|----|----|----|----|-----|
-| bike-tool | [#24](https://github.com/fryanpan/bike-tool/pull/24) | Open | 167 lines | 103 lines | -38% |
-| health-tool | [#130](https://github.com/fryanpan/health-tool/pull/130) | Open | 171 lines | 103 lines | -40% |
-| blog-assistant | [#6](https://github.com/fryanpan/blog-assistant/pull/6) | Open | 93 lines | 103 lines | +11%* |
-| givewell-impact | [#10](https://github.com/fryanpan/givewell-impact/pull/10) | Open | ~130 lines | 103 lines | ~-21% |
-| octoturtle_assistant | [#4](https://github.com/fryanpan/octoturtle_assistant/pull/4) | Open | ~130 lines | 103 lines | ~-21% |
-| personal-crm | [#8](https://github.com/fryanpan/personal-crm/pull/8) | Open | ~130 lines | 103 lines | ~-21% |
-| personal-finance | [#2](https://github.com/fryanpan/personal-finance/pull/2) | Open | ~130 lines | 103 lines | ~-21% |
-| research-notes | [#3](https://github.com/fryanpan/research-notes/pull/3) | Open | ~130 lines | 103 lines | ~-21% |
-| task-pilot | [#2](https://github.com/fryanpan/task-pilot/pull/2) | Open | ~130 lines | 103 lines | ~-21% |
-| product-engineer | [#119](https://github.com/fryanpan/product-engineer/pull/119) | Open | 39+64=103 | 39+64=103 | 0% (template repo) |
+| bike-tool | [#24](https://github.com/fryanpan/bike-tool/pull/24) | **Merged** | 167 lines | 103 lines | -38% |
+| health-tool | [#130](https://github.com/fryanpan/health-tool/pull/130) | **Merged** | 171 lines | 103 lines | -40% |
+| blog-assistant | [#6](https://github.com/fryanpan/blog-assistant/pull/6) | **Merged** | 93 lines | 103 lines | +11%* |
+| givewell-impact | [#10](https://github.com/fryanpan/givewell-impact/pull/10) | **Merged** | ~130 lines | 103 lines | ~-21% |
+| octoturtle_assistant | [#4](https://github.com/fryanpan/octoturtle_assistant/pull/4) | **Merged** | ~130 lines | 103 lines | ~-21% |
+| personal-crm | [#8](https://github.com/fryanpan/personal-crm/pull/8) | **Merged** | ~130 lines | 103 lines | ~-21% |
+| personal-finance | [#2](https://github.com/fryanpan/personal-finance/pull/2) | **Merged** | ~130 lines | 103 lines | ~-21% |
+| research-notes | [#3](https://github.com/fryanpan/research-notes/pull/3) | **Merged** | ~130 lines | 103 lines | ~-21% |
+| task-pilot | [#2](https://github.com/fryanpan/task-pilot/pull/2) | **Merged** | ~130 lines | 103 lines | ~-21% |
+| product-engineer | [#119](https://github.com/fryanpan/product-engineer/pull/119) | In Review | 39+64=103 | 39+64=103 | 0% (template repo) |
 
 \* blog-assistant had already been partially updated, so final count is slightly higher
 
