@@ -130,9 +130,9 @@ describe("TranscriptManager", () => {
         expect(body.r2Key).toBe(`test-uuid-1234-test-session.jsonl`);
 
         // Second upload — same size, should skip
-        fetchSpy.mockClear();
+        const callsBefore = fetchSpy.mock.calls.length;
         await manager.upload();
-        expect(fetchSpy).toHaveBeenCalledTimes(0);
+        expect(fetchSpy.mock.calls.length).toBe(callsBefore);
 
         // Third upload with force — should upload despite same size
         fetchSpy.mockClear();
