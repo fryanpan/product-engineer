@@ -33,12 +33,17 @@ export function initSchema(sql: SqlExec): void {
       slack_channel TEXT,
       pr_url TEXT,
       branch_name TEXT,
+      task_id TEXT,
+      title TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       agent_active INTEGER NOT NULL DEFAULT 1,
       last_heartbeat TEXT,
       transcript_r2_key TEXT,
-      session_id TEXT
+      session_id TEXT,
+      agent_message TEXT,
+      checks_passed INTEGER DEFAULT 0,
+      last_merge_decision_sha TEXT
     )
   `);
 
