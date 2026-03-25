@@ -6,7 +6,7 @@
 
 ## Investigation Summary
 
-Traced the complete status sync flow from agent → orchestrator → Linear API:
+Traced the complete status sync flow from agent → conductor → Linear API:
 
 ### How Status Updates Work
 
@@ -149,8 +149,8 @@ Look for these patterns:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| "Skipping Linear update — no token configured" | `LINEAR_APP_TOKEN` not set in orchestrator env | Set token via `wrangler secret put LINEAR_APP_TOKEN` |
-| "Linear state query failed: 401 Unauthorized" | Token expired or invalid | Refresh token (auto-refreshed every 12h by orchestrator) |
+| "Skipping Linear update — no token configured" | `LINEAR_APP_TOKEN` not set in conductor env | Set token via `wrangler secret put LINEAR_APP_TOKEN` |
+| "Linear state query failed: 401 Unauthorized" | Token expired or invalid | Refresh token (auto-refreshed every 12h by conductor) |
 | "Could not find Linear state..." | Team workflow doesn't have the target state | Check team settings in Linear, add missing state |
 | "Invalid issue ID" | ticketUUID is not a valid Linear issue ID | Verify ticket was created via Linear webhook or Slack mention (not manually in DB) |
 
@@ -159,5 +159,5 @@ Look for these patterns:
 - `agent/src/status-updater.ts` — StatusUpdater class (enhanced logging)
 - `agent/src/status-updater-integration.test.ts` — Integration tests (new)
 - `agent/src/tools.ts` — update_task_status tool (calls StatusUpdater)
-- `api/src/orchestrator.ts` — handleStatusUpdate endpoint
-- `api/src/agent-manager.ts` — spawnAgent passes ticketId to agent
+- `api/src/conductor.ts` — handleStatusUpdate endpoint
+- `api/src/task-manager.ts` — spawnAgent passes ticketId to agent

@@ -13,7 +13,7 @@ Use this skill when you need to:
 
 ## How It Works
 
-This skill provides CLI tools that interact with the deployed orchestrator's admin API to manage the product registry.
+This skill provides CLI tools that interact with the deployed conductor's admin API to manage the product registry.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ The following environment variables must be set:
 - `WORKER_URL` - The deployed Worker URL (e.g., https://product-engineer.your-subdomain.workers.dev)
 - `API_KEY` - Admin API key for authentication
 
-These are already set in the agent environment by the orchestrator.
+These are already set in the agent environment by the conductor.
 
 ## Available Commands
 

@@ -18,7 +18,7 @@ The command returns a formatted status message with:
 
 ### Summary
 - **Active agents**: Current count of running agents
-- **Completed (24h)**: Tickets completed in the last 24 hours
+- **Completed (24h)**: Tasks completed in the last 24 hours
 - **Stale agents**: Agents with no heartbeat in >30 minutes (if any)
 
 ### Active Agents
@@ -29,20 +29,20 @@ For each active agent:
   - 🧡 Getting stale (15-30 min)
   - ❤️ Stale (>30 min)
 - **Status emoji**: ⏳ in_progress, 👀 pr_open/in_review, ✅ merged/closed, etc.
-- **Ticket ID** and **product**
+- **Task ID** and **product**
 - **Current status** and **time since last update**
 - **PR URL** (if available)
 - **Slack thread link** (if available)
 
 ### Stale Agents Warning
 If any agents haven't sent a heartbeat in >30 minutes, they're listed with:
-- Ticket ID
+- Task ID
 - Product
 - Minutes since last heartbeat
 
 ### Recent Completions
-Last 5 completed tickets from the past 24 hours, showing:
-- Ticket ID
+Last 5 completed tasks from the past 24 hours, showing:
+- Task ID
 - Product
 - Time since completion
 - PR URL (if available)
@@ -54,16 +54,16 @@ Last 5 completed tickets from the past 24 hours, showing:
 1. **Slack Socket Mode** (`containers/orchestrator/slack-socket.ts`)
    - Detects `/agent-status` in message text
    - Adds `slash_command: "agent-status"` field to event
-   - Forwards to Orchestrator DO
+   - Forwards to Conductor DO
 
-2. **Orchestrator DO** (`api/src/orchestrator.ts`)
+2. **Conductor DO** (`api/src/conductor.ts`)
    - `handleSlackEvent()`: Routes slash commands
    - `getSystemStatus()`: Queries SQLite for agent data
    - `handleStatusCommand()`: Formats and posts Slack response
 
 ### Data Sources
 
-All data comes from the `tickets` table in Orchestrator DO's SQLite database:
+All data comes from the `tasks` table in Conductor DO's SQLite database:
 
 - **Active agents**: `agent_active = 1`
 - **Health**: `last_heartbeat` timestamp (agents send heartbeat every 2 minutes)
@@ -79,7 +79,7 @@ Agents send heartbeats every 2 minutes while active. Health is calculated based 
 | <5 min | 💚 | Fresh - agent is actively working |
 | 5-15 min | 💛 | Recent - agent may be idle or between turns |
 | 15-30 min | 🧡 | Getting stale - agent may be stuck |
-| >30 min | ❤��� | Stale - agent likely needs investigation |
+| >30 min | ❤️ | Stale - agent likely needs investigation |
 
 Stale agents (>30 min) are also listed separately with a warning.
 
@@ -100,6 +100,6 @@ Test in Slack:
 ## Related Files
 
 - `containers/orchestrator/slack-socket.ts` - Slash command detection
-- `api/src/orchestrator.ts` - Status query and response formatting
+- `api/src/conductor.ts` - Status query and response formatting
 - `api/src/status-command.test.ts` - Unit tests
 - `agent/src/server.ts` - Heartbeat sending (line 247-265)

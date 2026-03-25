@@ -41,7 +41,7 @@ curl -X POST https://your-worker.workers.dev/api/products/seed \
 
 Replace `YOUR_ACCOUNT_ID_HERE` and `YOUR_GATEWAY_ID_HERE` with the values from Step 1.
 
-### 3. Deploy the Orchestrator
+### 3. Deploy the Conductor
 
 ```bash
 cd api
@@ -122,7 +122,7 @@ Check that the dashboard shows:
 - [ ] Gateway created in Cloudflare dashboard
 - [ ] Registry updated with Account ID and Gateway ID
 - [ ] Changes committed to git
-- [ ] Orchestrator deployed
+- [ ] Conductor deployed
 - [ ] Test agent run completed successfully
 - [ ] Dashboard shows request traffic
 - [ ] Screenshot captured and posted

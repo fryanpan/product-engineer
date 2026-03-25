@@ -10,7 +10,7 @@ If any item cannot be satisfied, ask for help via Slack instead of creating the 
 - [ ] No secrets, API keys, personal project names, or repo URLs in committed code
 - [ ] Changes match what was requested — no unrelated refactoring or scope creep
 
-## When: workflow, orchestrator, or lifecycle changes
+## When: workflow, conductor, or lifecycle changes
 - [ ] Integration tested in staging — demonstrate the happy path works with real data
 - [ ] Edge cases tested: what happens on container restart, deploy, alarm fire, or terminal state transition?
 - [ ] Updated `docs/deployment-safety.md` if container lifecycle behavior changed

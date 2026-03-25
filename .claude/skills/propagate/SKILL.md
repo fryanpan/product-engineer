@@ -26,7 +26,7 @@ Compare projects against `templates/` and push approved updates via GitHub PRs.
    - If a target project is specified in arguments, match it against product slugs or repo names
    - If no target is specified, iterate over ALL products and ALL their repos
    - Each unique repo is a propagation target
-   - The `WORKER_URL` and `API_KEY` can be found in the orchestrator's Cloudflare secrets or env
+   - The `WORKER_URL` and `API_KEY` can be found in the conductor's Cloudflare secrets or env
 
 3. **For each target repo**, clone it to a temp directory (or use `gh repo clone <repo> /tmp/<repo-name>`) for comparison.
 

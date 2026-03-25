@@ -27,7 +27,7 @@ First deploy may take several minutes for container image builds.
 ### Deployment config
 
 ```bash
-# The orchestrator container uses this to forward Slack events
+# The conductor container uses this to forward Slack events
 cd api && wrangler secret put WORKER_URL   # e.g., https://product-engineer.your-subdomain.workers.dev
 ```
 
@@ -133,7 +133,7 @@ In [api.slack.com/apps](https://api.slack.com/apps):
 
 ### Set Linear Team ID
 
-The orchestrator needs to know which Linear team to accept webhooks from. Get your team ID from Linear:
+The conductor needs to know which Linear team to accept webhooks from. Get your team ID from Linear:
 
 ```bash
 # Using Linear GraphQL API
@@ -236,7 +236,7 @@ Watch `#your-app` in Slack for agent activity.
 
 Create a test issue in your product's Linear project. The system should:
 1. Receive the webhook (verify HMAC signature)
-2. Route to Orchestrator DO → spawn TicketAgent
+2. Route to Conductor DO → spawn TaskAgent
 3. Agent posts to the product's Slack channel
 4. Agent clones repo, implements, creates PR
 

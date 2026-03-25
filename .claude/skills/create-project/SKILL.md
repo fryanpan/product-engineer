@@ -5,7 +5,7 @@ description: Scaffold a new project from scratch and connect it to the Product E
 
 # Create New Project
 
-Scaffold a new project repository, set up the project structure, and connect it to the Product Engineer orchestrator.
+Scaffold a new project repository, set up the project structure, and connect it to the Product Engineer conductor.
 
 ## When to Use This
 

@@ -10,7 +10,7 @@ This guide helps you complete the dashboard setup based on BC-177.
   - Production: `5b4f4cc3f3b342c59eead588a5446ca8`
   - Staging: `52c44a6e0d144e53a51c9cb4e9bcbbe0`
 - **Dashboard Code**: All auth, UI, and API routes implemented
-- **AI Gateway Code**: Integration code complete in orchestrator
+- **AI Gateway Code**: Integration code complete in conductor
 
 ### ⚠️ Needs Manual Configuration
 

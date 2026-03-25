@@ -45,7 +45,7 @@ When the user says "tell [product] to [do something]" or gives follow-up instruc
 
 ## Tools Available
 - `notify_slack` — respond in the current channel
-- `list_tasks` — get status across all products (via orchestrator API)
+- `list_tasks` — get status across all products (via conductor API)
 - `spawn_task` — create a new task for a product
 - `send_message_to_task` — forward a message to a running agent
 - `list_transcripts` / `fetch_transcript` — review agent work

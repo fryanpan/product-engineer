@@ -1,6 +1,6 @@
 # E2E Testing Guide
 
-End-to-end tests that exercise the full orchestrator lifecycle against staging or production.
+End-to-end tests that exercise the full conductor lifecycle against staging or production.
 
 ## Test Scripts
 
@@ -47,7 +47,7 @@ Tests:
 
 ## Full E2E Test
 
-Exercises the complete orchestrator lifecycle. **This will create real artifacts in staging** (Linear ticket, Slack thread, GitHub PR, merged code).
+Exercises the complete conductor lifecycle. **This will create real artifacts in staging** (Linear ticket, Slack thread, GitHub PR, merged code).
 
 ```bash
 # Against staging (default)
@@ -64,7 +64,7 @@ bun run scripts/e2e-staging-test.ts --help
 
 1. **Slack mention → Linear ticket creation**
    - Posts a message mentioning the staging bot
-   - Verifies orchestrator creates a Linear ticket
+   - Verifies conductor creates a Linear ticket
    - Verifies ticket is linked to Slack thread
 
 2. **Ticket review → agent spawn decision**
@@ -142,7 +142,7 @@ git push --force origin main
 
 These tests are not run in CI — they require real API credentials and create real artifacts. Run them manually:
 
-- Before deploying major orchestrator changes
+- Before deploying major conductor changes
 - After configuration changes (secrets, registry)
 - When investigating production issues
 
@@ -165,7 +165,7 @@ Common issues:
 Check decision log:
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  "$WORKER_URL/api/orchestrator/decisions"
+  "$WORKER_URL/api/conductor/decisions"
 ```
 
 ### Test completes but cleanup needed
@@ -173,5 +173,5 @@ curl -H "X-API-Key: $API_KEY" \
 Kill any stuck agents:
 ```bash
 curl -X POST -H "X-API-Key: $API_KEY" \
-  "$WORKER_URL/api/orchestrator/cleanup-inactive"
+  "$WORKER_URL/api/conductor/cleanup-inactive"
 ```

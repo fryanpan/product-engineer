@@ -6,7 +6,7 @@ Product Engineer is an autonomous agent system that turns Linear tickets, Slack 
 
 ### v3 Architecture (current)
 
-v3 replaced rule-based TypeScript routing with **persistent Claude agent sessions**. All decision-making lives in English SKILL.md files, not code. The key change: a **ProjectAgent** per registered product accumulates context over time, making decisions about how to handle incoming events.
+v3 replaced rule-based TypeScript routing with **persistent Claude agent sessions**. All decision-making lives in English SKILL.md files, not code. The key change: a **ProjectLead** per registered product accumulates context over time, making decisions about how to handle incoming events.
 
 ```mermaid
 graph TB
@@ -24,43 +24,43 @@ graph TB
 
     subgraph CF["Cloudflare Workers"]
         Worker["Worker (stateless)"]
-        OrcDO["Orchestrator DO\n(singleton, SQLite state)"]
-        OrcContainer["Orchestrator Container\nSlack Socket Mode WebSocket"]
+        ConductorDO["Conductor DO\n(singleton, SQLite state)"]
+        ConductorContainer["Conductor Container\nSlack Socket Mode WebSocket"]
     end
 
-    subgraph ProjectAgents["Project Agent Sessions (persistent)"]
-        PA1["ProjectAgent DO\n'staging-test-app'\n(coding)"]
-        PA2["ProjectAgent DO\n'research'\n(research)"]
-        PAN["ProjectAgent DO\n'product-engineer'\n(self-editing)"]
+    subgraph ProjectLeads["Project Lead Sessions (persistent)"]
+        PA1["ProjectLead DO\n'staging-test-app'\n(coding)"]
+        PA2["ProjectLead DO\n'research'\n(research)"]
+        PAN["ProjectLead DO\n'product-engineer'\n(self-editing)"]
     end
 
-    subgraph TicketAgents["Ticket Agent Subagents (ephemeral)"]
-        TA1["TicketAgent DO #1\n+ Agent Container\n(2h lifetime)"]
-        TA2["TicketAgent DO #2\n+ Agent Container"]
+    subgraph TaskAgents["Task Agent Subagents (ephemeral)"]
+        TA1["TaskAgent DO #1\n+ Agent Container\n(2h lifetime)"]
+        TA2["TaskAgent DO #2\n+ Agent Container"]
     end
 
     Sources --> Security
     Security --> Worker
-    Slack -->|WebSocket| OrcContainer
-    OrcContainer -->|"POST /api/internal/slack-event"| Worker
+    Slack -->|WebSocket| ConductorContainer
+    ConductorContainer -->|"POST /api/internal/slack-event"| Worker
 
-    Worker --> OrcDO
-    OrcDO -->|"channel → product\nlookup"| ProjectAgents
-    PA1 -->|"spawn_task\n(parallel work needed)"| TicketAgents
-    PAN -->|"spawn_task"| TicketAgents
+    Worker --> ConductorDO
+    ConductorDO -->|"channel → product\nlookup"| ProjectLeads
+    PA1 -->|"spawn_task\n(parallel work needed)"| TaskAgents
+    PAN -->|"spawn_task"| TaskAgents
 
-    TicketAgents -.->|"heartbeats\nstatus updates"| Worker
-    ProjectAgents -.->|"heartbeats"| Worker
+    TaskAgents -.->|"heartbeats\nstatus updates"| Worker
+    ProjectLeads -.->|"heartbeats"| Worker
 ```
 
 ### What changed from v2
 
 | Aspect | v2 | v3 |
 |--------|----|----|
-| **Routing** | TypeScript rules in orchestrator | Channel→product DB lookup (deterministic) |
-| **Decisions** | DecisionEngine (LLM per event) | ProjectAgent SKILL.md (persistent session) |
-| **Context** | Cold start every ticket | ProjectAgent accumulates context over time |
-| **Ticket lifecycle** | Orchestrator drives CI/merge gate | Ticket agents self-manage |
+| **Routing** | TypeScript rules in conductor | Channel→product DB lookup (deterministic) |
+| **Decisions** | DecisionEngine (LLM per event) | ProjectLead SKILL.md (persistent session) |
+| **Context** | Cold start every task | ProjectLead accumulates context over time |
+| **Task lifecycle** | Conductor drives CI/merge gate | Task agents self-manage |
 | **Research tasks** | Not supported | Same container, different SKILL.md + MCPs |
 | **Security** | HMAC only | 4-layer defense: HMAC → injection detection → prompt delimiter → content limits |
 
@@ -70,7 +70,7 @@ graph TB
 
 ### Worker (`api/src/index.ts`)
 
-Stateless Cloudflare Worker. Receives all inbound traffic and proxies to the Orchestrator DO. All security validation happens here before events reach any LLM.
+Stateless Cloudflare Worker. Receives all inbound traffic and proxies to the Conductor DO. All security validation happens here before events reach any LLM.
 
 | Route | Auth | Purpose |
 |-------|------|---------|
@@ -78,34 +78,34 @@ Stateless Cloudflare Worker. Receives all inbound traffic and proxies to the Orc
 | `POST /api/webhooks/github` | X-Hub-Signature-256 | PR review/merge, check_suite (CI) events |
 | `POST /api/internal/slack-event` | `X-Internal-Key: SLACK_APP_TOKEN` | Slack events from Socket Mode container |
 | `POST /api/internal/status` | `X-Internal-Key: API_KEY` | Agent status updates (pr_url, branch, formal status) |
-| `POST /api/orchestrator/heartbeat` | `X-Internal-Key: API_KEY` | Agent heartbeats (free-form lifecycle messages) |
+| `POST /api/conductor/heartbeat` | `X-Internal-Key: API_KEY` | Agent heartbeats (free-form lifecycle messages) |
 | `POST /api/dispatch` | `X-API-Key: API_KEY` | Programmatic event trigger |
 | `GET/POST /api/products` | `X-API-Key: API_KEY` | Product registry CRUD |
-| `ALL /api/project-agent/*` | `X-Internal-Key: API_KEY` | ProjectAgent internal API |
-| `GET /health` | None | Health check (also wakes Orchestrator container) |
+| `ALL /api/project-lead/*` | `X-Internal-Key: API_KEY` | ProjectLead internal API |
+| `GET /health` | None | Health check (also wakes Conductor container) |
 
-### Orchestrator DO (`api/src/orchestrator.ts`)
+### Conductor DO (`api/src/conductor.ts`)
 
 Singleton Durable Object. Thin state store and event router — no decision logic.
 
 **Tables:**
-- `tickets` — id, product, status, slack_thread_ts, agent_active, last_heartbeat, checks_passed, agent_message
+- `tasks` — id, product, status, slack_thread_ts, agent_active, last_heartbeat, checks_passed, agent_message
 - `products` — slug, config (repos, secrets, channels, mode, slack_persona)
 - `settings` — key/value (AI gateway config, Linear team ID)
-- `token_usage` — per-ticket token consumption
-- `merge_gate_retries` — ticket_id, retry_count, next_retry_at, phase (legacy, no longer used — agents self-manage merging)
-- `ticket_metrics` — outcome tracking, pr_count, revision_count, cost
+- `token_usage` — per-task token consumption
+- `merge_gate_retries` — task_id, retry_count, next_retry_at, phase (legacy, no longer used — agents self-manage merging)
+- `task_metrics` — outcome tracking, pr_count, revision_count, cost
 
 **Key methods:**
-- `handleEvent` — Upserts ticket, routes to ProjectAgent (v3) with TicketAgent fallback
-- `handleSlackEvent` — Thread reply routing (lookup by `slack_thread_ts`) + new mention → ProjectAgent
-- `handleStatusUpdate` — Agent reports status, pr_url, branch. Validates against `TICKET_STATES`.
+- `handleEvent` — Upserts task, routes to ProjectLead (v3) with TaskAgent fallback
+- `handleSlackEvent` — Thread reply routing (lookup by `slack_thread_ts`) + new mention → ProjectLead
+- `handleStatusUpdate` — Agent reports status, pr_url, branch. Validates against `TASK_STATES`.
 - `handleHeartbeat` — Agent heartbeat with free-form message. Auto-transitions `spawning → active`.
-- `ensureProjectAgent` — Initializes ProjectAgent DO for a product
-- `routeToProjectAgent` — Forwards events to the correct ProjectAgent
-- `handleProjectAgentRoute` — Internal API endpoints (spawn-task, list-tasks, etc.)
+- `ensureProjectLead` — Initializes ProjectLead DO for a product
+- `routeToProjectLead` — Forwards events to the correct ProjectLead
+- `handleProjectLeadRoute` — Internal API endpoints (spawn-task, list-tasks, etc.)
 
-### Orchestrator Container (`containers/orchestrator/`)
+### Conductor Container (`containers/orchestrator/`)
 
 Always-on container running a Slack Socket Mode WebSocket client. Forwards filtered events to the Worker.
 
@@ -118,7 +118,7 @@ Socket Mode event
   └── Otherwise → DROP
 ```
 
-### ProjectAgent DO (`api/src/project-agent.ts`) — NEW in v3
+### ProjectLead DO (`api/src/project-lead.ts`) — NEW in v3
 
 One Durable Object per registered product. Runs a persistent Agent SDK session that accumulates context over time.
 
@@ -136,27 +136,27 @@ One Durable Object per registered product. Runs a persistent Agent SDK session t
 - Event buffer (up to 50 events) handles events during container restart
 - Container runs same `agent/src/server.ts` with `AGENT_ROLE=project-lead`
 
-### TicketAgent DO (`api/src/ticket-agent.ts`)
+### TaskAgent DO (`api/src/task-agent.ts`)
 
-One Durable Object per ticket. Manages an ephemeral Container that runs the Claude Code Agent SDK.
+One Durable Object per task. Manages an ephemeral Container that runs the Claude Code Agent SDK.
 
 **Endpoints:**
 - `/initialize` — Save config to SQLite, start container with `startAndWaitForPorts`
 - `/event` — Forward events to container via `containerFetch` (auto-starts if needed)
-- `/mark-terminal` — Prevent alarm from restarting completed tickets
+- `/mark-terminal` — Prevent alarm from restarting completed tasks
 - `/status` — Proxy container's session status
 
 **Lifecycle:**
 - `sleepAfter: "2h"` — container sleeps after 2 hours of inactivity
 - `alarm()` — checks session status, marks terminal if completed/errored
-- `isTerminal()` — prevents container restart for finished tickets
+- `isTerminal()` — prevents container restart for finished tasks
 
 ### Agent Container (`agent/src/server.ts`)
 
-HTTP server wrapping the Claude Code Agent SDK. Serves both ProjectAgent and TicketAgent containers — behavior is configured via environment variables, not container type.
+HTTP server wrapping the Claude Code Agent SDK. Serves both ProjectLead and TaskAgent containers — behavior is configured via environment variables, not container type.
 
 **Key env vars that control behavior:**
-- `AGENT_ROLE` — `"project-lead"` or omitted (ticket agent)
+- `AGENT_ROLE` — `"project-lead"` or omitted (task agent)
 - `MODE` — `"coding"` or `"research"`
 - `REPOS` — JSON array of repos to clone
 - `MODEL` — `"sonnet"`, `"opus"`, or `"haiku"`
@@ -189,9 +189,9 @@ graph LR
 
 | Role | Container | Lifetime | Timeouts | Max Turns | Purpose |
 |------|-----------|----------|----------|-----------|---------|
-| **Project Lead** | ProjectAgent DO | Persistent (indefinite) | None (Infinity) | 1000 | Accumulates product context, routes events, manages ticket agents |
-| **Ticket Agent (coding)** | TicketAgent DO | Ephemeral (≤2h) | 2h session, 5min idle | 200 | Implements a single ticket: code → PR → merge |
-| **Ticket Agent (research)** | TicketAgent DO | Ephemeral (≤4h) | 4h session, 30min idle | 200 | Research, planning, or scheduling task |
+| **Project Lead** | ProjectLead DO | Persistent (indefinite) | None (Infinity) | 1000 | Accumulates product context, routes events, manages task agents |
+| **Task Agent (coding)** | TaskAgent DO | Ephemeral (≤2h) | 2h session, 5min idle | 200 | Implements a single task: code → PR → merge |
+| **Task Agent (research)** | TaskAgent DO | Ephemeral (≤4h) | 4h session, 30min idle | 200 | Research, planning, or scheduling task |
 
 ### Project Lead Agent Lifecycle
 
@@ -222,7 +222,7 @@ stateDiagram-v2
 ```
 
 **Start triggers:**
-- First event routed to `ensureProjectAgent()` by Orchestrator
+- First event routed to `ensureProjectLead()` by Conductor
 - `alarm()` detects dead container after deploy/crash
 
 **Session lifecycle:**
@@ -245,11 +245,11 @@ stateDiagram-v2
 5. Events that arrived while dead are in `event_buffer` (buffered by DO's `fetch()`)
 6. Agent server calls `drainBufferedEvents()` on next session start
 
-### Ticket Agent (Coding) Lifecycle
+### Task Agent (Coding) Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> spawning: AgentManager.spawnAgent()
+    [*] --> spawning: TaskManager.spawnAgent()
 
     spawning --> active: First heartbeat received
     active --> active: Working (events via messageYielder)
@@ -276,12 +276,12 @@ stateDiagram-v2
 ```
 
 **Start triggers:**
-- Orchestrator calls `AgentManager.spawnAgent()` after receiving ticket event
-- ProjectAgent requests spawn via `/project-agent/spawn-task`
+- Conductor calls `TaskManager.spawnAgent()` after receiving task event
+- ProjectLead requests spawn via `/project-lead/spawn-task`
 
 **What the agent does:**
 1. Clones repos + loads plugins from target repo's `.claude/settings.json`
-2. Builds prompt from ticket event, starts SDK `query()`
+2. Builds prompt from task event, starts SDK `query()`
 3. Reads codebase, implements, writes tests, commits
 4. Opens PR, notifies Slack with PR link
 5. Monitors CI using `check_ci_status` tool, fixes failures if needed
@@ -292,15 +292,15 @@ stateDiagram-v2
 - `process.exit(0)` — session completes normally (PR merged, task closed)
 - `process.exit(1)` — session errors
 - `process.exit(0)` — session timeout (2h) or idle timeout (5min)
-- Orchestrator calls `stopAgent()` on terminal status
+- Conductor calls `stopAgent()` on terminal status
 
 **Communication to Slack:**
 - Agent uses `notify_slack` MCP tool to post messages to the product's Slack channel
 - First message creates the thread; subsequent messages reply in-thread
-- `persistSlackThreadTs()` saves the thread ID back to orchestrator
+- `persistSlackThreadTs()` saves the thread ID back to conductor
 - All messages are in the thread so the team has visibility
 
-### Ticket Agent (Research) Lifecycle
+### Task Agent (Research) Lifecycle
 
 Same as coding, except:
 - Session timeout: **4 hours** (vs 2h)
@@ -318,8 +318,8 @@ The v3 design includes a **Conductor** role for handling:
 - System meta-queries ("how is the system performing?")
 - Routing ambiguous requests to the right Project Lead
 
-**Current status:** The SKILL.md exists (`.claude/skills/assistant/SKILL.md`) but no Conductor DO has been implemented. Today, unrouted events are dropped. The Conductor would:
-- Run as a persistent session like ProjectAgent
+**Current status:** The SKILL.md exists (`.claude/skills/assistant/SKILL.md`) but no Conductor agent DO has been implemented. Today, unrouted events are dropped. The Conductor agent would:
+- Run as a persistent session like ProjectLead
 - Have `list_tasks`, `list_products`, `get_task_transcript` tools for cross-product visibility
 - Use a default persona (e.g., "Product Engineer")
 - Route identified requests to the correct Project Lead
@@ -329,14 +329,14 @@ The v3 design includes a **Conductor** role for handling:
 | Role | Scope | Lifetime | Purpose |
 |------|-------|----------|---------|
 | **Conductor** | Cross-product | Persistent | Routes unmatched events, answers system-wide queries |
-| **Project Lead** | Per product | Persistent | Accumulates product context, triages events, spawns ticket agents |
-| **Ticket Agent** | Per ticket | Ephemeral (2-4h) | Implements a single ticket end-to-end |
+| **Project Lead** | Per product | Persistent | Accumulates product context, triages events, spawns task agents |
+| **Task Agent** | Per task | Ephemeral (2-4h) | Implements a single task end-to-end |
 
 ---
 
 ## Event Flows
 
-### Flow 1: New Slack Mention → ProjectAgent (v3)
+### Flow 1: New Slack Mention → ProjectLead (v3)
 
 ```mermaid
 sequenceDiagram
@@ -344,9 +344,9 @@ sequenceDiagram
     participant Slack
     participant SM as Socket Mode Container
     participant W as Worker
-    participant O as Orchestrator DO
-    participant PA as ProjectAgent DO
-    participant PAC as Project Agent Container
+    participant O as Conductor DO
+    participant PA as ProjectLead DO
+    participant PAC as Project Lead Container
 
     User->>Slack: @product-engineer do X
     Slack->>SM: WebSocket event
@@ -359,14 +359,14 @@ sequenceDiagram
 
     alt Product has Linear configured
         O->>O: Create Linear ticket
-        O->>O: Upsert ticket in SQLite
-        O->>PA: /event (via routeToProjectAgent)
+        O->>O: Upsert task in SQLite
+        O->>PA: /event (via routeToProjectLead)
         PA->>PAC: containerFetch /event
-        Note over PAC: ProjectAgent decides:<br/>handle directly OR spawn TicketAgent
+        Note over PAC: ProjectLead decides:<br/>handle directly OR spawn TaskAgent
     else Product without Linear
-        O->>PA: /event (direct route, no ticket)
+        O->>PA: /event (direct route, no task)
         PA->>PAC: containerFetch /event
-        Note over PAC: ProjectAgent handles directly
+        Note over PAC: ProjectLead handles directly
     end
 
     PAC-->>Slack: notify_slack response
@@ -380,8 +380,8 @@ sequenceDiagram
     participant Slack
     participant SM as Socket Mode Container
     participant W as Worker
-    participant O as Orchestrator DO
-    participant TA as TicketAgent DO
+    participant O as Conductor DO
+    participant TA as TaskAgent DO
     participant AC as Agent Container
 
     User->>Slack: Replies in thread
@@ -390,45 +390,45 @@ sequenceDiagram
     SM->>W: POST /api/internal/slack-event
     W->>O: handleSlackEvent()
 
-    Note over O: SQL: SELECT id, product<br/>FROM tickets<br/>WHERE slack_thread_ts = ?
+    Note over O: SQL: SELECT id, product<br/>FROM tasks<br/>WHERE slack_thread_ts = ?
 
-    alt Ticket found with active agent
+    alt Task found with active agent
         O->>O: Reactivate agent_active = 1
         O->>TA: /event
         TA->>AC: containerFetch /event
         AC->>AC: messageYielder(buildEventPrompt)
         AC-->>User: Reply via notify_slack
-    else Ticket found but agent stopped
+    else Task found but agent stopped
         O->>O: Reactivate agent_active = 1
         O->>TA: /event (auto-starts container)
         Note over AC: New session starts with thread context
-    else No ticket found + app_mention
+    else No task found + app_mention
         Note over O: Route as new mention (Flow 1)
     end
 ```
 
-### Flow 3: Linear Ticket → ProjectAgent → TicketAgent
+### Flow 3: Linear Ticket → ProjectLead → TaskAgent
 
 ```mermaid
 sequenceDiagram
     participant Linear
     participant W as Worker
-    participant O as Orchestrator DO
-    participant PA as ProjectAgent DO
-    participant TA as TicketAgent DO
+    participant O as Conductor DO
+    participant PA as ProjectLead DO
+    participant TA as TaskAgent DO
     participant AC as Agent Container
 
     Linear->>W: POST /api/webhooks/linear (HMAC verified)
     W->>O: handleEvent()
-    O->>O: Upsert ticket in SQLite
+    O->>O: Upsert task in SQLite
 
-    O->>PA: /event (via routeToProjectAgent)
-    Note over PA: ProjectAgent assesses ticket
+    O->>PA: /event (via routeToProjectLead)
+    Note over PA: ProjectLead assesses task
 
     alt Simple task
         Note over PA: Handles directly
     else Standard/complex task
-        PA->>O: POST /project-agent/spawn-task
+        PA->>O: POST /project-lead/spawn-task
         O->>TA: /initialize + /event
         TA->>AC: Start container
         AC->>AC: Clone repos, build prompt, start SDK
@@ -443,7 +443,7 @@ sequenceDiagram
 
 ### Flow 4: CI Check + Merge (Agent-Driven)
 
-In v3, ticket agents self-manage CI monitoring and merging using `check_ci_status` and `merge_pr` MCP tools. The orchestrator no longer runs a merge gate.
+In v3, task agents self-manage CI monitoring and merging using `check_ci_status` and `merge_pr` MCP tools. The conductor no longer runs a merge gate.
 
 ```mermaid
 sequenceDiagram
@@ -476,7 +476,7 @@ Four independent defense layers — see `docs/architecture/security-layers.md` f
 | **1. HMAC/Signature** | Per-source verification at Worker | Spoofed webhooks |
 | **2. Injection Detection** | `@andersmyrmel/vard` pattern scan on all free-text fields | Prompt injection attempts |
 | **3. Prompt Delimiter** | Secret `PROMPT_DELIMITER` env var wraps untrusted input | Delimiter escape attacks |
-| **4. Content Limits** | 1MB Worker, 100KB per-field, 50 events per ticket | Resource exhaustion |
+| **4. Content Limits** | 1MB Worker, 100KB per-field, 50 events per task agent | Resource exhaustion |
 
 ---
 
@@ -486,21 +486,21 @@ These boundaries have historically caused bugs. Always consider them when modify
 
 | Boundary | What Happens | Watch Out For |
 |----------|-------------|---------------|
-| **Container restart** | Process killed, new container starts. `sessionActive = false`. | Events arriving before session restarts. Project leads recover to idle; ticket agents may auto-resume from work branch. |
-| **Deploy** | All containers replaced with new image. DO storage persists. | ProjectAgent: `alarm()` restarts container from persisted config. TicketAgent: `containerFetch` auto-starts. Socket Mode reconnection gap loses events. |
-| **Session completed (ticket)** | `process.exit(0)`, container dies. | Thread replies to dead container — Orchestrator must handle. |
+| **Container restart** | Process killed, new container starts. `sessionActive = false`. | Events arriving before session restarts. Project leads recover to idle; task agents may auto-resume from work branch. |
+| **Deploy** | All containers replaced with new image. DO storage persists. | ProjectLead: `alarm()` restarts container from persisted config. TaskAgent: `containerFetch` auto-starts. Socket Mode reconnection gap loses events. |
+| **Session completed (task)** | `process.exit(0)`, container dies. | Thread replies to dead container — Conductor must handle. |
 | **Session completed (project lead)** | Reset to `idle`, container stays alive. | Must properly null out `messageYielder` so next event creates a fresh session. |
-| **Terminal state** | `agent_active = 0` in Orchestrator, `terminal = true` in TicketAgent. | `alarm()` must check terminal before restarting. Webhook events must not re-spawn. |
+| **Terminal state** | `agent_active = 0` in Conductor, `terminal = true` in TaskAgent. | `alarm()` must check terminal before restarting. Webhook events must not re-spawn. |
 | **Socket Mode disconnect** | WebSocket closes, reconnect with exponential backoff. | Events during reconnection gap are permanently lost. |
 
 ### Recovery Matrix
 
-| Failure | Project Lead Recovery | Ticket Agent Recovery |
+| Failure | Project Lead Recovery | Task Agent Recovery |
 |---------|----------------------|----------------------|
 | **Container crash** | `alarm()` (5min) → health check fails → `startAndWaitForPorts()`. Config from SQLite. Buffered events drained. | Supervisor detects stale heartbeat → can re-spawn or mark failed |
 | **Deploy** | Same as crash — `alarm()` persisted in DO storage, constructor reads config from SQLite | `containerFetch` auto-starts on next event. Fresh session (doesn't resume mid-SDK-call) |
-| **SDK error** | Reset to `idle`, log error. Next event starts fresh session | `process.exit(1)` — container dies. Orchestrator can re-spawn if agent_active still set |
-| **Network partition** | Events buffered in DO (up to 50). Drained on reconnect | Events buffered in TicketAgent DO. containerFetch retries |
+| **SDK error** | Reset to `idle`, log error. Next event starts fresh session | `process.exit(1)` — container dies. Conductor can re-spawn if agent_active still set |
+| **Network partition** | Events buffered in DO (up to 50). Drained on reconnect | Events buffered in TaskAgent DO. containerFetch retries |
 
 ---
 
@@ -508,12 +508,12 @@ These boundaries have historically caused bugs. Always consider them when modify
 
 This field routes thread replies to the correct agent. Its lifecycle:
 
-1. **Ticket created:** `slack_thread_ts = NULL` in SQLite
+1. **Task created:** `slack_thread_ts = NULL` in SQLite
 2. **Agent posts first Slack message:** `notify_slack` → Slack returns `ts`
-3. **`persistSlackThreadTs`:** Fire-and-forget POST to orchestrator with `slack_thread_ts = ts`
-4. **Orchestrator updates DB:** `UPDATE tickets SET slack_thread_ts = ? WHERE id = ?`
+3. **`persistSlackThreadTs`:** Fire-and-forget POST to conductor with `slack_thread_ts = ts`
+4. **Conductor updates DB:** `UPDATE tasks SET slack_thread_ts = ? WHERE id = ?`
 5. **User replies in thread:** Slack sends event with `thread_ts` matching step 2's `ts`
-6. **Orchestrator matches:** `SELECT ... WHERE slack_thread_ts = ?` finds the ticket
+6. **Conductor matches:** `SELECT ... WHERE slack_thread_ts = ?` finds the task
 
 **Failure mode:** If step 3 fails silently, `slack_thread_ts` stays NULL and thread replies never route. No retry mechanism exists.
 
@@ -561,7 +561,7 @@ This field routes thread replies to the correct agent. Its lifecycle:
 
 Per-product in registry config:
 - **Sonnet** — default, most tasks
-- **Opus** — complex repos or high-priority tickets
+- **Opus** — complex repos or high-priority tasks
 - **Haiku** — simple/low-priority tasks
 
 ---
@@ -572,10 +572,10 @@ All agent decision-making is defined in English skill files, not TypeScript:
 
 | Skill | Path | Role |
 |-------|------|------|
-| `coding-project-lead` | `.claude/skills/coding-project-lead/SKILL.md` | ProjectAgent for coding products |
-| `research-agent` | `.claude/skills/research-agent/SKILL.md` | ProjectAgent/TicketAgent for research products |
-| `ticket-agent-coding` | `.claude/skills/ticket-agent-coding/SKILL.md` | Self-managing ticket agent for coding tasks |
-| `product-engineer` | `.claude/skills/product-engineer/SKILL.md` | Legacy ticket agent decision framework |
+| `coding-project-lead` | `.claude/skills/coding-project-lead/SKILL.md` | ProjectLead for coding products |
+| `research-agent` | `.claude/skills/research-agent/SKILL.md` | ProjectLead/TaskAgent for research products |
+| `ticket-agent-coding` | `.claude/skills/ticket-agent-coding/SKILL.md` | Self-managing task agent for coding tasks |
+| `product-engineer` | `.claude/skills/product-engineer/SKILL.md` | Legacy task agent decision framework |
 | `assistant` | `.claude/skills/assistant/SKILL.md` | Cross-product assistant (planned) |
 
 The agent loads skills from this repo via `cwd` (project leads clone the PE repo for skills) and from the target product's repo via `additionalDirectories`.
@@ -591,7 +591,7 @@ The agent loads skills from this repo via `cwd` (project leads clone the PE repo
 | Cloudflare AI Gateway | API requests, tokens, costs, cache rates |
 | R2 Transcripts | Full Agent SDK conversation transcripts (JSONL) |
 | Slack threads | Agent's communication trail |
-| `/api/orchestrator/tickets` | All tickets with status, timestamps, agent_active |
-| `/api/orchestrator/status` | Active agents summary |
+| `/api/conductor/tasks` | All tasks with status, timestamps, agent_active |
+| `/api/conductor/status` | Active agents summary |
 | `/api/agent/:id/status` | Container session status, message count, errors |
-| `/api/project-agent/status` | All ProjectAgent statuses |
+| `/api/project-lead/status` | All ProjectLead statuses |
