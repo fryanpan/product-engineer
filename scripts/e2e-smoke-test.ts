@@ -32,9 +32,9 @@ const ENVIRONMENTS: Record<string, { url: string; repo: string; slackChannel: st
     slackChannel: "C0AKB6HUEPM",
   },
   production: {
-    url: "https://product-engineer.fryansoftware.workers.dev",
+    url: "https://product-engineer.fryanpan.workers.dev",
     repo: "fryanpan/product-engineer",
-    slackChannel: "C0AHVT0N19E", // #product-engineer-staging (update as needed)
+    slackChannel: "C0AJ3ETD0QN", // #product-engineer
   },
 };
 
