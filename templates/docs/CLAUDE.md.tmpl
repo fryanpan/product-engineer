@@ -38,4 +38,9 @@
 - No unnecessary abstractions for one-time operations
 - Clean up dead code created by your changes
 
+### Testing Conventions
+- **Parameterized SQL in tests:** Always use parameterized queries (`SET status = ?` with params) rather than literal values (`SET status = 'active'`). Mock SQL helpers may not capture literal values.
+- **Test integration paths:** Unit tests for business logic, integration tests for state machine transitions and external API interactions
+- **Fail fast on missing data:** When assembling context for LLM decisions, return errors explicitly rather than proceeding with default/bogus values
+
 @docs/process/learnings.md

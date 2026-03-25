@@ -8,6 +8,10 @@ alwaysApply: true
 
 - Plans MUST be written to `docs/product/plans/<prefix>-plan.md`
   - `<prefix>` is the ticket number (e.g., `BIK-12`) or sprint number (e.g., `sprint-3`)
+- **Multi-agent and lifecycle features** require explicit edge case enumeration:
+  - Ask "what happens when X restarts for a task that's already done?" at every lifecycle boundary
+  - Consider: container restart, deploy, alarm fire, terminal state transition, session complete
+  - Document edge cases in the plan before implementing
 
 ## Implementation
 

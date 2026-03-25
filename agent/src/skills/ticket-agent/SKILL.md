@@ -93,6 +93,7 @@ When CI passes (or no CI), apply the same decision framework to merging:
 - Changes touching multiple systems or shared infrastructure
 - Deleting or significantly refactoring existing functionality
 - Dependency upgrades that could break downstream consumers
+- **Multi-agent lifecycle changes** (container management, state machines, terminal states) — always enumerate edge cases
 - Notify Slack: "PR is ready — requesting human review before merge because [reason]."
 - Use `update_task_status` with status `in_review`
 - Wait for a PR approval or Slack reply before merging
