@@ -474,12 +474,12 @@ export const dashboardHTML = `<!DOCTYPE html>
     }
 
     async function killAgent(taskId) {
-      if (!confirm(\`Are you sure you want to kill the agent for \${ticketId}?\`)) {
+      if (!confirm(\`Are you sure you want to kill the agent for \${taskId}?\`)) {
         return;
       }
 
       try {
-        const response = await fetchWithAuth(\`/dashboard/kill-agent/\${encodeURIComponent(taskId)}\`, {
+        const response = await fetchWithAuth(\`/api/dashboard/agents/\${encodeURIComponent(taskId)}/kill\`, {
           method: 'POST'
         });
 

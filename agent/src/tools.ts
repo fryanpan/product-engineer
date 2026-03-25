@@ -408,7 +408,7 @@ export function createTools(config: AgentConfig) {
 
   const spawnTask = tool(
     "spawn_task",
-    "Spawn a task agent to work on a task. If a taskUUID is provided (e.g., from a ticket_created event), the agent works on that existing task. Otherwise a new task is created.",
+    "Spawn a task agent to work on a task. If a taskUUID is provided (e.g., from a task_created event), the agent works on that existing task. Otherwise a new task is created.",
     {
       product: z.string().describe("Product slug (e.g., 'staging-test-app')"),
       description: z.string().describe("Task description — what should be done"),

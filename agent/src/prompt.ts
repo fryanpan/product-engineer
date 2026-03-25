@@ -237,7 +237,7 @@ export async function buildEventPrompt(
 
       return message + `\n\nContinue processing with this information.`;
     }
-    case "ticket_created":
+    case "task_created":
       return `A new ticket was created and assigned to you.\n\n**taskUUID:** ${event.taskUUID}\n**Product:** ${event.product}\n**Title:** ${wrapUntrusted(String(payload.title || "(no title)"))}\n**Description:** ${wrapUntrusted(String(payload.description || "(no description)"))}\n\nSpawn a task agent to work on this. Pass the taskUUID above to spawn_task so the agent works on the existing task.`;
     default:
       return `New event: ${event.type} (taskUUID: ${event.taskUUID})\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
