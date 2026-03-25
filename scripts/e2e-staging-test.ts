@@ -343,41 +343,43 @@ IMPORTANT: The initial implementation should have a syntax error (missing semico
   const message = `<@${botUserId}> ${taskDescription}`;
 
   if (SLACK_USER_TOKEN) {
-    // Best path: real user token triggers Socket Mode
+    // Post via real user token for Slack visibility
     const result = await postSlackMessageWithToken(STAGING_SLACK_CHANNEL, message, SLACK_USER_TOKEN);
     ctx.slackThreadTs = result.ts;
     logSuccess("step1", `Slack mention posted via user token: ts=${result.ts}`);
   } else {
-    // Fallback: post via bot for visibility, then send event directly to internal endpoint
+    // Fallback: post via bot for visibility
     const result = await postSlackMessage(STAGING_SLACK_CHANNEL, message);
     ctx.slackThreadTs = result.ts;
     log("step1", `Slack message posted via bot: ts=${result.ts}`);
+  }
 
-    // Send event directly to the internal endpoint (same path Socket Mode uses)
-    if (SLACK_APP_TOKEN) {
-      const eventRes = await fetch(`${STAGING_URL}/api/internal/slack-event`, {
-        method: "POST",
-        headers: {
-          "X-Internal-Key": SLACK_APP_TOKEN,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "app_mention",
-          text: message,
-          user: "U_E2E_TEST",
-          channel: STAGING_SLACK_CHANNEL,
-          ts: result.ts,
-        }),
-      });
+  // Always send the event directly to the internal endpoint as well.
+  // Socket Mode may not be connected (e.g., fresh staging deploy), and
+  // Slack doesn't fire app_mention when the bot itself posts the message.
+  if (SLACK_APP_TOKEN) {
+    const eventRes = await fetch(`${STAGING_URL}/api/internal/slack-event`, {
+      method: "POST",
+      headers: {
+        "X-Internal-Key": SLACK_APP_TOKEN,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "app_mention",
+        text: message,
+        user: "U_E2E_TEST",
+        channel: STAGING_SLACK_CHANNEL,
+        ts: ctx.slackThreadTs,
+      }),
+    });
 
-      if (eventRes.ok) {
-        logSuccess("step1", "Event sent via internal endpoint (Socket Mode bypass)");
-      } else {
-        logWarn("step1", `Internal endpoint returned ${eventRes.status} — event may not have been processed`);
-      }
+    if (eventRes.ok) {
+      logSuccess("step1", "Event sent via internal endpoint");
     } else {
-      logWarn("step1", "No SLACK_APP_TOKEN — cannot send via internal endpoint. Waiting for Socket Mode delivery.");
+      logWarn("step1", `Internal endpoint returned ${eventRes.status} — event may not have been processed`);
     }
+  } else {
+    logWarn("step1", "No SLACK_APP_TOKEN — cannot send via internal endpoint. Waiting for Socket Mode delivery.");
   }
 
   await sleep(5000);
