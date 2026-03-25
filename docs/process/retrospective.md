@@ -717,3 +717,62 @@ When gathering context for LLM decisions, failing with clear error is better tha
 - StatusUpdater pattern is solid: parallel updates with graceful error handling
 - Linear GraphQL API requires issue ID (UUID), not identifier (e.g., "PE-42")
 - Silent failures are debugging nightmares - log everything with context
+
+---
+
+## 2026-03-25 - BC-195: Template Propagation from Recent Learnings
+
+### Time Breakdown
+| Phase | Duration | Activities |
+|-------|----------|------------|
+| Learning analysis | ~15 min | Reviewed learnings.md, retrospective.md, recent commits |
+| Template updates | ~10 min | Updated templates, agent skills, created new rules |
+| PR #119 creation | ~5 min | Committed and created PR for product-engineer |
+| Copilot review fix | ~3 min | Changed github-webhooks to alwaysApply: false |
+| Propagation setup | ~10 min | Cloned repos, analyzed antipatterns, created report |
+| Propagation execution | ~20 min | Created 9 PRs across all registered products |
+| Documentation | ~5 min | Wrote propagation log and summary |
+
+### Metrics
+| Metric | Value |
+|--------|-------|
+| Total time | ~68 minutes |
+| PRs created | 10 (1 template + 9 products) |
+| Repos updated | 9/10 (prod-test-app skipped) |
+| Lines reduced | ~27 lines/repo average |
+| Estimated monthly savings | ~$67.50 across all repos |
+
+### What Worked
+- **Systematic learning review**: Reading learnings.md + recent commits identified clear patterns
+- **Antipattern validation**: Token count check caught that all repos exceeded 80-line limit
+- **Batch processing**: Scripted propagation handled 9 repos efficiently
+- **Copilot review**: Caught alwaysApply token overage before propagation
+
+### What Didn't
+- **Initial Slack notification failures**: Tool availability issues in skill context
+- **Git config not pre-set**: Had to configure user.email/name in each repo
+- **prod-test-app skipped**: No .claude/ setup yet - needs `/setup-product` first
+- **Variable expansion in bash loops**: Initial attempt at parallel processing failed due to quoting
+
+### Learnings
+- **Propagation workflow is solid**: Clone → analyze → update → commit → PR works well
+- **Template antipattern checks are valuable**: All repos had the same issue (interactive patterns in alwaysApply)
+- **Cost optimization is measurable**: ~40% reduction in alwaysApply tokens = ~$0.15/session savings
+- **Git automation needs improvement**: Pre-configure git identity in agent containers
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Interactive patterns in alwaysApply rules | Update templates | feedback-loop.md: 76 → 39 lines |
+| Superpowers references wasting context | Update templates | workflow-conventions.md: 91 → 64 lines |
+| Missing lifecycle planning guidance | Update templates | Added edge case enumeration to workflow-conventions |
+| Missing testing conventions | Update templates | Added Testing Conventions to CLAUDE.md template |
+| GitHub webhook gotchas recurring | Create new rule | github-webhooks.md (opt-in, alwaysApply: false) |
+| No definition-of-done in target repos | Push template | Added to all 9 repos |
+
+### Next Steps
+1. Monitor agent sessions after PR merges to verify token reduction
+2. Update learnings.md if new patterns emerge from prod usage
+3. Schedule next propagation in ~1 month or after significant learning accumulation
+4. Set up prod-test-app with `/setup-product` skill
+
