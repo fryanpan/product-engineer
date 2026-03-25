@@ -2,16 +2,16 @@
 export const TERMINAL_STATUSES = ["merged", "closed", "deferred", "failed"] as const;
 export type TerminalStatus = typeof TERMINAL_STATUSES[number];
 
-/** Valid ticket states — forms a state machine. */
-export const TICKET_STATES = [
+/** Valid task states — forms a state machine. */
+export const TASK_STATES = [
   "created", "reviewing", "needs_info", "queued", "spawning",
   "active", "pr_open", "escalated", "suspended",
   "merged", "closed", "deferred", "failed",
 ] as const;
-export type TicketState = typeof TICKET_STATES[number];
+export type TaskState = typeof TASK_STATES[number];
 
 /** Valid state transitions. Key = from state, value = allowed to states. */
-export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
+export const VALID_TRANSITIONS: Record<TaskState, readonly TaskState[]> = {
   created:     ["reviewing", "failed"],
   reviewing:   ["spawning", "needs_info", "queued", "closed", "deferred", "failed"],
   needs_info:  ["reviewing", "closed", "deferred", "failed"],
@@ -27,10 +27,10 @@ export const VALID_TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
   failed:      ["active"],
 };
 
-export interface TicketEvent {
-  type: string;       // "ticket_created", "ticket_updated", "pr_review", "pr_merged", "ci_status", "slack_reply", "linear_comment"
+export interface TaskEvent {
+  type: string;       // "task_created", "task_updated", "pr_review", "pr_merged", "ci_status", "slack_reply", "linear_comment"
   source: string;     // "linear", "github", "slack", "api"
-  ticketUUID: string;
+  taskUUID: string;
   product: string;
   payload: unknown;
   slackThreadTs?: string;
@@ -39,15 +39,15 @@ export interface TicketEvent {
   resumeTranscriptR2Key?: string;
 }
 
-export interface TicketRecord {
-  ticket_uuid: string;
+export interface TaskRecord {
+  task_uuid: string;
   product: string;
   status: string;
   slack_thread_ts: string | null;
   slack_channel: string | null;
   pr_url: string | null;
   branch_name: string | null;
-  ticket_id: string | null;
+  task_id: string | null;
   title: string | null;
   agent_active: number;
   agent_message: string | null;
@@ -60,10 +60,10 @@ export interface TicketRecord {
   updated_at: string;
 }
 
-export interface TicketAgentConfig {
-  ticketUUID: string;
-  ticketId?: string; // Human-readable ID (e.g., "BC-172")
-  ticketTitle?: string; // Brief title for display
+export interface TaskAgentConfig {
+  taskUUID: string;
+  taskId?: string; // Human-readable ID (e.g., "BC-172")
+  taskTitle?: string; // Brief title for display
   product: string;
   repos: string[];
   slackChannel: string;
@@ -76,8 +76,8 @@ export interface TicketAgentConfig {
 }
 
 // Metrics types for observability
-export interface TicketMetrics {
-  ticket_id: string;
+export interface TaskMetrics {
+  task_id: string;
   outcome: "automerge_success" | "automerge_failure" | "manual_merge" | "closed" | "deferred" | "failed" | null;
   pr_count: number;           // Number of PRs created for this ticket
   revision_count: number;     // Times sent back for revision
@@ -90,9 +90,9 @@ export interface TicketMetrics {
 }
 
 export interface HeartbeatPayload {
-  ticketUUID: string;
+  taskUUID: string;
   message?: string;
-  status?: TicketState;
+  status?: TaskState;
   pr_url?: string;
   ci_status?: "pending" | "passing" | "failing" | "none";
   ready_to_merge?: boolean;
@@ -101,9 +101,9 @@ export interface HeartbeatPayload {
 }
 
 export interface Bindings {
-  ORCHESTRATOR: DurableObjectNamespace;
-  TICKET_AGENT: DurableObjectNamespace;
-  PROJECT_AGENT: DurableObjectNamespace;
+  CONDUCTOR: DurableObjectNamespace;
+  TASK_AGENT: DurableObjectNamespace;
+  PROJECT_LEAD: DurableObjectNamespace;
 
   // R2 buckets
   TRANSCRIPTS: R2Bucket;
