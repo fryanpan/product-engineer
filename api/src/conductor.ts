@@ -923,11 +923,11 @@ export class Conductor extends Container<Bindings> {
     return handleSlackEventImpl(slackEvent, {
       sql: this.sqlExec,
       env: this.env as Record<string, unknown>,
-      agentManager: this.taskManager,
-      routeToProjectAgent: (product, event) => this.routeToProjectLead(product, event),
+      taskManager: this.taskManager,
+      routeToProjectLead: (product, event) => this.routeToProjectLead(product, event),
       ensureConductor: () => this.ensureConductor(),
-      handleTicketReview: (event) => this.handleTaskReview(event),
-      respawnSuspendedAgent: (taskUUID, product, event) => this.respawnSuspendedTask(taskUUID, product, event),
+      handleTaskReview: (event) => this.handleTaskReview(event),
+      respawnSuspendedTask: (taskUUID, product, event) => this.respawnSuspendedTask(taskUUID, product, event),
     });
   }
 

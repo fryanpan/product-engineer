@@ -2,17 +2,17 @@
  * Slack event handling — extracted from orchestrator.ts.
  *
  * Handles all Slack event processing including thread replies, conductor routing,
- * product channel routing, @mention with Linear ticket creation, and status commands.
+ * product channel routing, task creation, and status commands.
  */
 
-import type { TicketEvent } from "./types";
+import type { TaskEvent } from "./types";
 import type { ProductConfig } from "./registry";
 import type { SqlExec } from "./db";
-import { getSetting, setSetting, getGatewayConfig, getAllProductConfigs, ensureTicketMetrics } from "./db";
+import { getSetting, setSetting, getGatewayConfig, getAllProductConfigs, ensureTaskMetrics } from "./db";
 import { getSystemStatus as getSystemStatusData, formatStatusMessage } from "./observability";
 import { normalizeSlackEvent } from "./security/normalized-event";
 import { addReaction } from "./slack-utils";
-import type { AgentManager } from "./agent-manager";
+import type { TaskManager } from "./task-manager";
 
 // ---------------------------------------------------------------------------
 // Dependency bundle — everything the handler needs from the orchestrator
@@ -21,11 +21,11 @@ import type { AgentManager } from "./agent-manager";
 export interface SlackHandlerDeps {
   sql: SqlExec;
   env: Record<string, unknown>;
-  agentManager: AgentManager;
-  routeToProjectAgent: (product: string, event: TicketEvent) => Promise<void>;
+  taskManager: TaskManager;
+  routeToProjectLead: (product: string, event: TaskEvent) => Promise<void>;
   ensureConductor: () => Promise<DurableObjectStub>;
-  handleTicketReview: (event: TicketEvent) => Promise<void>;
-  respawnSuspendedAgent: (ticketUUID: string, product: string, event: TicketEvent) => Promise<void>;
+  handleTaskReview: (event: TaskEvent) => Promise<void>;
+  respawnSuspendedTask: (taskUUID: string, product: string, event: TaskEvent) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,19 +150,19 @@ export async function refreshLinearToken(sql: SqlExec, env: Record<string, unkno
 }
 
 // ---------------------------------------------------------------------------
-// LLM-generated ticket summary
+// LLM-generated task summary
 // ---------------------------------------------------------------------------
 
-/** Use LLM to generate a structured ticket title and description from a Slack message. */
-export async function generateTicketSummary(
+/** Use LLM to generate a structured task title, description, and short ID from a Slack message. */
+export async function generateTaskSummary(
   rawText: string,
   product: string,
   slackUser: string,
   env: Record<string, unknown>,
   sql: SqlExec,
-): Promise<{ title: string; description: string }> {
+): Promise<{ title: string; description: string; taskId: string }> {
   if (!rawText) {
-    return { title: "Slack request (no description)", description: `**Slack request from <@${slackUser}>**` };
+    return { title: "Slack request (no description)", description: `**Slack request from <@${slackUser}>**`, taskId: "" };
   }
 
   const apiKey = (env.ANTHROPIC_API_KEY as string) || "";
@@ -188,7 +188,7 @@ export async function generateTicketSummary(
       max_tokens: 512,
       messages: [{
         role: "user",
-        content: `You are generating a Linear ticket from a Slack message for the "${product}" product.
+        content: `You are generating a task summary from a Slack message for the "${product}" product.
 
 Given this Slack message:
 <message>
@@ -196,8 +196,9 @@ ${rawText}
 </message>
 
 Generate a JSON object with:
-- "title": A concise ticket title (imperative form, max 120 chars). Capture WHAT the request is.
-- "description": A well-structured ticket description that captures WHY the user is asking (their goal) and any relevant context from the message. Include the original Slack message as a quote block for reference. Format with markdown.
+- "title": A concise task title (imperative form, max 120 chars). Capture WHAT the request is.
+- "description": A well-structured task description that captures WHY the user is asking (their goal) and any relevant context from the message. Include the original Slack message as a quote block for reference. Format with markdown.
+- "taskId": A short unique slug (lowercase letters and hyphens only, max 16 chars) that captures the essence of the request. Examples: "fix-nav-bug", "add-dark-mode", "berlin-kids-fun"
 
 Respond with ONLY the JSON object, no other text.`,
       }],
@@ -219,14 +220,20 @@ Respond with ONLY the JSON object, no other text.`,
   const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) jsonText = fenceMatch[1].trim();
 
-  const parsed = JSON.parse(jsonText) as { title: string; description: string };
+  const parsed = JSON.parse(jsonText) as { title: string; description: string; taskId?: string };
 
   // Ensure title isn't too long
   const title = parsed.title.length > 200 ? parsed.title.slice(0, 197) + "..." : parsed.title;
 
+  // Sanitize taskId: lowercase, hyphens only, max 16 chars
+  let taskId = (parsed.taskId || "").toLowerCase().replace(/[^a-z-]/g, "").slice(0, 16);
+  // Remove leading/trailing hyphens
+  taskId = taskId.replace(/^-+|-+$/g, "");
+
   return {
     title,
     description: parsed.description || `**Slack request from <@${slackUser}>:**\n\n${rawText}`,
+    taskId,
   };
 }
 
@@ -269,11 +276,12 @@ export async function handleSlackEvent(
   },
   deps: SlackHandlerDeps,
 ): Promise<Response> {
-  const { sql, env, agentManager, routeToProjectAgent, ensureConductor, handleTicketReview } = deps;
+  const { sql, env, taskManager, routeToProjectLead, ensureConductor, handleTaskReview } = deps;
   const slackBotToken = (env.SLACK_BOT_TOKEN as string) || "";
 
   // Fast-ack: immediately add eyes reaction so user knows we received the event
-  if (slackEvent.ts && slackEvent.channel && slackEvent.type === "app_mention") {
+  // Fires for all messages in product channels (not just @mentions)
+  if (slackEvent.ts && slackEvent.channel) {
     addReaction({
       token: slackBotToken,
       channel: slackEvent.channel,
@@ -307,56 +315,56 @@ export async function handleSlackEvent(
     return Response.json({ ok: true, handled: "status_command" });
   }
 
-  // If it's a thread reply, look up existing ticket by thread_ts
+  // If it's a thread reply, look up existing task by thread_ts
   if (slackEvent.thread_ts) {
     console.log(`[slack-handler] Thread reply received: thread_ts=${slackEvent.thread_ts} type=${slackEvent.type} user=${slackEvent.user || "unknown"}`);
     const rows = sql.exec(
-      "SELECT ticket_uuid, product, status, agent_active FROM tickets WHERE slack_thread_ts = ?",
+      "SELECT task_uuid, product, status, agent_active FROM tasks WHERE slack_thread_ts = ?",
       slackEvent.thread_ts,
-    ).toArray() as { ticket_uuid: string; product: string; status: string; agent_active: number }[];
+    ).toArray() as { task_uuid: string; product: string; status: string; agent_active: number }[];
 
     if (rows.length > 0) {
-      const ticket = rows[0];
-      console.log(`[slack-handler] Thread reply matched ticket=${ticket.ticket_uuid} product=${ticket.product}`);
+      const task = rows[0];
+      console.log(`[slack-handler] Thread reply matched task=${task.task_uuid} product=${task.product}`);
 
-      // Reopen terminal tickets — user is explicitly re-engaging in the thread
-      const isTerminal = agentManager.isTerminalStatus(ticket.status);
+      // Reopen terminal tasks — user is explicitly re-engaging in the thread
+      const isTerminal = taskManager.isTerminalStatus(task.status);
       if (isTerminal) {
-        console.log(`[slack-handler] Reopening terminal ticket ${ticket.ticket_uuid} (was ${ticket.status})`);
-        await agentManager.reopenTicket(ticket.ticket_uuid);
+        console.log(`[slack-handler] Reopening terminal task ${task.task_uuid} (was ${task.status})`);
+        await taskManager.reopenTask(task.task_uuid);
       }
 
-      // Read resume context for suspended, inactive, or just-reopened tickets (container likely dead)
-      const needsRespawn = isTerminal || ticket.status === "suspended" || ticket.agent_active === 0;
+      // Read resume context for suspended, inactive, or just-reopened tasks (container likely dead)
+      const needsRespawn = isTerminal || task.status === "suspended" || task.agent_active === 0;
       let resumeSessionId: string | undefined;
       let resumeTranscriptR2Key: string | undefined;
       if (needsRespawn) {
-        const fullTicket = sql.exec(
-          "SELECT session_id, transcript_r2_key FROM tickets WHERE ticket_uuid = ?",
-          ticket.ticket_uuid,
+        const fullTask = sql.exec(
+          "SELECT session_id, transcript_r2_key FROM tasks WHERE task_uuid = ?",
+          task.task_uuid,
         ).toArray()[0] as { session_id: string | null; transcript_r2_key: string | null } | undefined;
-        if (fullTicket) {
-          resumeSessionId = fullTicket.session_id || undefined;
-          resumeTranscriptR2Key = fullTicket.transcript_r2_key || undefined;
+        if (fullTask) {
+          resumeSessionId = fullTask.session_id || undefined;
+          resumeTranscriptR2Key = fullTask.transcript_r2_key || undefined;
         }
-        console.log(`[slack-handler] Will respawn for ticket ${ticket.ticket_uuid} (status=${ticket.status}, agent_active=${ticket.agent_active}) session=${resumeSessionId || "none"} transcript=${resumeTranscriptR2Key || "none"}`);
+        console.log(`[slack-handler] Will respawn for task ${task.task_uuid} (status=${task.status}, agent_active=${task.agent_active}) session=${resumeSessionId || "none"} transcript=${resumeTranscriptR2Key || "none"}`);
       }
 
       // Re-activate agent on thread reply — user is explicitly engaging
       if (!isTerminal) {
-        agentManager.reactivate(ticket.ticket_uuid);
+        taskManager.reactivate(task.task_uuid);
       }
 
       // Transition suspended → active (must succeed before re-spawn)
-      if (ticket.status === "suspended") {
-        agentManager.updateStatus(ticket.ticket_uuid, { status: "active" });
+      if (task.status === "suspended") {
+        taskManager.updateStatus(task.task_uuid, { status: "active" });
       }
 
-      const event: TicketEvent = {
+      const event: TaskEvent = {
         type: "slack_reply",
         source: "slack",
-        ticketUUID: ticket.ticket_uuid,
-        product: ticket.product,
+        taskUUID: task.task_uuid,
+        product: task.product,
         payload: slackEvent,
         slackThreadTs: slackEvent.thread_ts,
         slackChannel: slackEvent.channel,
@@ -365,25 +373,25 @@ export async function handleSlackEvent(
       };
 
       // Respawn if container is likely dead (terminal, suspended, or was inactive).
-      // For active tickets with a running container, sendEvent routes directly.
+      // For active tasks with a running container, sendEvent routes directly.
       if (needsRespawn) {
-        console.log(`[slack-handler] Re-spawning container for ticket=${ticket.ticket_uuid} (was ${ticket.status}, agent_active=${ticket.agent_active})`);
+        console.log(`[slack-handler] Re-spawning container for task=${task.task_uuid} (was ${task.status}, agent_active=${task.agent_active})`);
         try {
-          await deps.respawnSuspendedAgent(ticket.ticket_uuid, ticket.product, event);
+          await deps.respawnSuspendedTask(task.task_uuid, task.product, event);
         } catch (err) {
-          console.error(`[slack-handler] Failed to re-spawn agent for ${ticket.ticket_uuid}:`, err);
+          console.error(`[slack-handler] Failed to re-spawn agent for ${task.task_uuid}:`, err);
           return Response.json({ error: "Failed to re-spawn agent" }, { status: 500 });
         }
       } else {
-        console.log(`[slack-handler] Routing thread reply to active agent for ticket=${ticket.ticket_uuid}`);
-        await agentManager.sendEvent(ticket.ticket_uuid, event);
+        console.log(`[slack-handler] Routing thread reply to active agent for task=${task.task_uuid}`);
+        await taskManager.sendEvent(task.task_uuid, event);
       }
-      return Response.json({ ok: true, ticketUUID: ticket.ticket_uuid });
+      return Response.json({ ok: true, taskUUID: task.task_uuid });
     } else {
-      console.log(`[slack-handler] No ticket found for thread_ts=${slackEvent.thread_ts}`);
+      console.log(`[slack-handler] No task found for thread_ts=${slackEvent.thread_ts}`);
     }
 
-    // Thread reply but no ticket found — silently ignore.
+    // Thread reply but no task found — silently ignore.
     if (slackEvent.type === "message") {
       return Response.json({ ok: true, ignored: true, reason: "thread not tracked" });
     }
@@ -404,10 +412,10 @@ export async function handleSlackEvent(
     try {
       const conductorStub = await ensureConductor();
       const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-      const event: TicketEvent = {
+      const event: TaskEvent = {
         type: "slack_mention",
         source: "slack",
-        ticketUUID: `conductor-${slackEvent.ts || Date.now()}`,
+        taskUUID: `conductor-${slackEvent.ts || Date.now()}`,
         product: "__conductor__",
         payload: {
           text: rawText,
@@ -448,274 +456,247 @@ export async function handleSlackEvent(
     return Response.json({ ok: true, ignored: true, reason: "unmapped_channel" });
   }
 
-  // Product channel: route ALL messages to ProjectAgent.
-  // For plain messages (no @-mention), route directly — no Linear ticket.
-  if (slackEvent.type !== "app_mention") {
-    console.log(`[slack-handler] Plain message in ${product} channel — routing to ProjectAgent`);
-    const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-    const event: TicketEvent = {
-      type: "slack_mention",
-      source: "slack",
-      ticketUUID: `chat-${slackEvent.ts || Date.now()}`,
-      product,
-      payload: {
-        text: rawText,
-        user: slackEvent.user,
-        channel: slackEvent.channel,
-        ts: slackEvent.ts,
-      },
-      slackThreadTs: slackEvent.thread_ts || slackEvent.ts,
-      slackChannel: slackEvent.channel,
-    };
-    routeToProjectAgent(product, event).catch(err =>
-      console.error(`[slack-handler] ProjectAgent routing failed for ${product}:`, err)
-    );
-    return Response.json({ ok: true, routed: "project_agent", product });
-  }
+  // -------------------------------------------------------------------------
+  // Product channel: ALL messages handled the same (no @mention distinction)
+  // -------------------------------------------------------------------------
 
+  const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
   const slackThreadTs = slackEvent.thread_ts || slackEvent.ts;
   const productConfig = products[product];
-  const projectName = productConfig.triggers?.linear?.project_name;
+  const hasLinear = !!productConfig.triggers?.linear?.project_name;
 
-  // Products without Linear route directly to ProjectAgent without creating a Linear ticket.
-  if (!projectName) {
-    console.log(`[slack-handler] No Linear project for ${product} — routing directly to ProjectAgent`);
+  if (hasLinear) {
+    // --- Linear path: create Linear issue, use user's thread (no separate bot thread) ---
 
-    const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-    const ticketUUID = `slack-${slackEvent.ts || Date.now()}`;
+    const projectName = productConfig.triggers!.linear!.project_name!;
 
-    // Create ticket record so thread replies can be routed
-    try {
-      agentManager.createTicket({
-        ticketUUID,
-        product,
-        slackThreadTs: slackThreadTs || undefined,
-        slackChannel: slackEvent.channel || undefined,
-        title: rawText.slice(0, 100),
-      });
-    } catch {
-      // Already exists — fine (e.g. re-delivery)
+    // Load settings for Linear API
+    const settings = sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
+    const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
+    const teamId: string | undefined = settingsMap.linear_team_id;
+    const appUserId: string | undefined = settingsMap.linear_app_user_id;
+    const linearToken = getLinearAppToken(sql, env);
+
+    if (!teamId || !linearToken) {
+      await postSlackMessage(
+        slackBotToken,
+        slackEvent.channel || "",
+        `❌ Linear integration not configured (missing team ID or token).`,
+        slackThreadTs || "",
+      );
+      return Response.json({ error: "linear not configured" }, { status: 500 });
     }
 
-    const directEvent: TicketEvent = {
-      type: "slack_mention",
+    // Use LLM to generate a structured title, description, and taskId
+    let title: string;
+    let description: string;
+    let taskId: string | undefined;
+    try {
+      const generated = await generateTaskSummary(rawText, product, slackEvent.user || "unknown", env, sql);
+      title = generated.title;
+      description = generated.description;
+      taskId = generated.taskId || undefined;
+    } catch (err) {
+      console.error("[slack-handler] LLM title generation failed, using fallback:", err);
+      const normalized = rawText.replace(/\s+/g, " ").trim();
+      title = normalized
+        ? (normalized.length <= 200 ? normalized : normalized.slice(0, 197) + "...")
+        : "Slack request (no description)";
+      description = `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`;
+    }
+
+    // Look up the Linear project ID by name
+    const projectRes = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${linearToken}`,
+      },
+      body: JSON.stringify({
+        query: `query($teamId: String!) {
+          team(id: $teamId) {
+            projects { nodes { id name } }
+          }
+        }`,
+        variables: { teamId },
+      }),
+    });
+
+    let projectId: string | null = null;
+    if (projectRes.ok) {
+      const projectData = await projectRes.json() as {
+        data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } };
+        errors?: Array<{ message: string }>;
+      };
+      if (projectData.errors) {
+        console.error(`[slack-handler] Linear project lookup errors:`, JSON.stringify(projectData.errors));
+      }
+      const normalizedName = projectName.toLowerCase();
+      const projectList = projectData.data?.team?.projects?.nodes || [];
+      projectId = projectList.find(p => p.name.toLowerCase() === normalizedName)?.id || null;
+      console.log(`[slack-handler] Project lookup: name="${projectName}" found=${!!projectId} (${projectList.length} projects in team)`);
+    } else {
+      console.error(`[slack-handler] Linear project lookup failed: ${projectRes.status} ${await projectRes.text().catch(() => "")}`);
+    }
+
+    // Create the Linear issue
+    console.log(`[slack-handler] Creating Linear issue: team=${teamId} project=${projectId} assignee=${appUserId} title="${title}"`);
+    const createRes = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${linearToken}`,
+      },
+      body: JSON.stringify({
+        query: `mutation($input: IssueCreateInput!) {
+          issueCreate(input: $input) {
+            success
+            issue { id identifier url }
+          }
+        }`,
+        variables: {
+          input: {
+            teamId,
+            title,
+            description,
+            ...(projectId && { projectId }),
+            ...(appUserId && { assigneeId: appUserId }),
+          },
+        },
+      }),
+    });
+
+    if (!createRes.ok) {
+      const errText = await createRes.text();
+      console.error(`[slack-handler] Failed to create Linear issue: ${createRes.status} ${errText}`);
+      await postSlackMessage(
+        slackBotToken,
+        slackEvent.channel || "",
+        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+        slackThreadTs || "",
+      );
+      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+    }
+
+    const createData = await createRes.json() as {
+      data?: { issueCreate?: { success: boolean; issue?: { id: string; identifier: string; url: string } } }
+    };
+    const issue = createData.data?.issueCreate?.issue;
+
+    if (!issue) {
+      console.error("[slack-handler] Linear issueCreate returned no issue:", JSON.stringify(createData));
+      await postSlackMessage(
+        slackBotToken,
+        slackEvent.channel || "",
+        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+        slackThreadTs || "",
+      );
+      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+    }
+
+    console.log(`[slack-handler] Created Linear issue ${issue.identifier} (${issue.id}) from Slack message`);
+
+    // Use user's original thread — no separate bot thread
+    const threadTsToStore = slackThreadTs || null;
+
+    // Store the Slack thread association so the Linear webhook handler can link them.
+    sql.exec(
+      `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
+       VALUES (?, ?, ?)
+       ON CONFLICT(linear_issue_id) DO UPDATE SET
+         slack_thread_ts = excluded.slack_thread_ts,
+         slack_channel = excluded.slack_channel`,
+      issue.id, threadTsToStore, slackEvent.channel || null,
+    );
+
+    // Dispatch task review directly instead of waiting for the Linear webhook roundtrip.
+    const taskEvent: TaskEvent = {
+      type: "task_created",
       source: "slack",
-      ticketUUID,
+      taskUUID: issue.id,
       product,
       payload: {
-        text: rawText,
-        user: slackEvent.user,
-        channel: slackEvent.channel,
-        ts: slackEvent.ts,
+        id: issue.id,
+        identifier: issue.identifier,
+        title,
+        description: rawText,
+        priority: 3,
+        labels: [],
       },
-      slackThreadTs: slackThreadTs || undefined,
+      slackThreadTs: threadTsToStore || undefined,
       slackChannel: slackEvent.channel || undefined,
     };
 
-    // Route to ProjectAgent (fire-and-forget)
-    routeToProjectAgent(product, directEvent).catch(err =>
-      console.error(`[slack-handler] Direct ProjectAgent routing failed for ${product}:`, err)
-    );
-
-    return Response.json({ ok: true, routed: "project_agent", product });
-  }
-
-  // --- @mention with Linear ticket creation ---
-
-  // Load settings for Linear API
-  const settings = sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
-  const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
-  const teamId: string | undefined = settingsMap.linear_team_id;
-  const appUserId: string | undefined = settingsMap.linear_app_user_id;
-  const linearToken = getLinearAppToken(sql, env);
-
-  if (!teamId || !linearToken) {
-    await postSlackMessage(
-      slackBotToken,
-      slackEvent.channel || "",
-      `❌ Linear integration not configured (missing team ID or token).`,
-      slackThreadTs || "",
-    );
-    return Response.json({ error: "linear not configured" }, { status: 500 });
-  }
-
-  // Strip the @mention from the text to get the raw request
-  const rawText = (slackEvent.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-
-  // Use LLM to generate a structured title and description
-  let title: string;
-  let description: string;
-  try {
-    const generated = await generateTicketSummary(rawText, product, slackEvent.user || "unknown", env, sql);
-    title = generated.title;
-    description = generated.description;
-  } catch (err) {
-    console.error("[slack-handler] LLM title generation failed, using fallback:", err);
-    const normalized = rawText.replace(/\s+/g, " ").trim();
-    title = normalized
-      ? (normalized.length <= 200 ? normalized : normalized.slice(0, 197) + "...")
-      : "Slack request (no description)";
-    description = `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`;
-  }
-
-  // Look up the Linear project ID by name
-  const projectRes = await fetch("https://api.linear.app/graphql", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${linearToken}`,
-    },
-    body: JSON.stringify({
-      query: `query($teamId: String!) {
-        team(id: $teamId) {
-          projects { nodes { id name } }
-        }
-      }`,
-      variables: { teamId },
-    }),
-  });
-
-  let projectId: string | null = null;
-  if (projectRes.ok) {
-    const projectData = await projectRes.json() as {
-      data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } };
-      errors?: Array<{ message: string }>;
-    };
-    if (projectData.errors) {
-      console.error(`[slack-handler] Linear project lookup errors:`, JSON.stringify(projectData.errors));
+    // Create task in DB before review
+    try {
+      taskManager.createTask({
+        taskUUID: issue.id,
+        product,
+        slackThreadTs: threadTsToStore || undefined,
+        slackChannel: slackEvent.channel || undefined,
+        taskId: issue.identifier,
+        title,
+      });
+    } catch {
+      // Task already exists (from a fast Linear webhook) — safe to proceed
     }
-    const normalizedName = projectName.toLowerCase();
-    const projects = projectData.data?.team?.projects?.nodes || [];
-    projectId = projects.find(p => p.name.toLowerCase() === normalizedName)?.id || null;
-    console.log(`[slack-handler] Project lookup: name="${projectName}" found=${!!projectId} (${projects.length} projects in team)`);
-  } else {
-    console.error(`[slack-handler] Linear project lookup failed: ${projectRes.status} ${await projectRes.text().catch(() => "")}`);
-  }
 
-  // Create the Linear issue
-  console.log(`[slack-handler] Creating Linear issue: team=${teamId} project=${projectId} assignee=${appUserId} title="${title}"`);
-  const createRes = await fetch("https://api.linear.app/graphql", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${linearToken}`,
-    },
-    body: JSON.stringify({
-      query: `mutation($input: IssueCreateInput!) {
-        issueCreate(input: $input) {
-          success
-          issue { id identifier url }
-        }
-      }`,
-      variables: {
-        input: {
-          teamId,
-          title,
-          description,
-          ...(projectId && { projectId }),
-          ...(appUserId && { assigneeId: appUserId }),
-        },
-      },
-    }),
-  });
+    // Initialize task_metrics row
+    ensureTaskMetrics(sql, issue.id);
 
-  if (!createRes.ok) {
-    const errText = await createRes.text();
-    console.error(`[slack-handler] Failed to create Linear issue: ${createRes.status} ${errText}`);
-    await postSlackMessage(
-      slackBotToken,
-      slackEvent.channel || "",
-      `❌ Failed to create Linear ticket. Please try again or create one manually.`,
-      slackThreadTs || "",
+    handleTaskReview(taskEvent).catch(err =>
+      console.error("[slack-handler] Direct task review failed:", err)
     );
-    return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+
+    return Response.json({ ok: true, linearIssue: issue.identifier });
   }
 
-  const createData = await createRes.json() as {
-    data?: { issueCreate?: { success: boolean; issue?: { id: string; identifier: string; url: string } } }
-  };
-  const issue = createData.data?.issueCreate?.issue;
+  // --- No-Linear path: create task record, route to ProjectLead ---
 
-  if (!issue) {
-    console.error("[slack-handler] Linear issueCreate returned no issue:", JSON.stringify(createData));
-    await postSlackMessage(
-      slackBotToken,
-      slackEvent.channel || "",
-      `❌ Failed to create Linear ticket. Please try again or create one manually.`,
-      slackThreadTs || "",
-    );
-    return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+  const taskUUID = crypto.randomUUID();
+  let taskId: string | undefined;
+  let title = rawText.slice(0, 100);
+
+  // Generate human-readable task ID via LLM
+  try {
+    const summary = await generateTaskSummary(rawText, product, slackEvent.user || "unknown", env, sql);
+    title = summary.title;
+    taskId = summary.taskId || undefined;
+  } catch {
+    // Fallback: no LLM-generated ID
   }
 
-  console.log(`[slack-handler] Created Linear issue ${issue.identifier} (${issue.id}) from Slack mention`);
+  try {
+    taskManager.createTask({
+      taskUUID,
+      product,
+      slackThreadTs: slackThreadTs || undefined,
+      slackChannel: slackEvent.channel || undefined,
+      taskId,
+      title,
+    });
+  } catch { /* Already exists */ }
 
-  // Post acknowledgment as a NEW top-level message (not a reply).
-  // This message becomes the ticket thread — all future updates reply here.
-  const ticketThreadTs = await postSlackMessage(
-    slackBotToken,
-    slackEvent.channel!,
-    `📋 Created <${issue.url}|${issue.identifier}>: ${title}\n⏳ Working on it...`,
-  );
+  ensureTaskMetrics(sql, taskUUID);
 
-  // Reply briefly in the user's original thread pointing to the ticket thread
-  if (ticketThreadTs) {
-    postSlackMessage(
-      slackBotToken,
-      slackEvent.channel!,
-      `👋 On it! Follow progress in the thread above.`,
-      slackThreadTs,
-    ).catch(err => console.warn("[slack-handler] Failed to post thread pointer:", err));
-  }
-
-  // Store the Slack thread association so the Linear webhook handler can link them.
-  const threadTsToStore = ticketThreadTs || slackThreadTs || null;
-  sql.exec(
-    `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
-     VALUES (?, ?, ?)
-     ON CONFLICT(linear_issue_id) DO UPDATE SET
-       slack_thread_ts = excluded.slack_thread_ts,
-       slack_channel = excluded.slack_channel`,
-    issue.id, threadTsToStore, slackEvent.channel || null,
-  );
-
-  // Dispatch ticket review directly instead of waiting for the Linear webhook roundtrip.
-  const ticketEvent: TicketEvent = {
-    type: "ticket_created",
+  const event: TaskEvent = {
+    type: "slack_mention",
     source: "slack",
-    ticketUUID: issue.id,
+    taskUUID,
     product,
     payload: {
-      id: issue.id,
-      identifier: issue.identifier,
-      title,
-      description: rawText,
-      priority: 3,
-      labels: [],
+      text: rawText,
+      user: slackEvent.user,
+      channel: slackEvent.channel,
+      ts: slackEvent.ts,
     },
-    slackThreadTs: threadTsToStore || undefined,
+    slackThreadTs: slackThreadTs || undefined,
     slackChannel: slackEvent.channel || undefined,
   };
 
-  // Create ticket in DB before review
-  try {
-    agentManager.createTicket({
-      ticketUUID: issue.id,
-      product,
-      slackThreadTs: threadTsToStore || undefined,
-      slackChannel: slackEvent.channel || undefined,
-      ticketId: issue.identifier,
-      title,
-    });
-  } catch {
-    // Ticket already exists (from a fast Linear webhook) — safe to proceed
-  }
-
-  // Initialize ticket_metrics row
-  ensureTicketMetrics(sql, issue.id);
-
-  handleTicketReview(ticketEvent).catch(err =>
-    console.error("[slack-handler] Direct ticket review failed:", err)
+  handleTaskReview(event).catch(err =>
+    console.error(`[slack-handler] Task review failed for ${product}:`, err)
   );
 
-  return Response.json({ ok: true, linearIssue: issue.identifier });
+  return Response.json({ ok: true, taskUUID, product });
 }
