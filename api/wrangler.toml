@@ -9,7 +9,7 @@ enabled = true
 # Conductor — always-on, Slack Socket Mode, event routing
 [[containers]]
 class_name = "Conductor"
-image = "../containers/orchestrator/Dockerfile"
+image = "../containers/conductor/Dockerfile"
 instance_type = "lite"
 max_instances = 1
 
@@ -91,7 +91,7 @@ bindings = [
 # Conductor — always-on, Slack Socket Mode, event routing
 [[env.staging.containers]]
 class_name = "Conductor"
-image = "../containers/orchestrator/Dockerfile"
+image = "../containers/conductor/Dockerfile"
 instance_type = "lite"
 max_instances = 1
 

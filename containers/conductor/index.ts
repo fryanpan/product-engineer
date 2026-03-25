@@ -8,7 +8,7 @@ if (process.env.SENTRY_DSN) {
 
 const app = new Hono();
 
-app.get("/health", (c) => c.json({ ok: true, service: "orchestrator-container" }));
+app.get("/health", (c) => c.json({ ok: true, service: "conductor-container" }));
 
 const slackAppToken = process.env.SLACK_APP_TOKEN;
 if (slackAppToken) {
@@ -24,19 +24,19 @@ if (slackAppToken) {
       const authData = (await authRes.json()) as { ok: boolean; user_id?: string };
       if (authData.ok && authData.user_id) {
         botUserId = authData.user_id;
-        console.log(`[Orchestrator Container] Bot user ID: ${botUserId}`);
+        console.log(`[Conductor Container] Bot user ID: ${botUserId}`);
       }
     } catch (err) {
-      console.error("[Orchestrator Container] Failed to resolve bot user ID:", err);
+      console.error("[Conductor Container] Failed to resolve bot user ID:", err);
     }
   }
 
   const socket = new SlackSocket(slackAppToken, async (event) => {
     try {
-      console.log(`[Orchestrator Container] Slack event: ${event.type} from ${event.user || "unknown"}`);
+      console.log(`[Conductor Container] Slack event: ${event.type} from ${event.user || "unknown"}`);
       const workerUrl = process.env.WORKER_URL;
       if (!workerUrl) {
-        console.error("[Orchestrator Container] WORKER_URL not set — cannot forward Slack events");
+        console.error("[Conductor Container] WORKER_URL not set — cannot forward Slack events");
         return;
       }
       await fetch(`${workerUrl}/api/internal/slack-event`, {
@@ -48,15 +48,15 @@ if (slackAppToken) {
         body: JSON.stringify(event),
       });
     } catch (err) {
-      console.error("[Orchestrator Container] Failed to forward Slack event:", err);
+      console.error("[Conductor Container] Failed to forward Slack event:", err);
     }
   }, botUserId);
 
   socket.connect().catch((err) => {
-    console.error("[Orchestrator Container] Failed to start Socket Mode:", err);
+    console.error("[Conductor Container] Failed to start Socket Mode:", err);
   });
 } else {
-  console.warn("[Orchestrator Container] No SLACK_APP_TOKEN — Socket Mode disabled");
+  console.warn("[Conductor Container] No SLACK_APP_TOKEN — Socket Mode disabled");
 }
 
 export default {
