@@ -1,10 +1,10 @@
 import { describe, test, expect } from "bun:test";
-import { resolveAgentEnvVars } from "./ticket-agent";
+import { resolveAgentEnvVars } from "./task-agent";
 
 describe("resolveAgentEnvVars", () => {
   test("resolves secrets from env bindings", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -32,7 +32,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("uses WORKER_URL from env when provided", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -48,7 +48,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("sets GH_TOKEN alias when GITHUB_TOKEN is resolved", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -67,7 +67,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("does not set GH_TOKEN when GITHUB_TOKEN is missing", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -84,7 +84,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("warns on missing secret binding", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -100,7 +100,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("includes R2 credentials for session persistence", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -120,7 +120,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("passes slackThreadTs when provided in config", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -135,7 +135,7 @@ describe("resolveAgentEnvVars", () => {
 
   test("sets empty string for slackThreadTs when not provided", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -151,7 +151,7 @@ describe("resolveAgentEnvVars", () => {
 describe("resolveAgentEnvVars - AI Gateway", () => {
   test("sets ANTHROPIC_BASE_URL when AI Gateway is configured", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -171,7 +171,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("does not set ANTHROPIC_BASE_URL when AI Gateway is explicitly null", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -185,7 +185,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("does not set ANTHROPIC_BASE_URL when registry has no gateway config", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -201,7 +201,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("formats gateway URL correctly with hyphens in IDs", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
@@ -221,7 +221,7 @@ describe("resolveAgentEnvVars - AI Gateway", () => {
 
   test("URL-encodes special characters in gateway IDs", () => {
     const config = {
-      ticketUUID: "LIN-123",
+      taskUUID: "LIN-123",
       product: "health-tool",
       repos: ["acme-org/sample-app"],
       slackChannel: "#health-tool",
