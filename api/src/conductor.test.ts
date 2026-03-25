@@ -5,13 +5,13 @@ import type { ProductConfig } from "./registry";
 
 describe("buildTaskEvent", () => {
   test("creates event from Linear webhook data", () => {
-    const event = buildTaskEvent("linear", "ticket_created", {
+    const event = buildTaskEvent("linear", "task_created", {
       id: "LIN-123",
       product: "test-app",
       title: "Fix login",
       description: "Login is broken",
     });
-    expect(event.type).toBe("ticket_created");
+    expect(event.type).toBe("task_created");
     expect(event.source).toBe("linear");
     expect(event.taskUUID).toBe("LIN-123");
     expect(event.product).toBe("test-app");

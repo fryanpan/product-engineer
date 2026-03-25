@@ -1,12 +1,12 @@
 import { describe, test, expect } from "bun:test";
-import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
-import { resolveAgentEnvVars } from "./ticket-agent";
-import { TERMINAL_STATUSES, type TicketAgentConfig } from "./types";
+import { buildTaskEvent, resolveProductFromChannel } from "./conductor";
+import { resolveAgentEnvVars } from "./task-agent";
+import { TERMINAL_STATUSES, type TaskAgentConfig } from "./types";
 
 describe("Agent Lifecycle Integration", () => {
   describe("Thread Identity Flow", () => {
-    test("buildTicketEvent preserves slackThreadTs for routing", () => {
-      const event = buildTicketEvent("slack", "slack_reply", {
+    test("buildTaskEvent preserves slackThreadTs for routing", () => {
+      const event = buildTaskEvent("slack", "slack_reply", {
         product: "test-app",
         text: "fix the bug",
         channel: "C12345",
@@ -16,8 +16,8 @@ describe("Agent Lifecycle Integration", () => {
       expect(event.slackChannel).toBe("C12345");
     });
 
-    test("buildTicketEvent preserves undefined slackThreadTs when not provided", () => {
-      const event = buildTicketEvent("slack", "slack_reply", {
+    test("buildTaskEvent preserves undefined slackThreadTs when not provided", () => {
+      const event = buildTaskEvent("slack", "slack_reply", {
         product: "test-app",
         text: "fix the bug",
         channel: "C12345",
@@ -27,8 +27,8 @@ describe("Agent Lifecycle Integration", () => {
     });
 
     test("resolveAgentEnvVars includes SLACK_THREAD_TS field", () => {
-      const config: TicketAgentConfig = {
-        ticketUUID: "test-123",
+      const config: TaskAgentConfig = {
+        taskUUID: "test-123",
         product: "test-app",
         repos: ["org/repo"],
         slackChannel: "C12345",
@@ -45,7 +45,7 @@ describe("Agent Lifecycle Integration", () => {
 
   describe("Terminal State Consistency", () => {
     // TERMINAL_STATUSES is the shared constant imported from types.ts.
-    // It is used by orchestrator.ts (handleStatusUpdate, handleSlackEvent)
+    // It is used by conductor.ts (handleStatusUpdate, handleSlackEvent)
     // and must match the inline list in agent/src/server.ts auto-resume.
 
     test("terminal statuses include all expected values", () => {
@@ -65,26 +65,26 @@ describe("Agent Lifecycle Integration", () => {
   });
 
   describe("Event Delivery Patterns", () => {
-    test("TicketEvent type field distinguishes event sources correctly", () => {
-      const slackReply = buildTicketEvent("slack", "slack_reply", {
+    test("TaskEvent type field distinguishes event sources correctly", () => {
+      const slackReply = buildTaskEvent("slack", "slack_reply", {
         product: "test-app",
         text: "do something",
       });
       expect(slackReply.type).toBe("slack_reply");
       expect(slackReply.source).toBe("slack");
 
-      const linearEvent = buildTicketEvent("linear", "ticket_created", {
+      const linearEvent = buildTaskEvent("linear", "task_created", {
         id: "PE-123",
         product: "test-app",
       });
-      expect(linearEvent.type).toBe("ticket_created");
+      expect(linearEvent.type).toBe("task_created");
       expect(linearEvent.source).toBe("linear");
     });
 
     test("slack_reply events skip /initialize (rely on existing config)", () => {
       // This is a documentation test — verifying the contract that
       // slack_reply events should NOT trigger /initialize in routeToAgent
-      const replyEvent = buildTicketEvent("slack", "slack_reply", {
+      const replyEvent = buildTaskEvent("slack", "slack_reply", {
         product: "test-app",
         text: "update",
         threadTs: "1234567890.123456",
@@ -96,8 +96,8 @@ describe("Agent Lifecycle Integration", () => {
 
   describe("Container Lifecycle Configuration", () => {
     test("resolveAgentEnvVars includes all required env vars for agent", () => {
-      const config: TicketAgentConfig = {
-        ticketUUID: "test-123",
+      const config: TaskAgentConfig = {
+        taskUUID: "test-123",
         product: "test-app",
         repos: ["org/repo"],
         slackChannel: "C12345",
@@ -127,8 +127,8 @@ describe("Agent Lifecycle Integration", () => {
     });
 
     test("resolveAgentEnvVars configures AI gateway when provided", () => {
-      const config: TicketAgentConfig = {
-        ticketUUID: "test-123",
+      const config: TaskAgentConfig = {
+        taskUUID: "test-123",
         product: "test-app",
         repos: ["org/repo"],
         slackChannel: "C12345",

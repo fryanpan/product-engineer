@@ -1,5 +1,5 @@
 /**
- * Shared env var resolution for container DOs (TicketAgent, ProjectAgent).
+ * Shared env var resolution for container DOs (TaskAgent, ProjectLead).
  *
  * Both agent types need the same base set of environment variables resolved
  * from platform config + per-product secrets. Role-specific vars are passed

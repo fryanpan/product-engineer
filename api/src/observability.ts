@@ -2,7 +2,7 @@
  * Observability, status, and metrics queries.
  *
  * All functions accept a `SqlExec` handle and return plain data objects.
- * The orchestrator wraps the return values in `Response.json()`.
+ * The conductor wraps the return values in `Response.json()`.
  */
 
 import type { SqlExec } from "./db";
@@ -12,8 +12,8 @@ import type { SqlExec } from "./db";
 // ---------------------------------------------------------------------------
 
 export interface ActiveAgent {
-  ticket_uuid: string;
-  ticket_id: string | null;
+  task_uuid: string;
+  task_id: string | null;
   product: string;
   status: string;
   agent_message: string | null;
@@ -27,8 +27,8 @@ export interface ActiveAgent {
 }
 
 export interface RecentCompleted {
-  ticket_uuid: string;
-  ticket_id: string | null;
+  task_uuid: string;
+  task_id: string | null;
   product: string;
   status: string;
   updated_at: string;
@@ -36,7 +36,7 @@ export interface RecentCompleted {
 }
 
 export interface StaleAgent {
-  ticket_uuid: string;
+  task_uuid: string;
   product: string;
   status: string;
   last_heartbeat: string;
@@ -54,8 +54,8 @@ export interface SystemStatusData {
 }
 
 export interface TranscriptRow {
-  ticketUUID: string;
-  ticketId: string;
+  taskUUID: string;
+  taskId: string;
   product: string;
   status: string;
   r2Key: string;
@@ -112,16 +112,16 @@ export function getTimeAgo(timestamp: string): string {
 export function getSystemStatus(sql: SqlExec): SystemStatusData {
   // Get active agents
   const activeAgents = sql.exec(
-    `SELECT ticket_uuid, ticket_id, product, status, agent_message, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
-     FROM tickets
+    `SELECT task_uuid, task_id, product, status, agent_message, last_heartbeat, created_at, updated_at, pr_url, branch_name, slack_thread_ts, slack_channel
+     FROM tasks
      WHERE agent_active = 1
      ORDER BY updated_at DESC`,
   ).toArray() as unknown as ActiveAgent[];
 
-  // Get recent completed tickets (last 24 hours)
+  // Get recent completed tasks (last 24 hours)
   const recentCompleted = sql.exec(
-    `SELECT ticket_uuid, ticket_id, product, status, updated_at, pr_url
-     FROM tickets
+    `SELECT task_uuid, task_id, product, status, updated_at, pr_url
+     FROM tasks
      WHERE agent_active = 0
        AND (julianday('now') - julianday(updated_at)) * 24 < 24
      ORDER BY updated_at DESC
@@ -130,8 +130,8 @@ export function getSystemStatus(sql: SqlExec): SystemStatusData {
 
   // Get stale agents (no heartbeat in 30 minutes)
   const staleAgents = sql.exec(
-    `SELECT ticket_uuid, product, status, last_heartbeat
-     FROM tickets
+    `SELECT task_uuid, product, status, last_heartbeat
+     FROM tasks
      WHERE agent_active = 1
        AND last_heartbeat IS NOT NULL
        AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > 30`,
@@ -149,57 +149,57 @@ export function getSystemStatus(sql: SqlExec): SystemStatusData {
   };
 }
 
-export function checkAgentHealth(sql: SqlExec): { staleAgents: Array<{ ticketUUID: string; product: string; status: string; minutesStuck: number; lastHeartbeat: string }> } {
+export function checkAgentHealth(sql: SqlExec): { staleAgents: Array<{ taskUUID: string; product: string; status: string; minutesStuck: number; lastHeartbeat: string }> } {
   const stuckThreshold = 30; // minutes
   const rows = sql.exec(
-    `SELECT ticket_uuid, product, status, last_heartbeat
-     FROM tickets
+    `SELECT task_uuid, product, status, last_heartbeat
+     FROM tasks
      WHERE agent_active = 1
        AND last_heartbeat IS NOT NULL
        AND (julianday('now') - julianday(last_heartbeat)) * 24 * 60 > ?`,
     stuckThreshold,
   ).toArray() as Array<{
-    ticket_uuid: string;
+    task_uuid: string;
     product: string;
     status: string;
     last_heartbeat: string;
   }>;
 
-  const staleAgents = rows.map((ticket) => ({
-    ticketUUID: ticket.ticket_uuid,
-    product: ticket.product,
-    status: ticket.status,
+  const staleAgents = rows.map((task) => ({
+    taskUUID: task.task_uuid,
+    product: task.product,
+    status: task.status,
     minutesStuck: Math.floor(
-      (Date.now() - new Date(ticket.last_heartbeat).getTime()) / 60000,
+      (Date.now() - new Date(task.last_heartbeat).getTime()) / 60000,
     ),
-    lastHeartbeat: ticket.last_heartbeat,
+    lastHeartbeat: task.last_heartbeat,
   }));
 
   if (staleAgents.length > 0) {
-    console.log(`[Orchestrator] Health check: ${staleAgents.length} stale agents found`);
+    console.log(`[Conductor] Health check: ${staleAgents.length} stale agents found`);
   }
 
   return { staleAgents };
 }
 
-export function listTickets(sql: SqlExec): { tickets: Record<string, unknown>[] } {
+export function listTasks(sql: SqlExec): { tasks: Record<string, unknown>[] } {
   const rows = sql.exec(
-    "SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 50",
+    "SELECT * FROM tasks ORDER BY updated_at DESC LIMIT 50",
   ).toArray();
-  return { tickets: rows };
+  return { tasks: rows };
 }
 
 export function listTranscripts(sql: SqlExec, opts: { limit: number; sinceHours?: number }): { transcripts: TranscriptRow[] } {
   const params: (string | number)[] = [];
   let query = `
     SELECT
-      ticket_uuid as ticketUUID,
-      COALESCE(ticket_id, ticket_uuid) as ticketId,
+      task_uuid as taskUUID,
+      COALESCE(task_id, task_uuid) as taskId,
       product,
       status,
       transcript_r2_key as r2Key,
       updated_at as uploadedAt
-    FROM tickets
+    FROM tasks
     WHERE transcript_r2_key IS NOT NULL
   `;
 
@@ -220,20 +220,20 @@ export function getMetrics(sql: SqlExec, opts: { limit: number; days: number }):
   const metrics = sql.exec(`
     SELECT
       m.*,
-      t.ticket_id,
+      t.task_id,
       t.title,
       t.product,
-      t.status as ticket_status,
-      t.created_at as ticket_created_at,
+      t.status as task_status,
+      t.created_at as task_created_at,
       u.total_input_tokens,
       u.total_output_tokens,
       u.total_cache_read_tokens,
       u.total_cache_creation_tokens,
       u.turns,
       u.session_message_count
-    FROM ticket_metrics m
-    LEFT JOIN tickets t ON m.ticket_uuid = t.ticket_uuid
-    LEFT JOIN token_usage u ON m.ticket_uuid = u.ticket_uuid
+    FROM task_metrics m
+    LEFT JOIN tasks t ON m.task_uuid = t.task_uuid
+    LEFT JOIN token_usage u ON m.task_uuid = u.task_uuid
     WHERE t.created_at > datetime('now', '-' || ? || ' days')
     ORDER BY t.created_at DESC
     LIMIT ?
@@ -244,8 +244,8 @@ export function getMetrics(sql: SqlExec, opts: { limit: number; days: number }):
 
 export function getMetricsSummary(sql: SqlExec): Record<string, unknown> {
   // Overall statistics
-  const totalTickets = sql.exec(
-    `SELECT COUNT(*) as count FROM ticket_metrics`
+  const totalTasks = sql.exec(
+    `SELECT COUNT(*) as count FROM task_metrics`
   ).toArray()[0] as { count: number };
 
   // Outcome distribution
@@ -253,7 +253,7 @@ export function getMetricsSummary(sql: SqlExec): Record<string, unknown> {
     SELECT
       outcome,
       COUNT(*) as count
-    FROM ticket_metrics
+    FROM task_metrics
     WHERE outcome IS NOT NULL
     GROUP BY outcome
   `).toArray() as Array<{ outcome: string; count: number }>;
@@ -267,17 +267,17 @@ export function getMetricsSummary(sql: SqlExec): Record<string, unknown> {
   const failed = outcomes.find(o => o.outcome === "failed")?.count || 0;
   const failureRate = completed > 0 ? (failed / completed * 100).toFixed(1) : "N/A";
 
-  // Multi-PR rate (tickets needing 2+ PRs)
-  const multiPrTickets = sql.exec(
-    `SELECT COUNT(*) as count FROM ticket_metrics WHERE pr_count >= 2`
+  // Multi-PR rate (tasks needing 2+ PRs)
+  const multiPrTasks = sql.exec(
+    `SELECT COUNT(*) as count FROM task_metrics WHERE pr_count >= 2`
   ).toArray()[0] as { count: number };
-  const multiPrRate = completed > 0 ? (multiPrTickets.count / completed * 100).toFixed(1) : "N/A";
+  const multiPrRate = completed > 0 ? (multiPrTasks.count / completed * 100).toFixed(1) : "N/A";
 
-  // Multi-revision rate (tickets sent back 2+ times for 3+ total attempts)
-  const multiRevisionTickets = sql.exec(
-    `SELECT COUNT(*) as count FROM ticket_metrics WHERE revision_count >= 2`
+  // Multi-revision rate (tasks sent back 2+ times for 3+ total attempts)
+  const multiRevisionTasks = sql.exec(
+    `SELECT COUNT(*) as count FROM task_metrics WHERE revision_count >= 2`
   ).toArray()[0] as { count: number };
-  const multiRevisionRate = completed > 0 ? (multiRevisionTickets.count / completed * 100).toFixed(1) : "N/A";
+  const multiRevisionRate = completed > 0 ? (multiRevisionTasks.count / completed * 100).toFixed(1) : "N/A";
 
   // Cost statistics
   const costStats = sql.exec(`
@@ -285,7 +285,7 @@ export function getMetricsSummary(sql: SqlExec): Record<string, unknown> {
       SUM(total_cost_usd) as total_cost,
       AVG(total_cost_usd) as avg_cost,
       MAX(total_cost_usd) as max_cost
-    FROM ticket_metrics
+    FROM task_metrics
     WHERE total_cost_usd > 0
   `).toArray()[0] as { total_cost: number; avg_cost: number; max_cost: number } | undefined;
 
@@ -294,25 +294,25 @@ export function getMetricsSummary(sql: SqlExec): Record<string, unknown> {
     SELECT
       date(created_at) as day,
       SUM(total_cost_usd) as cost,
-      COUNT(*) as tickets
-    FROM ticket_metrics
+      COUNT(*) as tasks
+    FROM task_metrics
     WHERE created_at > datetime('now', '-7 days')
     GROUP BY date(created_at)
     ORDER BY day DESC
-  `).toArray() as Array<{ day: string; cost: number; tickets: number }>;
+  `).toArray() as Array<{ day: string; cost: number; tasks: number }>;
 
   // Average time to completion
   const avgCompletionTime = sql.exec(`
     SELECT AVG(
       (julianday(completed_at) - julianday(created_at)) * 24 * 60
     ) as avg_minutes
-    FROM ticket_metrics
+    FROM task_metrics
     WHERE completed_at IS NOT NULL
   `).toArray()[0] as { avg_minutes: number | null };
 
   return {
     summary: {
-      totalTickets: totalTickets.count,
+      totalTasks: totalTasks.count,
       completed,
       automergeRate: automergeRate === "N/A" ? "N/A" : `${automergeRate}%`,
       failureRate: failureRate === "N/A" ? "N/A" : `${failureRate}%`,
@@ -355,9 +355,9 @@ export function formatStatusMessage(statusData: SystemStatusData, channel: strin
         : "❓";
       const statusEm = getStatusEmoji(agent.status);
       const timeSinceUpdate = getTimeAgo(agent.updated_at);
-      const ticketDisplay = agent.ticket_id ?? agent.ticket_uuid;
+      const taskDisplay = agent.task_id ?? agent.task_uuid;
 
-      message += `${healthEmoji} ${statusEm} \`${ticketDisplay}\` (${agent.product})\n`;
+      message += `${healthEmoji} ${statusEm} \`${taskDisplay}\` (${agent.product})\n`;
       const phaseInfo = agent.agent_message ? ` (${agent.agent_message})` : "";
       message += `   Status: ${agent.status}${phaseInfo} · Updated: ${timeSinceUpdate}\n`;
       if (agent.pr_url) {
@@ -380,7 +380,7 @@ export function formatStatusMessage(statusData: SystemStatusData, channel: strin
       const minutesStale = Math.floor(
         (Date.now() - new Date(agent.last_heartbeat).getTime()) / 60000
       );
-      message += `• \`${agent.ticket_uuid}\` (${agent.product}) - ${minutesStale}m ago\n`;
+      message += `• \`${agent.task_uuid}\` (${agent.product}) - ${minutesStale}m ago\n`;
     }
     message += `\n`;
   }
@@ -388,13 +388,13 @@ export function formatStatusMessage(statusData: SystemStatusData, channel: strin
   // Recent completions
   if (statusData.recentCompleted.length > 0) {
     message += `*Recent Completions (24h):*\n`;
-    for (const ticket of statusData.recentCompleted.slice(0, 5)) {
-      const statusEm = getStatusEmoji(ticket.status);
-      const timeAgo = getTimeAgo(ticket.updated_at);
-      const ticketDisplay = ticket.ticket_id ?? ticket.ticket_uuid;
-      message += `${statusEm} \`${ticketDisplay}\` (${ticket.product}) - ${timeAgo}\n`;
-      if (ticket.pr_url) {
-        message += `   ${ticket.pr_url}\n`;
+    for (const task of statusData.recentCompleted.slice(0, 5)) {
+      const statusEm = getStatusEmoji(task.status);
+      const timeAgo = getTimeAgo(task.updated_at);
+      const taskDisplay = task.task_id ?? task.task_uuid;
+      message += `${statusEm} \`${taskDisplay}\` (${task.product}) - ${timeAgo}\n`;
+      if (task.pr_url) {
+        message += `   ${task.pr_url}\n`;
       }
     }
   }

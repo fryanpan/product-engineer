@@ -2,7 +2,7 @@
  * Integration tests: verify that normalizers correctly accept/reject payloads
  * matching the shapes used in our webhook handlers.
  *
- * These are sanity checks that the wiring in webhooks.ts and orchestrator.ts
+ * These are sanity checks that the wiring in webhooks.ts and conductor.ts
  * will work — the normalizers themselves are thoroughly tested in
  * integration.test.ts and injection-detector.test.ts.
  */

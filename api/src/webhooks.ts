@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import { getLinearAppUserId, getProduct, getProductByLinearProject, isOurTeam, loadRegistry } from "./registry";
 import type { Bindings } from "./types";
 import { normalizeLinearEvent, normalizeGitHubEvent } from "./security/normalized-event";
-import { getOrchestrator } from "./do-stubs";
+import { getConductor } from "./do-stubs";
 
 // --- Shared helpers (exported for testing) ---
 
@@ -57,16 +57,16 @@ async function routeWebhookEvent(
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, repo);
+  const conductor = getConductor(env);
+  const productName = await resolveProductByRepo(conductor, repo);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  await forwardToOrchestrator(env, {
+  await forwardToConductor(env, {
     type: eventData.type,
     source: "github",
-    ticketUUID: taskId,
+    taskUUID: taskId,
     product: productName,
     payload: { ...eventData.payload, branch, repo },
   });
@@ -75,19 +75,19 @@ async function routeWebhookEvent(
 }
 
 export async function resolveProductByRepo(
-  orchestratorStub: DurableObjectStub,
+  conductorStub: DurableObjectStub,
   repoFullName: string,
 ): Promise<string | null> {
-  const registry = await loadRegistry(orchestratorStub);
+  const registry = await loadRegistry(conductorStub);
   for (const [name, config] of Object.entries(registry.products)) {
     if (config.repos.includes(repoFullName)) return name;
   }
   return null;
 }
 
-function forwardToOrchestrator(env: Bindings, event: Record<string, unknown>) {
-  const orchestrator = getOrchestrator(env);
-  return orchestrator.fetch(new Request("http://internal/event", {
+function forwardToConductor(env: Bindings, event: Record<string, unknown>) {
+  const conductor = getConductor(env);
+  return conductor.fetch(new Request("http://internal/event", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(event),
@@ -114,7 +114,7 @@ export async function assignTicketToAgent(apiKey: string, issueId: string, appUs
       { id: issueId, assigneeId: appUserId },
     );
   } catch (err) {
-    console.error("[Linear] Failed to assign ticket:", err);
+    console.error("[Linear] Failed to assign task:", err);
   }
 }
 
@@ -163,7 +163,7 @@ linearWebhook.post("/", async (c) => {
     return c.json({ ok: true, ignored: true });
   }
 
-  const orchestrator = getOrchestrator(c.env);
+  const conductor = getConductor(c.env);
 
   // Handle Linear comments on tracked tickets
   if (payload.type === "Comment" && payload.action === "create") {
@@ -175,21 +175,21 @@ linearWebhook.post("/", async (c) => {
     };
 
     // Don't re-process our own comments (posted by the app)
-    const appUserId = await getLinearAppUserId(orchestrator);
+    const appUserId = await getLinearAppUserId(conductor);
     if (commentData.user.id === appUserId) {
       return c.json({ ok: true, ignored: true, reason: "our own comment" });
     }
 
-    // Check if we're tracking this ticket
-    const statusRes = await orchestrator.fetch(
+    // Check if we're tracking this task
+    const statusRes = await conductor.fetch(
       new Request(`http://internal/ticket-status/${encodeURIComponent(commentData.issue.id)}`)
     );
 
     if (!statusRes.ok) {
-      return c.json({ ok: true, ignored: true, reason: "ticket not tracked" });
+      return c.json({ ok: true, ignored: true, reason: "task not tracked" });
     }
 
-    const ticketStatus = await statusRes.json<{ status: string; product: string }>();
+    const taskStatus = await statusRes.json<{ status: string; product: string }>();
 
     const commentScanResult = await normalizeLinearEvent({
       action: payload.action,
@@ -201,11 +201,11 @@ linearWebhook.post("/", async (c) => {
       return c.json({ error: "Event rejected: suspicious content detected" }, 400);
     }
 
-    await forwardToOrchestrator(c.env, {
+    await forwardToConductor(c.env, {
       type: "linear_comment",
       source: "linear",
-      ticketUUID: commentData.issue.id,
-      product: ticketStatus.product,
+      taskUUID: commentData.issue.id,
+      product: taskStatus.product,
       payload: {
         comment_id: commentData.id,
         body: commentData.body,
@@ -215,7 +215,7 @@ linearWebhook.post("/", async (c) => {
       },
     });
 
-    return c.json({ ok: true, ticketUUID: commentData.issue.id });
+    return c.json({ ok: true, taskUUID: commentData.issue.id });
   }
 
   // Scan free-text fields for injection attacks
@@ -225,7 +225,7 @@ linearWebhook.post("/", async (c) => {
     return c.json({ error: "Event rejected: suspicious content detected" }, 400);
   }
 
-  if (!(await isOurTeam(orchestrator, payload.data.teamId))) {
+  if (!(await isOurTeam(conductor, payload.data.teamId))) {
     return c.json({ ok: true, ignored: true, reason: "not our team" });
   }
 
@@ -238,7 +238,7 @@ linearWebhook.post("/", async (c) => {
     });
   }
 
-  const match = await getProductByLinearProject(orchestrator, projectName);
+  const match = await getProductByLinearProject(conductor, projectName);
   if (!match) {
     return c.json({
       ok: true,
@@ -248,7 +248,7 @@ linearWebhook.post("/", async (c) => {
   }
 
   // Trigger conditions: only trigger on create/update when assigned to agent (but not if already in terminal state)
-  const appUserId = await getLinearAppUserId(orchestrator);
+  const appUserId = await getLinearAppUserId(conductor);
   const isAssignedToAgent = payload.data.assignee?.id === appUserId || payload.data.delegate?.id === appUserId;
 
   // Ignore terminal states even if assigned to agent
@@ -301,14 +301,14 @@ linearWebhook.post("/", async (c) => {
       }
     }
   } catch (err) {
-    console.error("[Linear] Failed to fetch comments for ticket:", err);
+    console.error("[Linear] Failed to fetch comments for task:", err);
     // Continue without comments rather than failing the webhook
   }
 
-  await forwardToOrchestrator(c.env, {
-    type: "ticket_created",
+  await forwardToConductor(c.env, {
+    type: "task_created",
     source: "linear",
-    ticketUUID: payload.data.id,
+    taskUUID: payload.data.id,
     product: match.name,
     payload: {
       id: payload.data.id,
@@ -325,7 +325,7 @@ linearWebhook.post("/", async (c) => {
     ok: true,
     product: match.name,
     project: projectName,
-    ticketUUID: payload.data.id,
+    taskUUID: payload.data.id,
   });
 });
 
@@ -419,8 +419,8 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  const conductor = getConductor(env);
+  const productName = await resolveProductByRepo(conductor, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
@@ -428,10 +428,10 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
   // Handle different PR actions
   if (payload.action === "closed") {
     if (payload.pull_request.merged) {
-      await forwardToOrchestrator(env, {
+      await forwardToConductor(env, {
         type: "pr_merged",
         source: "github",
-        ticketUUID: taskId,
+        taskUUID: taskId,
         product: productName,
         payload: {
           pr_url: payload.pull_request.html_url,
@@ -442,10 +442,10 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
       return Response.json({ ok: true, product: productName, taskId, status: "pr_merged" });
     } else {
       // PR closed without merging — notify agent so it can update status
-      await forwardToOrchestrator(env, {
+      await forwardToConductor(env, {
         type: "pr_closed",
         source: "github",
-        ticketUUID: taskId,
+        taskUUID: taskId,
         product: productName,
         payload: {
           pr_url: payload.pull_request.html_url,
@@ -459,10 +459,10 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
 
   if (payload.action === "synchronize") {
     // New commits pushed to PR
-    await forwardToOrchestrator(env, {
+    await forwardToConductor(env, {
       type: "pr_updated",
       source: "github",
-      ticketUUID: taskId,
+      taskUUID: taskId,
       product: productName,
       payload: {
         pr_url: payload.pull_request.html_url,
@@ -475,10 +475,10 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
   }
 
   if (payload.action === "reopened") {
-    await forwardToOrchestrator(env, {
+    await forwardToConductor(env, {
       type: "pr_reopened",
       source: "github",
-      ticketUUID: taskId,
+      taskUUID: taskId,
       product: productName,
       payload: {
         pr_url: payload.pull_request.html_url,
@@ -490,10 +490,10 @@ async function handlePullRequest(rawBody: string, env: Bindings) {
   }
 
   if (payload.action === "labeled" || payload.action === "unlabeled") {
-    await forwardToOrchestrator(env, {
+    await forwardToConductor(env, {
       type: payload.action === "labeled" ? "pr_labeled" : "pr_unlabeled",
       source: "github",
-      ticketUUID: taskId,
+      taskUUID: taskId,
       product: productName,
       payload: {
         pr_url: payload.pull_request.html_url,
@@ -541,16 +541,16 @@ async function handlePullRequestReview(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  const conductor = getConductor(env);
+  const productName = await resolveProductByRepo(conductor, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  await forwardToOrchestrator(env, {
+  await forwardToConductor(env, {
     type: "pr_review",
     source: "github",
-    ticketUUID: taskId,
+    taskUUID: taskId,
     product: productName,
     payload: {
       pr_url: payload.pull_request.html_url,
@@ -600,16 +600,16 @@ async function handlePullRequestReviewComment(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  const conductor = getConductor(env);
+  const productName = await resolveProductByRepo(conductor, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  await forwardToOrchestrator(env, {
+  await forwardToConductor(env, {
     type: "pr_review_comment",
     source: "github",
-    ticketUUID: taskId,
+    taskUUID: taskId,
     product: productName,
     payload: {
       pr_url: payload.pull_request.html_url,
@@ -658,13 +658,13 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
   }
 
   // Resolve product early so we can get the right per-product GitHub token
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  const conductor = getConductor(env);
+  const productName = await resolveProductByRepo(conductor, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
 
-  const productConfig = await getProduct(orchestrator, productName);
+  const productConfig = await getProduct(conductor, productName);
   const ghTokenBinding = productConfig?.secrets?.GITHUB_TOKEN;
   const ghToken = ghTokenBinding ? (env as Record<string, unknown>)[ghTokenBinding] as string : undefined;
   if (!ghToken) {
@@ -702,10 +702,10 @@ async function handleIssueComment(rawBody: string, env: Bindings) {
     return Response.json({ ok: true, ignored: true, reason: "not a task branch" });
   }
 
-  await forwardToOrchestrator(env, {
+  await forwardToConductor(env, {
     type: "pr_comment",
     source: "github",
-    ticketUUID: taskId,
+    taskUUID: taskId,
     product: productName,
     payload: {
       pr_url: payload.issue.html_url,
@@ -942,10 +942,10 @@ async function handleDependabotAlert(rawBody: string, env: Bindings) {
   }
 
   // Dependabot alerts are repo-level, not branch-specific.
-  // Forward to orchestrator as a new event — the orchestrator can decide
-  // whether to create a ticket or wait for the Dependabot PR.
-  const orchestrator = getOrchestrator(env);
-  const productName = await resolveProductByRepo(orchestrator, payload.repository.full_name);
+  // Forward to conductor as a new event — the conductor can decide
+  // whether to create a task or wait for the Dependabot PR.
+  const conductor = getConductor(env);
+  const productName = await resolveProductByRepo(conductor, payload.repository.full_name);
   if (!productName) {
     return Response.json({ ok: true, ignored: true, reason: "unknown repo" });
   }
@@ -955,12 +955,12 @@ async function handleDependabotAlert(rawBody: string, env: Bindings) {
   // so they get a fresh ticket instead of hitting the terminal state guard.
   const repoShort = payload.repository.full_name.replace("/", "-");
   const actionSuffix = payload.action === "reopened" ? `-reopen-${Date.now()}` : "";
-  const ticketUUID = `dependabot-${repoShort}-${payload.alert.number}${actionSuffix}`;
+  const taskUUID = `dependabot-${repoShort}-${payload.alert.number}${actionSuffix}`;
 
-  await forwardToOrchestrator(env, {
+  await forwardToConductor(env, {
     type: "dependabot_alert",
     source: "github",
-    ticketUUID,
+    taskUUID,
     product: productName,
     payload: {
       alert_number: payload.alert.number,
@@ -978,7 +978,7 @@ async function handleDependabotAlert(rawBody: string, env: Bindings) {
     },
   });
 
-  return Response.json({ ok: true, product: productName, ticketUUID, alertNumber: payload.alert.number });
+  return Response.json({ ok: true, product: productName, taskUUID, alertNumber: payload.alert.number });
 }
 
 export { linearWebhook, githubWebhook };

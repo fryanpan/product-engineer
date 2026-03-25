@@ -1,7 +1,7 @@
 /**
  * ProjectLead routing — manages ProjectLead DO lifecycle and event routing.
  *
- * Extracted from orchestrator.ts to keep the orchestrator focused on
+ * Extracted from conductor.ts to keep the conductor focused on
  * top-level request dispatch and task lifecycle.
  */
 

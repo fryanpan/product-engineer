@@ -3,21 +3,21 @@ import { TERMINAL_STATUSES, TASK_STATES, type TaskEvent, type HeartbeatPayload, 
 import type { ProductConfig, CloudflareAIGateway } from "./registry";
 import { TaskManager, type SpawnConfig } from "./task-manager";
 import { configure as configureInjectionDetector } from "./security/injection-detector";
-import type { ProjectAgentConfig } from "./project-agent";
+import type { ProjectLeadConfig } from "./project-lead";
 import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTaskMetrics } from "./db";
 import {
-  ensureProjectAgent as ensureProjectAgentImpl,
+  ensureProjectLead as ensureProjectLeadImpl,
   ensureConductor as ensureConductorImpl,
-  routeToProjectAgent as routeToProjectLeadImpl,
-  handleProjectAgentRoute as handleProjectAgentRouteImpl,
-  restartProjectAgents as restartProjectAgentsImpl,
-} from "./project-agent-router";
+  routeToProjectLead as routeToProjectLeadImpl,
+  handleProjectLeadRoute as handleProjectLeadRouteImpl,
+  restartProjectLeads as restartProjectLeadsImpl,
+} from "./project-lead-router";
 import {
   getSystemStatus as getSystemStatusData,
   getMetrics as getMetricsData,
   getMetricsSummary as getMetricsSummaryData,
   checkAgentHealth as checkAgentHealthData,
-  listTickets as listTasksData,
+  listTasks as listTasksData,
   listTranscripts as listTranscriptsData,
 } from "./observability";
 import {
@@ -212,7 +212,7 @@ export class Conductor extends Container<Bindings> {
       case "/health":
         return Response.json({ ok: true, service: "conductor-do" });
       case "/tickets":
-        return Response.json(listTicketsData(this.sqlExec));
+        return Response.json(listTasksData(this.sqlExec));
       case "/ticket/status":
         return this.handleStatusUpdate(request);
       case "/token-usage":
@@ -236,8 +236,8 @@ export class Conductor extends Container<Bindings> {
         return this.cleanupInactiveAgents();
       case "/shutdown-all":
         return this.shutdownAllAgents();
-      case "/restart-project-agents":
-        return restartProjectAgentsImpl(this.env, this.sqlExec);
+      case "/restart-project-leads":
+        return restartProjectLeadsImpl(this.env, this.sqlExec);
       case "/products":
         if (request.method === "GET") return listProductsHandler(this.sqlExec);
         { const { slug, config } = await request.json<{ slug: string; config: unknown }>(); return createProductHandler(this.sqlExec, slug, config); }
@@ -284,18 +284,18 @@ export class Conductor extends Container<Bindings> {
       const key = url.pathname.split("/").pop()!;
       if (request.method === "PUT") { const { value } = await request.json<{ value: string }>(); return updateSettingHandler(this.sqlExec, key, value); }
     }
-    if (url.pathname.startsWith("/project-agent/")) {
-      const subpath = url.pathname.replace("/project-agent/", "");
-      return handleProjectAgentRouteImpl(subpath, request, this.env, this.sqlExec, this.taskManager);
+    if (url.pathname.startsWith("/project-lead/")) {
+      const subpath = url.pathname.replace("/project-lead/", "");
+      return handleProjectLeadRouteImpl(subpath, request, this.env, this.sqlExec, this.taskManager);
     }
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  // --- Project Agent routing (delegated to project-agent-router.ts) ---
+  // --- Project Lead routing (delegated to project-lead-router.ts) ---
 
   private async routeToProjectLead(
     product: string,
-    event: TicketEvent,
+    event: TaskEvent,
   ): Promise<void> {
     return routeToProjectLeadImpl(product, event, this.env, this.sqlExec);
   }
@@ -305,8 +305,8 @@ export class Conductor extends Container<Bindings> {
   }
 
   private async handleEvent(request: Request): Promise<Response> {
-    const event = await request.json<TicketEvent>();
-    event.taskUUID = sanitizeTicketUUID(event.taskUUID);
+    const event = await request.json<TaskEvent>();
+    event.taskUUID = sanitizeTaskUUID(event.taskUUID);
     console.log(`[Conductor] handleEvent: type=${event.type} taskUUID=${event.taskUUID} source=${event.source}`);
 
     // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID task.
@@ -381,7 +381,7 @@ export class Conductor extends Container<Bindings> {
     ensureTaskMetrics(this.sqlExec, event.taskUUID);
 
     // For new tasks, use LLM task review instead of direct routing
-    if (event.type === "ticket_created") {
+    if (event.type === "task_created") {
       await this.handleTaskReview(event);
       return Response.json({ ok: true, taskUUID: event.taskUUID });
     }
@@ -467,7 +467,7 @@ export class Conductor extends Container<Bindings> {
    * Fallback: If ProjectLead routing fails, spawns a TaskAgent directly
    * (preserves v2 behavior as safety net).
    */
-  private async handleTaskReview(event: TicketEvent): Promise<void> {
+  private async handleTaskReview(event: TaskEvent): Promise<void> {
     const payload = event.payload as Record<string, unknown>;
 
     // Load product config from database
@@ -504,7 +504,7 @@ export class Conductor extends Container<Bindings> {
     try {
       await this.routeToProjectLead(event.product, event);
       console.log(`[Conductor] Routed task ${event.taskUUID} to ProjectLead for ${event.product}`);
-      return; // ProjectLead will handle spawning if needed via /project-agent/spawn-task
+      return; // ProjectLead will handle spawning if needed via /project-lead/spawn-task
     } catch (err) {
       console.error(`[Conductor] ProjectLead routing failed for ${event.taskUUID}, falling back to direct spawn:`, err);
     }
@@ -540,7 +540,7 @@ export class Conductor extends Container<Bindings> {
    * Re-spawn a container for a suspended task and send the triggering event.
    * Uses the product config from the registry to reconstruct spawn config.
    */
-  private async respawnSuspendedTask(taskUUID: string, product: string, event: TicketEvent): Promise<void> {
+  private async respawnSuspendedTask(taskUUID: string, product: string, event: TaskEvent): Promise<void> {
     const productConfig = getProductConfig(this.sqlExec, product);
     if (!productConfig) throw new Error(`Product ${product} not found in registry`);
 

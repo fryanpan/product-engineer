@@ -98,21 +98,21 @@ export class TaskAgent extends Container<Bindings> {
     if (config) {
       // Check conductor state — don't restart containers for tasks that are no longer active
       try {
-        const orchestratorId = this.env.ORCHESTRATOR.idFromName("main");
-        const orchestratorStub = this.env.ORCHESTRATOR.get(orchestratorId);
-        const statusRes = await orchestratorStub.fetch(
+        const conductorId = this.env.CONDUCTOR.idFromName("main");
+        const conductorStub = this.env.CONDUCTOR.get(conductorId);
+        const statusRes = await conductorStub.fetch(
           new Request(`http://internal/ticket-status/${encodeURIComponent(config.taskUUID)}`)
         );
         if (statusRes.ok) {
           const status = await statusRes.json<{ agent_active: number; status: string }>();
           if (status.agent_active === 0) {
-            console.log(`[TaskAgent] Orchestrator says ${config.taskUUID} is inactive (status=${status.status}) — marking terminal, skipping restart`);
+            console.log(`[TaskAgent] Conductor says ${config.taskUUID} is inactive (status=${status.status}) — marking terminal, skipping restart`);
             this.markTerminal();
             return super.alarm(alarmProps);
           }
         }
       } catch (err) {
-        console.warn(`[TaskAgent] Could not check orchestrator status for ${config.taskUUID}:`, err);
+        console.warn(`[TaskAgent] Could not check conductor status for ${config.taskUUID}:`, err);
         // Fall through to existing container health check
       }
 
@@ -176,7 +176,7 @@ export class TaskAgent extends Container<Bindings> {
         this.markTerminal();
 
         // Tell the container to shut down immediately instead of waiting for session timeout.
-        // Use a bounded-time request so a hung container cannot block the orchestrator status path.
+        // Use a bounded-time request so a hung container cannot block the conductor status path.
         const shutdownController = new AbortController();
         const shutdownTimeoutMs = 5000;
         const shutdownTimeoutId = setTimeout(() => {

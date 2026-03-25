@@ -324,7 +324,7 @@ export const dashboardHTML = `<!DOCTYPE html>
 
     async function loadData() {
       try {
-        const response = await fetchWithAuth('/api/orchestrator/status', {
+        const response = await fetchWithAuth('/api/conductor/status', {
           headers: {
             'X-API-Key': 'dashboard'
           }
@@ -473,13 +473,13 @@ export const dashboardHTML = `<!DOCTYPE html>
       return div.innerHTML;
     }
 
-    async function killAgent(ticketId) {
+    async function killAgent(taskId) {
       if (!confirm(\`Are you sure you want to kill the agent for \${ticketId}?\`)) {
         return;
       }
 
       try {
-        const response = await fetchWithAuth(\`/dashboard/kill-agent/\${encodeURIComponent(ticketId)}\`, {
+        const response = await fetchWithAuth(\`/dashboard/kill-agent/\${encodeURIComponent(taskId)}\`, {
           method: 'POST'
         });
 
@@ -500,7 +500,7 @@ export const dashboardHTML = `<!DOCTYPE html>
       }
 
       try {
-        const response = await fetchWithAuth('/api/orchestrator/shutdown-all', {
+        const response = await fetchWithAuth('/api/conductor/shutdown-all', {
           method: 'POST',
           headers: {
             'X-API-Key': 'dashboard'

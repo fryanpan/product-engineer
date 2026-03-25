@@ -1,5 +1,5 @@
 /**
- * Test helpers for mocking the registry and orchestrator.
+ * Test helpers for mocking the registry and conductor.
  */
 
 export interface MockRegistryData {
@@ -10,9 +10,9 @@ export interface MockRegistryData {
 }
 
 /**
- * Create a mock orchestrator stub that returns test registry data.
+ * Create a mock conductor stub that returns test registry data.
  */
-export function createMockOrchestratorStub(registryData: MockRegistryData): DurableObjectStub {
+export function createMockConductorStub(registryData: MockRegistryData): DurableObjectStub {
   return {
     fetch: async (req: Request) => {
       const url = new URL(req.url);

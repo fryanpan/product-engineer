@@ -1,7 +1,7 @@
 /**
- * Shared database helpers for the Orchestrator DO.
+ * Shared database helpers for the Conductor DO.
  *
- * All functions accept a `SqlExec` interface (the same one used by AgentManager)
+ * All functions accept a `SqlExec` interface (the same one used by TaskManager)
  * so they can be called with `this.ctx.storage.sql` from any DO method.
  */
 

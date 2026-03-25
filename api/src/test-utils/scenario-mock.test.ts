@@ -90,7 +90,7 @@ describe("ScenarioMock", () => {
 
       await mock.fetch("/event", {
         method: "POST",
-        body: JSON.stringify({ type: "ticket_created" }),
+        body: JSON.stringify({ type: "task_created" }),
       });
       await mock.fetch("/event", {
         method: "POST",
@@ -99,7 +99,7 @@ describe("ScenarioMock", () => {
 
       const bodies = mock.getCapturedBodies("/event");
       expect(bodies).toHaveLength(2);
-      expect(bodies[0]).toEqual({ type: "ticket_created" });
+      expect(bodies[0]).toEqual({ type: "task_created" });
       expect(bodies[1]).toEqual({ type: "pr_review" });
     });
 

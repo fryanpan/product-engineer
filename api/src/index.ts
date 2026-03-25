@@ -472,7 +472,7 @@ app.post("/api/conductor/restart-project-leads", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
   const conductor = getConductor(c.env);
-  return conductor.fetch(new Request("http://internal/restart-project-agents", {
+  return conductor.fetch(new Request("http://internal/restart-project-leads", {
     method: "POST",
   }));
 });
@@ -488,7 +488,7 @@ app.all("/api/project-lead/*", async (c) => {
 
   const subpath = c.req.path.replace("/api/project-lead/", "");
   const conductor = getConductor(c.env);
-  return conductor.fetch(new Request(`http://internal/project-agent/${subpath}${new URL(c.req.url).search}`, {
+  return conductor.fetch(new Request(`http://internal/project-lead/${subpath}${new URL(c.req.url).search}`, {
     method: c.req.method,
     headers: { "Content-Type": "application/json" },
     ...(c.req.method !== "GET" ? { body: await c.req.text() } : {}),

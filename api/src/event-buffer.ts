@@ -2,7 +2,7 @@
  * Shared event buffer for container DOs.
  *
  * Stores events in SQLite when the container is unreachable, then drains/replays
- * them when the container becomes healthy. Used by both TicketAgent and ProjectAgent.
+ * them when the container becomes healthy. Used by both TaskAgent and ProjectLead.
  */
 
 import type { SqlExec } from "./db";

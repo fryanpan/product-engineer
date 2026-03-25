@@ -1,5 +1,5 @@
 /**
- * Slack event handling — extracted from orchestrator.ts.
+ * Slack event handling — extracted from conductor.ts.
  *
  * Handles all Slack event processing including thread replies, conductor routing,
  * product channel routing, task creation, and status commands.
@@ -15,7 +15,7 @@ import { addReaction } from "./slack-utils";
 import type { TaskManager } from "./task-manager";
 
 // ---------------------------------------------------------------------------
-// Dependency bundle — everything the handler needs from the orchestrator
+// Dependency bundle — everything the handler needs from the conductor
 // ---------------------------------------------------------------------------
 
 export interface SlackHandlerDeps {
@@ -426,7 +426,7 @@ export async function handleSlackEvent(
         slackThreadTs: slackEvent.thread_ts || slackEvent.ts,
         slackChannel: slackEvent.channel,
       };
-      await conductorStub.fetch(new Request("http://project-agent/event", {
+      await conductorStub.fetch(new Request("http://project-lead/event", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(event),
