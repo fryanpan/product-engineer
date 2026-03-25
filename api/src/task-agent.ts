@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import type { TicketEvent, TicketAgentConfig, Bindings } from "./types";
+import type { TaskEvent, TaskAgentConfig, Bindings } from "./types";
 import type { CloudflareAIGateway } from "./registry";
 import { resolveContainerEnvVars } from "./container-env";
 import { EventBuffer } from "./event-buffer";
@@ -7,30 +7,30 @@ import { PersistentConfig } from "./persistent-config";
 
 // Pure helper — exported for testing (delegates to shared resolveContainerEnvVars)
 export function resolveAgentEnvVars(
-  config: TicketAgentConfig,
+  config: TaskAgentConfig,
   env: Record<string, string>,
   gatewayConfig?: CloudflareAIGateway | null,
 ): Record<string, string> {
   return resolveContainerEnvVars(config, env, gatewayConfig, {
-    TICKET_UUID: config.ticketUUID,
-    TICKET_IDENTIFIER: config.ticketId ?? "",
-    TICKET_TITLE: config.ticketTitle ?? "",
+    TASK_UUID: config.taskUUID,
+    TASK_IDENTIFIER: config.taskId ?? "",
+    TASK_TITLE: config.taskTitle ?? "",
     SLACK_THREAD_TS: config.slackThreadTs || "",
   });
 }
 
-export class TicketAgent extends Container<Bindings> {
+export class TaskAgent extends Container<Bindings> {
   defaultPort = 3000;
   sleepAfter = "1h"; // Safety net — agent should exit within 5min of completion
 
-  private persistentConfig: PersistentConfig<TicketAgentConfig>;
+  private persistentConfig: PersistentConfig<TaskAgentConfig>;
   private eventBuffer: EventBuffer;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     // @ts-expect-error — DurableObjectState generic mismatch between Container SDK and Workers types
     super(ctx, env);
-    this.persistentConfig = new PersistentConfig<TicketAgentConfig>(ctx.storage.sql);
-    this.eventBuffer = new EventBuffer(ctx.storage.sql, "TicketAgent");
+    this.persistentConfig = new PersistentConfig<TaskAgentConfig>(ctx.storage.sql);
+    this.eventBuffer = new EventBuffer(ctx.storage.sql, "TaskAgent");
     // Container base class initializes envVars={} as a class field, which shadows
     // any getter. Set the real values here so containerFetch auto-restarts work.
     // On first construction (no config yet), envVars stays {} — /initialize sets it.
@@ -44,11 +44,11 @@ export class TicketAgent extends Container<Bindings> {
     }
   }
 
-  private getConfig(): TicketAgentConfig | null {
+  private getConfig(): TaskAgentConfig | null {
     return this.persistentConfig.get();
   }
 
-  private setConfig(config: TicketAgentConfig) {
+  private setConfig(config: TaskAgentConfig) {
     this.persistentConfig.set(config);
     // Update instance envVars so containerFetch auto-restarts use correct values
     this.envVars = resolveAgentEnvVars(
@@ -59,20 +59,20 @@ export class TicketAgent extends Container<Bindings> {
   }
 
   override onStop(params: { exitCode: number; reason: string }) {
-    console.error(`[TicketAgent] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
+    console.error(`[TaskAgent] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
   }
 
   override onError(error: unknown) {
-    console.error("[TicketAgent] Container error:", error);
+    console.error("[TaskAgent] Container error:", error);
     throw error;
   }
 
-  private bufferEvent(event: TicketEvent) {
+  private bufferEvent(event: TaskEvent) {
     this.eventBuffer.buffer(event);
   }
 
-  private drainEventBuffer(): TicketEvent[] {
-    return this.eventBuffer.drain<TicketEvent>();
+  private drainEventBuffer(): TaskEvent[] {
+    return this.eventBuffer.drain<TaskEvent>();
   }
 
   private isTerminal(): boolean {
@@ -85,34 +85,34 @@ export class TicketAgent extends Container<Bindings> {
 
   clearTerminal() {
     this.persistentConfig.clearTerminal();
-    console.log("[TicketAgent] Terminal flag cleared — ticket reopened");
+    console.log("[TaskAgent] Terminal flag cleared — task reopened");
   }
 
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
-    // Don't restart containers for completed tickets
+    // Don't restart containers for completed tasks
     if (this.isTerminal()) {
       return super.alarm(alarmProps);
     }
 
     const config = this.getConfig();
     if (config) {
-      // Check orchestrator state — don't restart containers for tickets that are no longer active
+      // Check conductor state — don't restart containers for tasks that are no longer active
       try {
-        const orchestratorId = this.env.ORCHESTRATOR.idFromName("main");
-        const orchestratorStub = this.env.ORCHESTRATOR.get(orchestratorId);
-        const statusRes = await orchestratorStub.fetch(
-          new Request(`http://internal/ticket-status/${encodeURIComponent(config.ticketUUID)}`)
+        const conductorId = this.env.CONDUCTOR.idFromName("main");
+        const conductorStub = this.env.CONDUCTOR.get(conductorId);
+        const statusRes = await conductorStub.fetch(
+          new Request(`http://internal/task-status/${encodeURIComponent(config.taskUUID)}`)
         );
         if (statusRes.ok) {
           const status = await statusRes.json<{ agent_active: number; status: string }>();
           if (status.agent_active === 0) {
-            console.log(`[TicketAgent] Orchestrator says ${config.ticketUUID} is inactive (status=${status.status}) — marking terminal, skipping restart`);
+            console.log(`[TaskAgent] Conductor says ${config.taskUUID} is inactive (status=${status.status}) — marking terminal, skipping restart`);
             this.markTerminal();
             return super.alarm(alarmProps);
           }
         }
       } catch (err) {
-        console.warn(`[TicketAgent] Could not check orchestrator status for ${config.ticketUUID}:`, err);
+        console.warn(`[TaskAgent] Could not check conductor status for ${config.taskUUID}:`, err);
         // Fall through to existing container health check
       }
 
@@ -121,11 +121,11 @@ export class TicketAgent extends Container<Bindings> {
         const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
         const status = await res.json<{ sessionStatus: string }>();
         if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
-          console.log(`[TicketAgent] Session ${status.sessionStatus} for ${config.ticketUUID}, marking terminal`);
+          console.log(`[TaskAgent] Session ${status.sessionStatus} for ${config.taskUUID}, marking terminal`);
           this.markTerminal();
         }
       } catch {
-        console.log(`[TicketAgent] Container not healthy for ${config.ticketUUID}, will auto-resume on restart`);
+        console.log(`[TaskAgent] Container not healthy for ${config.taskUUID}, will auto-resume on restart`);
       }
     }
     return super.alarm(alarmProps);
@@ -136,7 +136,7 @@ export class TicketAgent extends Container<Bindings> {
 
     switch (url.pathname) {
       case "/initialize": {
-        const config = await request.json<TicketAgentConfig>();
+        const config = await request.json<TaskAgentConfig>();
         this.setConfig(config);
         await this.startAndWaitForPorts({
           ports: this.defaultPort,
@@ -145,7 +145,7 @@ export class TicketAgent extends Container<Bindings> {
         return Response.json({ ok: true });
       }
       case "/event": {
-        const event = await request.json<TicketEvent>();
+        const event = await request.json<TaskEvent>();
         try {
           // containerFetch auto-starts the container if needed, using this.envVars
           // (set in constructor from SQLite or in setConfig from /initialize)
@@ -167,7 +167,7 @@ export class TicketAgent extends Container<Bindings> {
           return res;
         } catch (err) {
           // Container unreachable — buffer the event for later drain
-          console.warn("[TicketAgent] Container not ready, buffering event:", err);
+          console.warn("[TaskAgent] Container not ready, buffering event:", err);
           this.bufferEvent(event);
           return Response.json({ buffered: true }, { status: 202 });
         }
@@ -176,7 +176,7 @@ export class TicketAgent extends Container<Bindings> {
         this.markTerminal();
 
         // Tell the container to shut down immediately instead of waiting for session timeout.
-        // Use a bounded-time request so a hung container cannot block the orchestrator status path.
+        // Use a bounded-time request so a hung container cannot block the conductor status path.
         const shutdownController = new AbortController();
         const shutdownTimeoutMs = 5000;
         const shutdownTimeoutId = setTimeout(() => {
@@ -198,7 +198,7 @@ export class TicketAgent extends Container<Bindings> {
           );
 
           if (res.ok) {
-            console.log("[TicketAgent] Container shutdown requested");
+            console.log("[TaskAgent] Container shutdown requested");
           } else {
             let bodyText = "";
             try {
@@ -207,7 +207,7 @@ export class TicketAgent extends Container<Bindings> {
               bodyText = "<unreadable body>";
             }
             console.warn(
-              "[TicketAgent] Container shutdown request returned non-2xx response:",
+              "[TaskAgent] Container shutdown request returned non-2xx response:",
               res.status,
               bodyText,
             );
@@ -215,7 +215,7 @@ export class TicketAgent extends Container<Bindings> {
         } catch (err) {
           // Container might already be stopped or the request may have timed out - that's fine
           console.log(
-            "[TicketAgent] Container shutdown request failed (container may already be stopped or request timed out):",
+            "[TaskAgent] Container shutdown request failed (container may already be stopped or request timed out):",
             err,
           );
         } finally {
@@ -225,7 +225,7 @@ export class TicketAgent extends Container<Bindings> {
         return Response.json({ ok: true });
       }
       case "/health": {
-        return Response.json({ ok: true, service: "ticket-agent-do" });
+        return Response.json({ ok: true, service: "task-agent-do" });
       }
       case "/status": {
         try {

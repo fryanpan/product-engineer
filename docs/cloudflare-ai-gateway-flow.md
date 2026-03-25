@@ -5,7 +5,7 @@ This document illustrates how LLM requests flow through Cloudflare AI Gateway.
 ## Before AI Gateway
 
 ```
-TicketAgent Container
+TaskAgent Container
   │
   │ ANTHROPIC_API_KEY=sk-ant-xxx
   │
@@ -34,7 +34,7 @@ Response (no logging, no analytics)
 ## After AI Gateway
 
 ```
-TicketAgent Container
+TaskAgent Container
   │
   │ ANTHROPIC_API_KEY=sk-ant-xxx
   │ ANTHROPIC_BASE_URL=https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/anthropic
@@ -83,7 +83,7 @@ Response
 Agent SDK
   │
   ▼
-TicketAgent Container
+TaskAgent Container
 ```
 
 **Benefits:**
@@ -111,7 +111,7 @@ api/src/registry.ts
   getAIGatewayConfig() → { account_id, gateway_id }
   │
   ▼
-api/src/ticket-agent.ts
+api/src/task-agent.ts
   resolveAgentEnvVars()
   │
   │ Constructs URL:

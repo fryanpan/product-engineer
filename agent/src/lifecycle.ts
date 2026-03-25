@@ -78,16 +78,16 @@ export class AgentLifecycle {
 
   // ── Phone-home ─────────────────────────────────────────────────────────
 
-  /** Send a heartbeat/log message to the orchestrator (fire-and-forget). */
+  /** Send a heartbeat/log message to the conductor (fire-and-forget). */
   phoneHome(message: string): void {
     console.log(`[Agent] phoneHome: ${message}`);
-    fetch(`${this.config.workerUrl}/api/orchestrator/heartbeat`, {
+    fetch(`${this.config.workerUrl}/api/conductor/heartbeat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Internal-Key": this.config.apiKey,
       },
-      body: JSON.stringify({ ticketUUID: this.config.ticketUUID, message }),
+      body: JSON.stringify({ taskUUID: this.config.taskUUID, message }),
     }).catch((err) => console.error("[Agent] phoneHome failed:", err));
   }
 
@@ -110,7 +110,7 @@ export class AgentLifecycle {
     // 2. Report token usage
     try {
       await this.tokenTracker.report({
-        ticketUUID: this.config.ticketUUID,
+        taskUUID: this.config.taskUUID,
         workerUrl: this.config.workerUrl,
         apiKey: this.config.apiKey,
         slackBotToken: this.config.slackBotToken,
@@ -132,7 +132,7 @@ export class AgentLifecycle {
           "X-Internal-Key": this.config.apiKey,
         },
         body: JSON.stringify({
-          ticketUUID: this.config.ticketUUID,
+          taskUUID: this.config.taskUUID,
           status: "suspended",
           session_id: this.state.currentSessionId,
         }),
@@ -206,7 +206,7 @@ export class AgentLifecycle {
       // Project lead/research session completed — report tokens here since
       // autoSuspend won't be called (persistent agents stay alive).
       await this.tokenTracker.report({
-        ticketUUID: this.config.ticketUUID,
+        taskUUID: this.config.taskUUID,
         workerUrl: this.config.workerUrl,
         apiKey: this.config.apiKey,
         slackBotToken: this.config.slackBotToken,
@@ -272,13 +272,13 @@ export class AgentLifecycle {
       if (this.state.sessionStatus === "idle") return;
 
       // Send heartbeat to orchestrator for monitoring
-      fetch(`${this.config.workerUrl}/api/orchestrator/heartbeat`, {
+      fetch(`${this.config.workerUrl}/api/conductor/heartbeat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Internal-Key": this.config.apiKey,
         },
-        body: JSON.stringify({ ticketUUID: this.config.ticketUUID }),
+        body: JSON.stringify({ taskUUID: this.config.taskUUID }),
       }).catch((err) => console.error("[Agent] Heartbeat failed:", err));
 
       this.phoneHome(`heartbeat status=${this.state.sessionStatus} msgs=${this.state.sessionMessageCount}`);

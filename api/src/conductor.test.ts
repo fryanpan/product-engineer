@@ -1,25 +1,25 @@
 import { describe, test, expect } from "bun:test";
-import { buildTicketEvent, resolveProductFromChannel } from "./orchestrator";
+import { buildTaskEvent, resolveProductFromChannel } from "./conductor";
 import { TEST_REGISTRY } from "./test-helpers";
 import type { ProductConfig } from "./registry";
 
-describe("buildTicketEvent", () => {
+describe("buildTaskEvent", () => {
   test("creates event from Linear webhook data", () => {
-    const event = buildTicketEvent("linear", "ticket_created", {
+    const event = buildTaskEvent("linear", "task_created", {
       id: "LIN-123",
       product: "test-app",
       title: "Fix login",
       description: "Login is broken",
     });
-    expect(event.type).toBe("ticket_created");
+    expect(event.type).toBe("task_created");
     expect(event.source).toBe("linear");
-    expect(event.ticketUUID).toBe("LIN-123");
+    expect(event.taskUUID).toBe("LIN-123");
     expect(event.product).toBe("test-app");
   });
 
   test("creates event from GitHub PR review", () => {
-    const event = buildTicketEvent("github", "pr_review", {
-      ticketId: "LIN-123",
+    const event = buildTaskEvent("github", "pr_review", {
+      taskId: "LIN-123",
       product: "test-app",
       review: { state: "changes_requested", body: "Fix the types" },
     });
@@ -28,7 +28,7 @@ describe("buildTicketEvent", () => {
   });
 
   test("creates event from Slack reply", () => {
-    const event = buildTicketEvent("slack", "slack_reply", {
+    const event = buildTaskEvent("slack", "slack_reply", {
       product: "test-app",
       text: "fix the login bug",
       user: "U12345",
@@ -41,7 +41,7 @@ describe("buildTicketEvent", () => {
   });
 
   test("includes channel in Slack event", () => {
-    const event = buildTicketEvent("slack", "slack_reply", {
+    const event = buildTaskEvent("slack", "slack_reply", {
       product: "test-app",
       text: "deploy to prod",
       channel: "C000000APP1",

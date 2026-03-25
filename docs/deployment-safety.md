@@ -6,27 +6,27 @@ This document describes how Product Engineer handles deployments without disrupt
 
 1. Deploy updates many times per day
 2. Never lose in-progress work
-3. Allow ticket agents to complete their work naturally
+3. Allow task agents to complete their work naturally
 4. No manual intervention required during deployment
 
 ## Architecture: Single Worker
 
-Product Engineer deploys as a **single worker** (`api/`) containing both the Orchestrator DO and TicketAgent DO classes:
+Product Engineer deploys as a **single worker** (`api/`) containing both the Conductor DO and TaskAgent DO classes:
 
 ```toml
 # api/wrangler.toml
 [durable_objects]
 bindings = [
-  { name = "ORCHESTRATOR", class_name = "Orchestrator" },
-  { name = "TICKET_AGENT", class_name = "TicketAgent" }
+  { name = "CONDUCTOR", class_name = "Conductor" },
+  { name = "TASK_AGENT", class_name = "TaskAgent" }
 ]
 ```
 
-Deploying updates the Worker code and container images. Running TicketAgent containers are not immediately affected — they continue until their current work completes or their container is replaced.
+Deploying updates the Worker code and container images. Running TaskAgent containers are not immediately affected — they continue until their current work completes or their container is replaced.
 
 ## How It Works
 
-### TicketAgent Containers (2h TTL, git-branch persistence)
+### TaskAgent Containers (2h TTL, git-branch persistence)
 
 **Problem:** When you deploy, container images update, and Cloudflare may replace running containers.
 
@@ -69,7 +69,7 @@ async function checkAndCheckoutWorkBranch(): Promise<string | null> {
 **Implementation — auto-resume on container start** (`agent/src/server.ts`):
 
 ```typescript
-// Auto-resume: if container restarts with a ticket config, check for existing
+// Auto-resume: if container restarts with a task config, check for existing
 // work branch and resume the session without waiting for an event.
 // This fires after the server is listening, so /health can respond while we resume.
 setTimeout(async () => {
@@ -118,22 +118,22 @@ setTimeout(async () => {
 
 **Why this works:** The branch on the remote always has the latest pushed commits. Even if the agent was mid-task, the resume prompt includes git log, working tree status, and PR info so the new session can pick up where the old one left off. This is simpler and more reliable than persisting opaque session files.
 
-### Orchestrator Container (always-on, restarts gracefully)
+### Conductor Container (always-on, restarts gracefully)
 
-**Problem:** The Orchestrator runs a Slack Socket Mode connection that must stay alive, but deployments update the container image.
+**Problem:** The Conductor runs a Slack Socket Mode connection that must stay alive, but deployments update the container image.
 
-**Solution:** The Orchestrator container restarts only when needed:
+**Solution:** The Conductor container restarts only when needed:
 - Container is marked as stopped when it exits
 - On next request, `ensureContainerRunning()` starts the new container
 - Slack Socket Mode reconnects automatically
-- SQLite state persists across restarts (tickets, status, thread_ts)
+- SQLite state persists across restarts (tasks, status, thread_ts)
 
 **Implementation:**
 
 ```typescript
-// api/src/orchestrator.ts
+// api/src/conductor.ts
 override onStop(params: { exitCode: number; reason: string }) {
-  console.error(`[Orchestrator] Container stopped: ${params.exitCode} ${params.reason}`);
+  console.error(`[Conductor] Container stopped: ${params.exitCode} ${params.reason}`);
   this.containerStarted = false; // Allow restart on next fetch
 }
 
@@ -145,7 +145,7 @@ private async ensureContainerRunning() {
       const res = await port.fetch("http://localhost/health", { signal: AbortSignal.timeout(2000) });
       if (res.ok) return;
     } catch {
-      console.warn("[Orchestrator] Container not responsive — restarting");
+      console.warn("[Conductor] Container not responsive — restarting");
       this.containerStarted = false;
     }
   }
@@ -161,14 +161,14 @@ private async ensureContainerRunning() {
 **Problem:** The `status` field was being conflated between the formal state machine (12 states) and agent lifecycle messages (`agent:starting_session`, `agent:pushing_to_branch`). This caused merge gate failures and incorrect state checks.
 
 **Solution:** Separate status from lifecycle:
-- `status` — formal state machine only (`TICKET_STATES`). Validated in `handleStatusUpdate` — invalid values rejected with a log warning.
+- `status` — formal state machine only (`TASK_STATES`). Validated in `handleStatusUpdate` — invalid values rejected with a log warning.
 - `agent_message` — free-form lifecycle text. Updated via `/heartbeat` endpoint.
 - `last_heartbeat` — timestamp of last heartbeat. Also updated via `/heartbeat`.
-- Auto-transition: first heartbeat moves ticket from `spawning → active` automatically.
+- Auto-transition: first heartbeat moves task from `spawning → active` automatically.
 
 ### Terminal State Protection
 
-**Problem:** After an agent finishes (PR merged, ticket closed), webhook events could spawn a new agent for the same ticket.
+**Problem:** After an agent finishes (PR merged, task closed), webhook events could spawn a new agent for the same task.
 
 **Solution:** Mark agents as inactive when they reach terminal states:
 - `agent_active` column tracks whether an agent should receive events
@@ -178,32 +178,32 @@ private async ensureContainerRunning() {
 **Implementation:**
 
 ```typescript
-// api/src/orchestrator.ts
+// api/src/conductor.ts
 private async handleStatusUpdate(request: Request) {
   // ...
   const terminalStates = ["merged", "closed", "deferred", "failed"];
   if (status && terminalStates.includes(status)) {
     updates.push("agent_active = 0");
-    console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
+    console.log(`[Conductor] Marking agent inactive for terminal state: ${status}`);
   }
   // ...
 }
 
-private async routeToAgent(event: TicketEvent) {
-  const ticket = this.ctx.storage.sql.exec(
-    "SELECT agent_active, status FROM tickets WHERE id = ?",
-    event.ticketId,
+private async routeToAgent(event: TaskEvent) {
+  const task = this.ctx.storage.sql.exec(
+    "SELECT agent_active, status FROM tasks WHERE id = ?",
+    event.taskId,
   ).toArray()[0];
 
-  if (ticket && ticket.agent_active === 0) {
-    console.log(`[Orchestrator] Skipping inactive agent for ${event.ticketId}`);
+  if (task && task.agent_active === 0) {
+    console.log(`[Conductor] Skipping inactive agent for ${event.taskId}`);
     return; // Don't spawn or route to this agent
   }
   // ...
 }
 ```
 
-**Result:** Once a ticket is done, webhook events (PR merged, Linear status changes) don't restart the agent.
+**Result:** Once a task is done, webhook events (PR merged, Linear status changes) don't restart the agent.
 
 ### Linear Webhook Protection
 
@@ -231,7 +231,7 @@ if (!shouldTrigger) {
 }
 ```
 
-**Result:** Completed tickets don't trigger agent spawning. Terminal state check applies to both new and updated issues.
+**Result:** Completed tasks don't trigger agent spawning. Terminal state check applies to both new and updated issues.
 
 ## Deployment Process
 
@@ -244,9 +244,9 @@ wrangler deploy
 
 This:
 - Updates Worker code instantly
-- Builds new container images (orchestrator + agent)
-- Brief Orchestrator container restart (1-2s Slack reconnect)
-- Running TicketAgent containers may be gradually replaced
+- Builds new container images (conductor + agent)
+- Brief Conductor container restart (1-2s Slack reconnect)
+- Running TaskAgent containers may be gradually replaced
 
 **Impact:** Active agents auto-resume mid-task by checking out their git branch and starting a new session with full git context.
 
@@ -257,22 +257,22 @@ wrangler tail --name product-engineer
 ```
 
 Watch for:
-- `[Orchestrator] Container stopped` — Orchestrator restarting
-- `[Orchestrator] Container started successfully` — Reconnected
+- `[Conductor] Container stopped` — Conductor restarting
+- `[Conductor] Container started successfully` — Reconnected
 - `[Agent] Auto-resuming from branch: ...` — Agent recovered from deploy
 - `[Agent] auto_resume` — Successful branch-based resume
 - `[Agent] heartbeat` — Active agents continuing work
-- `[Orchestrator] Marking agent inactive` — Agents finishing work
+- `[Conductor] Marking agent inactive` — Agents finishing work
 
 ### Step 3: Verify
 
 ```bash
-# Check that the Orchestrator restarted successfully
+# Check that the Conductor restarted successfully
 curl https://product-engineer.<subdomain>.workers.dev/health
 
-# List active tickets
+# List active tasks
 curl -H "X-API-Key: YOUR_KEY" \
-  https://product-engineer.<subdomain>.workers.dev/api/orchestrator/tickets
+  https://product-engineer.<subdomain>.workers.dev/api/conductor/tasks
 
 # Check a specific agent's status
 curl -H "X-API-Key: YOUR_KEY" \
@@ -284,10 +284,10 @@ curl -H "X-API-Key: YOUR_KEY" \
 | Component | On Deploy | Recovery Time |
 |-----------|-----------|---------------|
 | **Worker** | Updates instantly | Immediate |
-| **Orchestrator DO** | Continues (no reset) | N/A |
-| **Orchestrator Container** | Stops and restarts | 1-2 seconds |
-| **TicketAgent DOs** | Continue (no reset) | N/A |
-| **TicketAgent Containers** | Gradual replacement, auto-resume from git branch | 10-15 seconds |
+| **Conductor DO** | Continues (no reset) | N/A |
+| **Conductor Container** | Stops and restarts | 1-2 seconds |
+| **TaskAgent DOs** | Continue (no reset) | N/A |
+| **TaskAgent Containers** | Gradual replacement, auto-resume from git branch | 10-15 seconds |
 
 ## Secrets Configuration
 
@@ -306,38 +306,38 @@ wrangler secret put SENTRY_DSN
 
 ## FAQ
 
-### What if a ticket agent is mid-commit when I deploy?
+### What if a task agent is mid-commit when I deploy?
 
 Agent container may restart. On restart, the agent clones the repo, checks out the existing work branch, and starts a new session with git context (log, status, PR info). Any uncommitted changes are lost, but since agents commit and push frequently, the gap is minimal — the new session picks up from the latest pushed commit.
 
 ### What if someone @mentions the bot during deployment?
 
-- If the Orchestrator is restarting: the Worker queues the event, Orchestrator processes it after restart (1-2 seconds)
-- If the Orchestrator is running: event is processed immediately
+- If the Conductor is restarting: the Worker queues the event, Conductor processes it after restart (1-2 seconds)
+- If the Conductor is running: event is processed immediately
 
-### What if a webhook arrives during Orchestrator restart?
+### What if a webhook arrives during Conductor restart?
 
-The Worker accepts the webhook, forwards it to the Orchestrator DO. If the container is restarting, the request waits for `ensureContainerRunning()` to finish, then processes normally.
+The Worker accepts the webhook, forwards it to the Conductor DO. If the container is restarting, the request waits for `ensureContainerRunning()` to finish, then processes normally.
 
 ### How do I force a container to use new code?
 
-Deploy the worker: `cd api && wrangler deploy`. Cloudflare gradually replaces TicketAgent containers. The Orchestrator container restarts on next request.
+Deploy the worker: `cd api && wrangler deploy`. Cloudflare gradually replaces TaskAgent containers. The Conductor container restarts on next request.
 
 ### Can I deploy during a critical operation?
 
-**Yes.** TicketAgent containers may restart, but agents auto-resume from their git branch with full context (git log, status, PR state).
+**Yes.** TaskAgent containers may restart, but agents auto-resume from their git branch with full context (git log, status, PR state).
 
 ### How do I know agents finished their work?
 
-Check the tickets table:
+Check the tasks table:
 
 ```bash
 curl -H "X-API-Key: YOUR_KEY" \
-  https://product-engineer.<subdomain>.workers.dev/api/orchestrator/tickets \
-  | jq '.tickets[] | {id, status, agent_active, updated_at}'
+  https://product-engineer.<subdomain>.workers.dev/api/conductor/tasks \
+  | jq '.tasks[] | {id, status, agent_active, updated_at}'
 ```
 
-Tickets with `agent_active: 0` have finished.
+Tasks with `agent_active: 0` have finished.
 
 ### What if R2 is unavailable?
 
@@ -345,7 +345,7 @@ R2 is only used for transcript backup, not session persistence. If R2 is down, a
 
 ## Testing Deployment Safety
 
-### Manual Test: Orchestrator Deploy During Active Work
+### Manual Test: Conductor Deploy During Active Work
 
 1. Create a test ticket in Linear (e.g., "Create a hello world file")
 2. Watch the agent start work in Slack
@@ -353,7 +353,7 @@ R2 is only used for transcript backup, not session persistence. If R2 is down, a
 4. Observe that the agent continues without interruption
 5. Verify the agent completes the PR and reports success
 
-### Manual Test: TicketAgent Deploy with Git-Branch Resume
+### Manual Test: TaskAgent Deploy with Git-Branch Resume
 
 1. Create a test ticket
 2. Wait for the agent to start work and push at least one commit
@@ -368,14 +368,14 @@ R2 is only used for transcript backup, not session persistence. If R2 is down, a
 2. Let the agent complete it (PR merged, status = "merged")
 3. In Linear, move the ticket to "Done"
 4. Verify in `wrangler tail` that no new agent spawns
-5. Verify the Orchestrator logs: `Skipping inactive agent for LIN-123`
+5. Verify the Conductor logs: `Skipping inactive agent for LIN-123`
 
 ### Automated Tests
 
 The deployment safety logic is tested via:
-- `api/src/orchestrator.test.ts` — unit tests for `buildTicketEvent`, `resolveProductFromChannel`
+- `api/src/conductor.test.ts` — unit tests for `buildTaskEvent`, `resolveProductFromChannel`
 - `api/src/linear-webhook.test.ts` — webhook handling including terminal state filtering (Done, Canceled, Cancelled), agent assignment triggers, and unknown project rejection
-- `api/src/ticket-agent.test.ts` — `resolveAgentEnvVars` includes required env vars
+- `api/src/task-agent.test.ts` — `resolveAgentEnvVars` includes required env vars
 - Manual smoke tests (above)
 
 Full integration tests require a deployed Cloudflare environment and are beyond the scope of the test suite.

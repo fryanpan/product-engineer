@@ -5,13 +5,13 @@ function makeConfig(overrides: Partial<StatusUpdaterConfig> = {}): StatusUpdater
   return {
     workerUrl: "https://worker.example.com",
     apiKey: "api-key-test",
-    ticketUUID: "ticket-uuid-123",
+    taskUUID: "ticket-uuid-123",
     slackBotToken: "xoxb-test",
     slackChannel: "#test-channel",
     slackThreadTs: "1234567890.123456",
     linearAppToken: "lin-test-token",
-    ticketIdentifier: "PE-42",
-    ticketTitle: "Fix the login bug",
+    taskIdentifier: "PE-42",
+    taskTitle: "Fix the login bug",
     ...overrides,
   };
 }
@@ -50,7 +50,7 @@ describe("StatusUpdater", () => {
       expect(headers["X-Internal-Key"]).toBe("api-key-test");
 
       const body = JSON.parse(calls[0].opts.body as string);
-      expect(body.ticketUUID).toBe("ticket-uuid-123");
+      expect(body.taskUUID).toBe("ticket-uuid-123");
       expect(body.status).toBe("in_progress");
       expect(body.pr_url).toBeUndefined();
     });
@@ -283,11 +283,11 @@ describe("StatusUpdater", () => {
       expect(calls).toHaveLength(0);
     });
 
-    test("uses ticketUUID as fallback identifier", async () => {
+    test("uses taskUUID as fallback identifier", async () => {
       const slackResponse = new Response(JSON.stringify({ ok: true }), { status: 200 });
       const { fn, calls } = makeMockFetch([slackResponse]);
       const updater = new StatusUpdater(
-        makeConfig({ ticketIdentifier: undefined, fetchFn: fn }),
+        makeConfig({ taskIdentifier: undefined, fetchFn: fn }),
       );
 
       await updater.updateSlackStatus("in_progress");
@@ -300,7 +300,7 @@ describe("StatusUpdater", () => {
       const longTitle = "A".repeat(150);
       const slackResponse = new Response(JSON.stringify({ ok: true }), { status: 200 });
       const { fn, calls } = makeMockFetch([slackResponse]);
-      const updater = new StatusUpdater(makeConfig({ ticketTitle: longTitle, fetchFn: fn }));
+      const updater = new StatusUpdater(makeConfig({ taskTitle: longTitle, fetchFn: fn }));
 
       await updater.updateSlackStatus("in_progress");
 
@@ -313,7 +313,7 @@ describe("StatusUpdater", () => {
       const titleWithSentence = "Fix the critical login bug. Then also update the dashboard and refactor the entire authentication system to use OAuth 2.0.";
       const slackResponse = new Response(JSON.stringify({ ok: true }), { status: 200 });
       const { fn, calls } = makeMockFetch([slackResponse]);
-      const updater = new StatusUpdater(makeConfig({ ticketTitle: titleWithSentence, fetchFn: fn }));
+      const updater = new StatusUpdater(makeConfig({ taskTitle: titleWithSentence, fetchFn: fn }));
 
       await updater.updateSlackStatus("in_progress");
 
@@ -325,7 +325,7 @@ describe("StatusUpdater", () => {
     test("defaults to 'Working on task' when no title", async () => {
       const slackResponse = new Response(JSON.stringify({ ok: true }), { status: 200 });
       const { fn, calls } = makeMockFetch([slackResponse]);
-      const updater = new StatusUpdater(makeConfig({ ticketTitle: undefined, fetchFn: fn }));
+      const updater = new StatusUpdater(makeConfig({ taskTitle: undefined, fetchFn: fn }));
 
       await updater.updateSlackStatus("in_progress");
 
@@ -439,7 +439,7 @@ describe("StatusUpdater", () => {
       expect(body.variables.issueId).toBe("custom-ticket-id");
     });
 
-    test("defaults linearTicketId to ticketUUID", async () => {
+    test("defaults linearTicketId to taskUUID", async () => {
       const responses = [
         new Response(JSON.stringify({ ok: true }), { status: 200 }),
         new Response(

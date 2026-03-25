@@ -1,42 +1,42 @@
 import { describe, it, expect, beforeEach } from "bun:test";
-import { TICKET_STATES, TERMINAL_STATUSES, type TicketState } from "./types";
+import { TASK_STATES, TERMINAL_STATUSES, type TaskState } from "./types";
 
 /**
  * Tests for supervisor tick, heartbeat auto-transition, status validation,
- * and terminal state protection in the orchestrator.
+ * and terminal state protection in the conductor.
  *
- * These tests exercise the logic from orchestrator.ts methods:
+ * These tests exercise the logic from conductor.ts methods:
  * - handleHeartbeat(): auto-transition spawning → active, ci_status/needs_attention updates
  * - runSupervisorTick(): stale agent detection
  * - handleStatusUpdate(): status validation, terminal state protection
- * - handleEvent(): terminal ticket rejection
+ * - handleEvent(): terminal task rejection
  *
  * Since we can't instantiate the full Durable Object, we extract the logic
- * into lightweight helpers that mirror what the orchestrator does, backed
- * by the same mock SQL layer used in agent-manager.test.ts.
+ * into lightweight helpers that mirror what the conductor does, backed
+ * by the same mock SQL layer used in task-manager.test.ts.
  */
 
-// ─── Mock SQL layer (same pattern as agent-manager.test.ts) ──────────────────
+// ─── Mock SQL layer (same pattern as task-manager.test.ts) ──────────────────
 
 function createMockSql() {
-  const tickets = new Map<string, Record<string, unknown>>();
+  const tasks = new Map<string, Record<string, unknown>>();
 
   return {
     exec(sql: string, ...params: unknown[]) {
       const trimmed = sql.trim();
 
-      // INSERT INTO tickets
-      if (trimmed.startsWith("INSERT INTO tickets")) {
-        const [ticketUUID, product, slackTs, slackCh, ticketId, title] = params;
-        tickets.set(ticketUUID as string, {
-          ticket_uuid: ticketUUID,
+      // INSERT INTO tasks
+      if (trimmed.startsWith("INSERT INTO tasks")) {
+        const [taskUUID, product, slackTs, slackCh, taskId, title] = params;
+        tasks.set(taskUUID as string, {
+          task_uuid: taskUUID,
           product,
           status: "created",
           slack_thread_ts: slackTs || null,
           slack_channel: slackCh || null,
           pr_url: null,
           branch_name: null,
-          ticket_id: ticketId || null,
+          task_id: taskId || null,
           title: title || null,
           agent_active: 0,
           agent_message: null,
@@ -52,17 +52,17 @@ function createMockSql() {
         return { toArray: () => [] };
       }
 
-      // SELECT ... FROM tickets WHERE ticket_uuid = ?
-      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE ticket_uuid =")) {
-        const ticketUUID = params[0] as string;
-        const row = tickets.get(ticketUUID);
+      // SELECT ... FROM tasks WHERE task_uuid = ?
+      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tasks") && trimmed.includes("WHERE task_uuid =")) {
+        const taskUUID = params[0] as string;
+        const row = tasks.get(taskUUID);
         return { toArray: () => (row ? [{ ...row }] : []) };
       }
 
-      // SELECT ... FROM tickets WHERE slack_thread_ts = ?
-      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tickets") && trimmed.includes("WHERE slack_thread_ts =")) {
+      // SELECT ... FROM tasks WHERE slack_thread_ts = ?
+      if (trimmed.startsWith("SELECT") && trimmed.includes("FROM tasks") && trimmed.includes("WHERE slack_thread_ts =")) {
         const threadTs = params[0] as string;
-        const row = [...tickets.values()].find((t) => t.slack_thread_ts === threadTs);
+        const row = [...tasks.values()].find((t) => t.slack_thread_ts === threadTs);
         return { toArray: () => (row ? [{ ...row }] : []) };
       }
 
@@ -70,7 +70,7 @@ function createMockSql() {
       if (trimmed.includes("agent_active = 1") && trimmed.includes("last_heartbeat IS NOT NULL") && trimmed.includes("-5 minutes")) {
         // For testing, we compare last_heartbeat against 5 minutes ago
         const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-        const stale = [...tickets.values()].filter(
+        const stale = [...tasks.values()].filter(
           (t) =>
             t.agent_active === 1 &&
             t.last_heartbeat !== null &&
@@ -79,17 +79,17 @@ function createMockSql() {
         return {
           toArray: () =>
             stale.map((t) => ({
-              ticket_uuid: t.ticket_uuid,
+              task_uuid: t.task_uuid,
               product: t.product,
               last_heartbeat: t.last_heartbeat,
             })),
         };
       }
 
-      // UPDATE tickets SET ... WHERE ticket_uuid = ?
-      if (trimmed.startsWith("UPDATE tickets SET")) {
+      // UPDATE tasks SET ... WHERE task_uuid = ?
+      if (trimmed.startsWith("UPDATE tasks SET")) {
         const id = params[params.length - 1] as string;
-        const row = tickets.get(id);
+        const row = tasks.get(id);
         if (!row) return { toArray: () => [] };
 
         // Check for agent_active = 1 condition in WHERE clause
@@ -127,99 +127,99 @@ function createMockSql() {
 
       // SELECT agent_active = 1 (for getActiveAgents)
       if (trimmed.startsWith("SELECT") && trimmed.includes("agent_active = 1")) {
-        const active = [...tickets.values()].filter((t) => t.agent_active === 1);
+        const active = [...tasks.values()].filter((t) => t.agent_active === 1);
         return { toArray: () => active };
       }
 
       return { toArray: () => [] };
     },
-    _tickets: tickets,
+    _tasks: tasks,
   };
 }
 
-// ─── Helpers that replicate orchestrator logic for testability ────────────────
+// ─── Helpers that replicate conductor logic for testability ────────────────
 
-/** Mimics handleHeartbeat logic from orchestrator.ts */
+/** Mimics handleHeartbeat logic from conductor.ts */
 function handleHeartbeat(
   sql: ReturnType<typeof createMockSql>,
   payload: {
-    ticketUUID: string;
+    taskUUID: string;
     message?: string;
     ci_status?: string;
     needs_attention?: boolean;
     needs_attention_reason?: string;
   },
 ) {
-  const { ticketUUID, message, ci_status, needs_attention, needs_attention_reason } = payload;
+  const { taskUUID, message, ci_status, needs_attention, needs_attention_reason } = payload;
 
   // Record phone-home (update last_heartbeat + agent_message)
-  const ticket = sql._tickets.get(ticketUUID);
-  if (!ticket) return;
-  if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status as string)) return;
+  const task = sql._tasks.get(taskUUID);
+  if (!task) return;
+  if ((TERMINAL_STATUSES as readonly string[]).includes(task.status as string)) return;
 
-  if (ticket.agent_active === 1) {
-    ticket.last_heartbeat = new Date().toISOString();
-    if (message) ticket.agent_message = message;
-    ticket.updated_at = new Date().toISOString();
+  if (task.agent_active === 1) {
+    task.last_heartbeat = new Date().toISOString();
+    if (message) task.agent_message = message;
+    task.updated_at = new Date().toISOString();
   }
 
   // Store expanded heartbeat fields
   if (ci_status !== undefined) {
     sql.exec(
-      "UPDATE tickets SET ci_status = ?, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      "UPDATE tasks SET ci_status = ?, updated_at = datetime('now') WHERE task_uuid = ?",
       ci_status,
-      ticketUUID,
+      taskUUID,
     );
   }
   if (needs_attention !== undefined) {
     sql.exec(
-      "UPDATE tickets SET needs_attention = ?, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      "UPDATE tasks SET needs_attention = ?, updated_at = datetime('now') WHERE task_uuid = ?",
       needs_attention ? 1 : 0,
-      ticketUUID,
+      taskUUID,
     );
   }
   if (needs_attention_reason !== undefined) {
     sql.exec(
-      "UPDATE tickets SET needs_attention_reason = ?, updated_at = datetime('now') WHERE ticket_uuid = ?",
+      "UPDATE tasks SET needs_attention_reason = ?, updated_at = datetime('now') WHERE task_uuid = ?",
       needs_attention_reason,
-      ticketUUID,
+      taskUUID,
     );
   }
 
   // Auto-transition spawning → active on first heartbeat
-  const current = sql._tickets.get(ticketUUID);
+  const current = sql._tasks.get(taskUUID);
   if (current?.status === "spawning") {
     sql.exec(
-      "UPDATE tickets SET status = 'active', updated_at = datetime('now') WHERE ticket_uuid = ?",
-      ticketUUID,
+      "UPDATE tasks SET status = 'active', updated_at = datetime('now') WHERE task_uuid = ?",
+      taskUUID,
     );
   }
 }
 
-/** Mimics runSupervisorTick logic from orchestrator.ts */
-function runSupervisorTick(sql: ReturnType<typeof createMockSql>): Array<{ ticket_uuid: string; product: string; last_heartbeat: string }> {
+/** Mimics runSupervisorTick logic from conductor.ts */
+function runSupervisorTick(sql: ReturnType<typeof createMockSql>): Array<{ task_uuid: string; product: string; last_heartbeat: string }> {
   const result = sql.exec(`
-    SELECT ticket_uuid, product, last_heartbeat
-    FROM tickets
+    SELECT task_uuid, product, last_heartbeat
+    FROM tasks
     WHERE agent_active = 1
       AND last_heartbeat IS NOT NULL
       AND last_heartbeat < datetime('now', '-5 minutes')
-  `).toArray() as Array<{ ticket_uuid: string; product: string; last_heartbeat: string }>;
+  `).toArray() as Array<{ task_uuid: string; product: string; last_heartbeat: string }>;
 
   for (const agent of result) {
     sql.exec(
-      "UPDATE tickets SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE ticket_uuid = ?",
-      agent.ticket_uuid,
+      "UPDATE tasks SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE task_uuid = ?",
+      agent.task_uuid,
     );
   }
 
   return result;
 }
 
-/** Mimics handleStatusUpdate status validation logic from orchestrator.ts */
+/** Mimics handleStatusUpdate status validation logic from conductor.ts */
 function validateAndApplyStatus(
   sql: ReturnType<typeof createMockSql>,
-  ticketUUID: string,
+  taskUUID: string,
   body: {
     status?: string;
     pr_url?: string;
@@ -227,13 +227,13 @@ function validateAndApplyStatus(
     agent_active?: number;
   },
 ): { ok: boolean; ignored?: boolean; reason?: string } {
-  const ticket = sql._tickets.get(ticketUUID);
-  if (!ticket) return { ok: false, reason: "ticket not found" };
+  const task = sql._tasks.get(taskUUID);
+  if (!task) return { ok: false, reason: "task not found" };
 
   // Terminal state protection
-  if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status as string)) {
+  if ((TERMINAL_STATUSES as readonly string[]).includes(task.status as string)) {
     if (body.agent_active === undefined || body.agent_active !== 0) {
-      return { ok: true, ignored: true, reason: "terminal ticket" };
+      return { ok: true, ignored: true, reason: "terminal task" };
     }
   }
 
@@ -246,8 +246,8 @@ function validateAndApplyStatus(
   }
 
   if (body.status) {
-    // Validate against TICKET_STATES — reject invalid strings
-    if (!(TICKET_STATES as readonly string[]).includes(body.status)) {
+    // Validate against TASK_STATES — reject invalid strings
+    if (!(TASK_STATES as readonly string[]).includes(body.status)) {
       // Invalid status: skip status update but continue processing other fields
     } else {
       updates.push("status = ?");
@@ -269,22 +269,22 @@ function validateAndApplyStatus(
     values.push(body.branch_name);
   }
 
-  values.push(ticketUUID);
-  sql.exec(`UPDATE tickets SET ${updates.join(", ")} WHERE ticket_uuid = ?`, ...values);
+  values.push(taskUUID);
+  sql.exec(`UPDATE tasks SET ${updates.join(", ")} WHERE task_uuid = ?`, ...values);
 
   return { ok: true };
 }
 
-/** Mimics handleEvent terminal state check from orchestrator.ts */
+/** Mimics handleEvent terminal state check from conductor.ts */
 function checkEventTerminalGuard(
   sql: ReturnType<typeof createMockSql>,
-  ticketUUID: string,
+  taskUUID: string,
 ): { ignored: boolean; reason?: string } {
-  const ticket = sql._tickets.get(ticketUUID);
-  if (!ticket) return { ignored: false };
+  const task = sql._tasks.get(taskUUID);
+  if (!task) return { ignored: false };
 
-  if ((TERMINAL_STATUSES as readonly string[]).includes(ticket.status as string)) {
-    return { ignored: true, reason: "terminal ticket" };
+  if ((TERMINAL_STATUSES as readonly string[]).includes(task.status as string)) {
+    return { ignored: true, reason: "terminal task" };
   }
 
   return { ignored: false };
@@ -292,14 +292,14 @@ function checkEventTerminalGuard(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function insertTicket(
+function insertTask(
   sql: ReturnType<typeof createMockSql>,
-  ticketUUID: string,
+  taskUUID: string,
   overrides: Partial<Record<string, unknown>> = {},
 ) {
   sql.exec(
-    "INSERT INTO tickets (ticket_uuid, product, slack_thread_ts, slack_channel, ticket_id, title) VALUES (?, ?, ?, ?, ?, ?)",
-    ticketUUID,
+    "INSERT INTO tasks (task_uuid, product, slack_thread_ts, slack_channel, task_id, title) VALUES (?, ?, ?, ?, ?, ?)",
+    taskUUID,
     overrides.product || "test-product",
     null,
     null,
@@ -307,9 +307,9 @@ function insertTicket(
     null,
   );
   // Apply overrides
-  const ticket = sql._tickets.get(ticketUUID)!;
+  const task = sql._tasks.get(taskUUID)!;
   for (const [key, value] of Object.entries(overrides)) {
-    ticket[key] = value;
+    task[key] = value;
   }
 }
 
@@ -322,53 +322,53 @@ describe("Heartbeat auto-transition", () => {
     sql = createMockSql();
   });
 
-  it("transitions ticket from spawning → active on first heartbeat", () => {
-    insertTicket(sql, "PE-1", { status: "spawning", agent_active: 1 });
+  it("transitions task from spawning → active on first heartbeat", () => {
+    insertTask(sql, "PE-1", { status: "spawning", agent_active: 1 });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-1", message: "agent starting" });
+    handleHeartbeat(sql, { taskUUID: "PE-1", message: "agent starting" });
 
-    const ticket = sql._tickets.get("PE-1")!;
-    expect(ticket.status).toBe("active");
-    expect(ticket.last_heartbeat).not.toBeNull();
-    expect(ticket.agent_message).toBe("agent starting");
+    const task = sql._tasks.get("PE-1")!;
+    expect(task.status).toBe("active");
+    expect(task.last_heartbeat).not.toBeNull();
+    expect(task.agent_message).toBe("agent starting");
   });
 
-  it("does not transition non-spawning tickets", () => {
-    insertTicket(sql, "PE-2", { status: "active", agent_active: 1 });
+  it("does not transition non-spawning tasks", () => {
+    insertTask(sql, "PE-2", { status: "active", agent_active: 1 });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-2", message: "still working" });
+    handleHeartbeat(sql, { taskUUID: "PE-2", message: "still working" });
 
-    const ticket = sql._tickets.get("PE-2")!;
-    expect(ticket.status).toBe("active"); // stays active, not re-transitioned
-    expect(ticket.last_heartbeat).not.toBeNull();
+    const task = sql._tasks.get("PE-2")!;
+    expect(task.status).toBe("active"); // stays active, not re-transitioned
+    expect(task.last_heartbeat).not.toBeNull();
   });
 
-  it("does not transition tickets in created state", () => {
-    insertTicket(sql, "PE-3", { status: "created", agent_active: 1 });
+  it("does not transition tasks in created state", () => {
+    insertTask(sql, "PE-3", { status: "created", agent_active: 1 });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-3" });
+    handleHeartbeat(sql, { taskUUID: "PE-3" });
 
-    expect(sql._tickets.get("PE-3")!.status).toBe("created");
+    expect(sql._tasks.get("PE-3")!.status).toBe("created");
   });
 
-  it("skips heartbeat for terminal tickets", () => {
-    insertTicket(sql, "PE-4", { status: "merged", agent_active: 0 });
+  it("skips heartbeat for terminal tasks", () => {
+    insertTask(sql, "PE-4", { status: "merged", agent_active: 0 });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-4", message: "late heartbeat" });
+    handleHeartbeat(sql, { taskUUID: "PE-4", message: "late heartbeat" });
 
-    const ticket = sql._tickets.get("PE-4")!;
-    expect(ticket.status).toBe("merged");
-    expect(ticket.last_heartbeat).toBeNull(); // not updated
-    expect(ticket.agent_message).toBeNull(); // not updated
+    const task = sql._tasks.get("PE-4")!;
+    expect(task.status).toBe("merged");
+    expect(task.last_heartbeat).toBeNull(); // not updated
+    expect(task.agent_message).toBeNull(); // not updated
   });
 
   it("only updates heartbeat for active agents (agent_active=1)", () => {
-    insertTicket(sql, "PE-5", { status: "active", agent_active: 0 });
+    insertTask(sql, "PE-5", { status: "active", agent_active: 0 });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-5", message: "orphaned heartbeat" });
+    handleHeartbeat(sql, { taskUUID: "PE-5", message: "orphaned heartbeat" });
 
-    const ticket = sql._tickets.get("PE-5")!;
-    expect(ticket.last_heartbeat).toBeNull(); // agent_active=0, no update
+    const task = sql._tasks.get("PE-5")!;
+    expect(task.last_heartbeat).toBeNull(); // agent_active=0, no update
   });
 });
 
@@ -380,41 +380,41 @@ describe("Heartbeat expanded fields", () => {
   });
 
   it("updates ci_status when provided", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1 });
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1 });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-1", ci_status: "passing" });
+    handleHeartbeat(sql, { taskUUID: "PE-1", ci_status: "passing" });
 
-    expect(sql._tickets.get("PE-1")!.ci_status).toBe("passing");
+    expect(sql._tasks.get("PE-1")!.ci_status).toBe("passing");
   });
 
   it("updates needs_attention when provided", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1 });
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1 });
 
     handleHeartbeat(sql, {
-      ticketUUID: "PE-1",
+      taskUUID: "PE-1",
       needs_attention: true,
       needs_attention_reason: "CI failing after 3 retries",
     });
 
-    const ticket = sql._tickets.get("PE-1")!;
-    expect(ticket.needs_attention).toBe(1);
-    expect(ticket.needs_attention_reason).toBe("CI failing after 3 retries");
+    const task = sql._tasks.get("PE-1")!;
+    expect(task.needs_attention).toBe(1);
+    expect(task.needs_attention_reason).toBe("CI failing after 3 retries");
   });
 
   it("sets needs_attention to 0 when false", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1, needs_attention: 1 });
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1, needs_attention: 1 });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-1", needs_attention: false });
+    handleHeartbeat(sql, { taskUUID: "PE-1", needs_attention: false });
 
-    expect(sql._tickets.get("PE-1")!.needs_attention).toBe(0);
+    expect(sql._tasks.get("PE-1")!.needs_attention).toBe(0);
   });
 
   it("does not overwrite ci_status when not provided", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1, ci_status: "pending" });
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1, ci_status: "pending" });
 
-    handleHeartbeat(sql, { ticketUUID: "PE-1", message: "still working" });
+    handleHeartbeat(sql, { taskUUID: "PE-1", message: "still working" });
 
-    expect(sql._tickets.get("PE-1")!.ci_status).toBe("pending");
+    expect(sql._tasks.get("PE-1")!.ci_status).toBe("pending");
   });
 });
 
@@ -427,7 +427,7 @@ describe("Supervisor tick: stale agent detection", () => {
 
   it("detects agents with heartbeat older than 5 minutes", () => {
     const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    insertTicket(sql, "PE-1", {
+    insertTask(sql, "PE-1", {
       status: "active",
       agent_active: 1,
       last_heartbeat: tenMinAgo,
@@ -436,16 +436,16 @@ describe("Supervisor tick: stale agent detection", () => {
     const stale = runSupervisorTick(sql);
 
     expect(stale.length).toBe(1);
-    expect(stale[0].ticket_uuid).toBe("PE-1");
+    expect(stale[0].task_uuid).toBe("PE-1");
     // Check that agent_message was updated
-    expect(sql._tickets.get("PE-1")!.agent_message).toBe(
+    expect(sql._tasks.get("PE-1")!.agent_message).toBe(
       "heartbeat timeout — agent may be stuck",
     );
   });
 
   it("does not flag agents with recent heartbeats", () => {
     const oneMinAgo = new Date(Date.now() - 1 * 60 * 1000).toISOString();
-    insertTicket(sql, "PE-2", {
+    insertTask(sql, "PE-2", {
       status: "active",
       agent_active: 1,
       last_heartbeat: oneMinAgo,
@@ -454,12 +454,12 @@ describe("Supervisor tick: stale agent detection", () => {
     const stale = runSupervisorTick(sql);
 
     expect(stale.length).toBe(0);
-    expect(sql._tickets.get("PE-2")!.agent_message).toBeNull();
+    expect(sql._tasks.get("PE-2")!.agent_message).toBeNull();
   });
 
   it("does not flag inactive agents (agent_active=0)", () => {
     const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    insertTicket(sql, "PE-3", {
+    insertTask(sql, "PE-3", {
       status: "active",
       agent_active: 0,
       last_heartbeat: tenMinAgo,
@@ -470,7 +470,7 @@ describe("Supervisor tick: stale agent detection", () => {
   });
 
   it("does not flag agents with no heartbeat (null)", () => {
-    insertTicket(sql, "PE-4", {
+    insertTask(sql, "PE-4", {
       status: "spawning",
       agent_active: 1,
       last_heartbeat: null,
@@ -482,8 +482,8 @@ describe("Supervisor tick: stale agent detection", () => {
 
   it("detects multiple stale agents", () => {
     const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    insertTicket(sql, "PE-A", { status: "active", agent_active: 1, last_heartbeat: tenMinAgo });
-    insertTicket(sql, "PE-B", { status: "active", agent_active: 1, last_heartbeat: tenMinAgo });
+    insertTask(sql, "PE-A", { status: "active", agent_active: 1, last_heartbeat: tenMinAgo });
+    insertTask(sql, "PE-B", { status: "active", agent_active: 1, last_heartbeat: tenMinAgo });
 
     const stale = runSupervisorTick(sql);
     expect(stale.length).toBe(2);
@@ -497,43 +497,43 @@ describe("Status validation: handleStatusUpdate", () => {
     sql = createMockSql();
   });
 
-  it("accepts valid TICKET_STATES status strings", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1 });
+  it("accepts valid TASK_STATES status strings", () => {
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1 });
 
     const result = validateAndApplyStatus(sql, "PE-1", { status: "pr_open" });
 
     expect(result.ok).toBe(true);
     expect(result.ignored).toBeUndefined();
-    expect(sql._tickets.get("PE-1")!.status).toBe("pr_open");
+    expect(sql._tasks.get("PE-1")!.status).toBe("pr_open");
   });
 
   it("rejects invalid status strings (e.g., 'agent:starting')", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1 });
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1 });
 
     const result = validateAndApplyStatus(sql, "PE-1", { status: "agent:starting" });
 
     expect(result.ok).toBe(true);
     // Status should NOT have changed
-    expect(sql._tickets.get("PE-1")!.status).toBe("active");
+    expect(sql._tasks.get("PE-1")!.status).toBe("active");
   });
 
-  it("rejects arbitrary strings not in TICKET_STATES", () => {
-    insertTicket(sql, "PE-1", { status: "created", agent_active: 1 });
+  it("rejects arbitrary strings not in TASK_STATES", () => {
+    insertTask(sql, "PE-1", { status: "created", agent_active: 1 });
 
     for (const invalidStatus of ["in_progress", "running", "agent:cloning", "completed", "done", ""]) {
       // Reset
-      sql._tickets.get("PE-1")!.status = "created";
+      sql._tasks.get("PE-1")!.status = "created";
 
       validateAndApplyStatus(sql, "PE-1", { status: invalidStatus });
-      // Empty string may match but none of these are in TICKET_STATES
-      if (!(TICKET_STATES as readonly string[]).includes(invalidStatus)) {
-        expect(sql._tickets.get("PE-1")!.status).toBe("created");
+      // Empty string may match but none of these are in TASK_STATES
+      if (!(TASK_STATES as readonly string[]).includes(invalidStatus)) {
+        expect(sql._tasks.get("PE-1")!.status).toBe("created");
       }
     }
   });
 
   it("still processes metadata fields when status is invalid", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1 });
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1 });
 
     validateAndApplyStatus(sql, "PE-1", {
       status: "agent:pushing",
@@ -541,28 +541,28 @@ describe("Status validation: handleStatusUpdate", () => {
       branch_name: "ticket/PE-1",
     });
 
-    const ticket = sql._tickets.get("PE-1")!;
-    expect(ticket.status).toBe("active"); // status unchanged
-    expect(ticket.pr_url).toBe("https://github.com/org/repo/pull/42"); // metadata applied
-    expect(ticket.branch_name).toBe("ticket/PE-1"); // metadata applied
+    const task = sql._tasks.get("PE-1")!;
+    expect(task.status).toBe("active"); // status unchanged
+    expect(task.pr_url).toBe("https://github.com/org/repo/pull/42"); // metadata applied
+    expect(task.branch_name).toBe("ticket/PE-1"); // metadata applied
   });
 
   it("marks agent_active=0 on terminal status transitions", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1 });
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1 });
 
     validateAndApplyStatus(sql, "PE-1", { status: "failed" });
 
-    expect(sql._tickets.get("PE-1")!.agent_active).toBe(0);
+    expect(sql._tasks.get("PE-1")!.agent_active).toBe(0);
   });
 
   it("all terminal statuses mark agent_active=0", () => {
     for (const terminal of TERMINAL_STATUSES) {
       const id = `term-${terminal}`;
-      insertTicket(sql, id, { status: "active", agent_active: 1 });
+      insertTask(sql, id, { status: "active", agent_active: 1 });
 
       validateAndApplyStatus(sql, id, { status: terminal });
 
-      expect(sql._tickets.get(id)!.agent_active).toBe(0);
+      expect(sql._tasks.get(id)!.agent_active).toBe(0);
     }
   });
 });
@@ -574,35 +574,35 @@ describe("Terminal state protection in handleStatusUpdate", () => {
     sql = createMockSql();
   });
 
-  it("rejects status updates for terminal tickets", () => {
-    insertTicket(sql, "PE-1", { status: "merged", agent_active: 0 });
+  it("rejects status updates for terminal tasks", () => {
+    insertTask(sql, "PE-1", { status: "merged", agent_active: 0 });
 
     const result = validateAndApplyStatus(sql, "PE-1", { status: "active" });
 
     expect(result.ignored).toBe(true);
-    expect(result.reason).toBe("terminal ticket");
-    expect(sql._tickets.get("PE-1")!.status).toBe("merged");
+    expect(result.reason).toBe("terminal task");
+    expect(sql._tasks.get("PE-1")!.status).toBe("merged");
   });
 
-  it("allows explicit agent_active=0 for terminal tickets (dashboard kill)", () => {
-    insertTicket(sql, "PE-1", { status: "failed", agent_active: 1 });
+  it("allows explicit agent_active=0 for terminal tasks (dashboard kill)", () => {
+    insertTask(sql, "PE-1", { status: "failed", agent_active: 1 });
 
     const result = validateAndApplyStatus(sql, "PE-1", { agent_active: 0 });
 
     expect(result.ok).toBe(true);
     expect(result.ignored).toBeUndefined();
-    expect(sql._tickets.get("PE-1")!.agent_active).toBe(0);
+    expect(sql._tasks.get("PE-1")!.agent_active).toBe(0);
   });
 
   it("rejects heartbeat-style updates for all terminal statuses", () => {
     for (const terminal of TERMINAL_STATUSES) {
       const id = `term-${terminal}`;
-      insertTicket(sql, id, { status: terminal, agent_active: 0 });
+      insertTask(sql, id, { status: terminal, agent_active: 0 });
 
       const result = validateAndApplyStatus(sql, id, { status: "active" });
 
       expect(result.ignored).toBe(true);
-      expect(result.reason).toBe("terminal ticket");
+      expect(result.reason).toBe("terminal task");
     }
   });
 });
@@ -614,45 +614,45 @@ describe("Terminal state protection in handleEvent", () => {
     sql = createMockSql();
   });
 
-  it("rejects events for merged tickets", () => {
-    insertTicket(sql, "PE-1", { status: "merged", agent_active: 0 });
+  it("rejects events for merged tasks", () => {
+    insertTask(sql, "PE-1", { status: "merged", agent_active: 0 });
 
     const result = checkEventTerminalGuard(sql, "PE-1");
 
     expect(result.ignored).toBe(true);
-    expect(result.reason).toBe("terminal ticket");
+    expect(result.reason).toBe("terminal task");
   });
 
-  it("rejects events for closed tickets", () => {
-    insertTicket(sql, "PE-1", { status: "closed", agent_active: 0 });
-
-    const result = checkEventTerminalGuard(sql, "PE-1");
-
-    expect(result.ignored).toBe(true);
-  });
-
-  it("rejects events for failed tickets", () => {
-    insertTicket(sql, "PE-1", { status: "failed", agent_active: 0 });
+  it("rejects events for closed tasks", () => {
+    insertTask(sql, "PE-1", { status: "closed", agent_active: 0 });
 
     const result = checkEventTerminalGuard(sql, "PE-1");
 
     expect(result.ignored).toBe(true);
   });
 
-  it("rejects events for deferred tickets", () => {
-    insertTicket(sql, "PE-1", { status: "deferred", agent_active: 0 });
+  it("rejects events for failed tasks", () => {
+    insertTask(sql, "PE-1", { status: "failed", agent_active: 0 });
 
     const result = checkEventTerminalGuard(sql, "PE-1");
 
     expect(result.ignored).toBe(true);
   });
 
-  it("allows events for non-terminal tickets", () => {
-    for (const status of TICKET_STATES) {
+  it("rejects events for deferred tasks", () => {
+    insertTask(sql, "PE-1", { status: "deferred", agent_active: 0 });
+
+    const result = checkEventTerminalGuard(sql, "PE-1");
+
+    expect(result.ignored).toBe(true);
+  });
+
+  it("allows events for non-terminal tasks", () => {
+    for (const status of TASK_STATES) {
       if ((TERMINAL_STATUSES as readonly string[]).includes(status)) continue;
 
       const id = `nonterm-${status}`;
-      insertTicket(sql, id, { status, agent_active: 1 });
+      insertTask(sql, id, { status, agent_active: 1 });
 
       const result = checkEventTerminalGuard(sql, id);
 
@@ -660,7 +660,7 @@ describe("Terminal state protection in handleEvent", () => {
     }
   });
 
-  it("allows events for non-existent tickets (will be created)", () => {
+  it("allows events for non-existent tasks (will be created)", () => {
     const result = checkEventTerminalGuard(sql, "nonexistent");
     expect(result.ignored).toBe(false);
   });
@@ -669,7 +669,7 @@ describe("Terminal state protection in handleEvent", () => {
 // ─── Thread reply routing decision ──────────────────────────────────────────
 
 /**
- * Mirrors the thread reply routing logic in orchestrator.ts handleSlackEvent.
+ * Mirrors the thread reply routing logic in conductor.ts handleSlackEvent.
  * Determines whether a thread reply should respawn the container or route to
  * an existing one.
  */
@@ -678,19 +678,19 @@ function threadReplyRoutingDecision(
   threadTs: string,
 ): { found: boolean; wasTerminal: boolean; needsRespawn: boolean } {
   const rows = sql.exec(
-    "SELECT ticket_uuid, product, status, agent_active FROM tickets WHERE slack_thread_ts = ?",
+    "SELECT task_uuid, product, status, agent_active FROM tasks WHERE slack_thread_ts = ?",
     threadTs,
-  ).toArray() as { ticket_uuid: string; product: string; status: string; agent_active: number }[];
+  ).toArray() as { task_uuid: string; product: string; status: string; agent_active: number }[];
 
   if (rows.length === 0) {
     return { found: false, wasTerminal: false, needsRespawn: false };
   }
 
-  const ticket = rows[0];
-  const isTerminal = (TERMINAL_STATUSES as readonly string[]).includes(ticket.status);
+  const task = rows[0];
+  const isTerminal = (TERMINAL_STATUSES as readonly string[]).includes(task.status);
 
-  // Terminal tickets get reopened and respawned (not ignored)
-  const needsRespawn = isTerminal || ticket.status === "suspended" || ticket.agent_active === 0;
+  // Terminal tasks get reopened and respawned (not ignored)
+  const needsRespawn = isTerminal || task.status === "suspended" || task.agent_active === 0;
   return { found: true, wasTerminal: isTerminal, needsRespawn };
 }
 
@@ -706,48 +706,48 @@ describe("Thread reply routing", () => {
     expect(result.found).toBe(false);
   });
 
-  it("reopens and respawns merged tickets", () => {
-    insertTicket(sql, "PE-1", { status: "merged", agent_active: 0, slack_thread_ts: "thread-1" });
+  it("reopens and respawns merged tasks", () => {
+    insertTask(sql, "PE-1", { status: "merged", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
     expect(result.wasTerminal).toBe(true);
     expect(result.needsRespawn).toBe(true);
   });
 
-  it("reopens and respawns closed tickets", () => {
-    insertTicket(sql, "PE-1", { status: "closed", agent_active: 0, slack_thread_ts: "thread-1" });
+  it("reopens and respawns closed tasks", () => {
+    insertTask(sql, "PE-1", { status: "closed", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
     expect(result.wasTerminal).toBe(true);
     expect(result.needsRespawn).toBe(true);
   });
 
-  it("needs respawn for suspended tickets", () => {
-    insertTicket(sql, "PE-1", { status: "suspended", agent_active: 0, slack_thread_ts: "thread-1" });
+  it("needs respawn for suspended tasks", () => {
+    insertTask(sql, "PE-1", { status: "suspended", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
     expect(result.wasTerminal).toBe(false);
     expect(result.needsRespawn).toBe(true);
   });
 
-  it("needs respawn for active tickets with agent_active=0 (dead container)", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 0, slack_thread_ts: "thread-1" });
+  it("needs respawn for active tasks with agent_active=0 (dead container)", () => {
+    insertTask(sql, "PE-1", { status: "active", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
     expect(result.wasTerminal).toBe(false);
     expect(result.needsRespawn).toBe(true);
   });
 
-  it("needs respawn for pr_open tickets with agent_active=0 (post-deploy)", () => {
-    insertTicket(sql, "PE-1", { status: "pr_open", agent_active: 0, slack_thread_ts: "thread-1" });
+  it("needs respawn for pr_open tasks with agent_active=0 (post-deploy)", () => {
+    insertTask(sql, "PE-1", { status: "pr_open", agent_active: 0, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
     expect(result.wasTerminal).toBe(false);
     expect(result.needsRespawn).toBe(true);
   });
 
-  it("routes to existing container for active tickets with agent_active=1", () => {
-    insertTicket(sql, "PE-1", { status: "active", agent_active: 1, slack_thread_ts: "thread-1" });
+  it("routes to existing container for active tasks with agent_active=1", () => {
+    insertTask(sql, "PE-1", { status: "active", agent_active: 1, slack_thread_ts: "thread-1" });
 
     const result = threadReplyRoutingDecision(sql, "thread-1");
     expect(result.wasTerminal).toBe(false);

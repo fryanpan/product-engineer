@@ -39,7 +39,7 @@ Retro: [1-2 sentence summary]. Action: [what you changed].
 
 ### 4. Cross-Project Learnings
 
-If you discovered something useful across ALL products, note it in your final output for the orchestrator to aggregate.
+If you discovered something useful across ALL products, note it in your final output for the conductor to aggregate.
 
 ## Principles
 

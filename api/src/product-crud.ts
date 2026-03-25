@@ -1,7 +1,7 @@
 /**
  * Product registry and settings CRUD operations.
  *
- * Extracted from Orchestrator — each function returns a Response directly
+ * Extracted from Conductor — each function returns a Response directly
  * since these are thin HTTP CRUD wrappers.
  */
 

@@ -68,10 +68,10 @@ describe("resolveContainerEnvVars", () => {
 
   test("includes extraVars in output", () => {
     const vars = resolveContainerEnvVars(baseConfig, baseEnv, null, {
-      TICKET_UUID: "abc-123",
+      TASK_UUID: "abc-123",
       AGENT_ROLE: "project-lead",
     });
-    expect(vars.TICKET_UUID).toBe("abc-123");
+    expect(vars.TASK_UUID).toBe("abc-123");
     expect(vars.AGENT_ROLE).toBe("project-lead");
   });
 

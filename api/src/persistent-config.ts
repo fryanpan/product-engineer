@@ -1,7 +1,7 @@
 /**
  * Shared config persistence for container DOs.
  *
- * Both TicketAgent and ProjectAgent store their config in a SQLite `config` table
+ * Both TaskAgent and ProjectLead store their config in a SQLite `config` table
  * with the same schema. This class encapsulates the CRUD + terminal flag logic.
  */
 

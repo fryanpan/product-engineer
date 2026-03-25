@@ -1,6 +1,6 @@
 ---
 name: add-project
-description: Add an existing product to the Product Engineer registry. Use this to register repos that are already created and need to be connected to the orchestrator.
+description: Add an existing product to the Product Engineer registry. Use this to register repos that are already created and need to be connected to the conductor.
 ---
 
 # Add Project to Registry

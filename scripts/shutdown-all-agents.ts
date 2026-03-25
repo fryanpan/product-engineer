@@ -28,7 +28,7 @@ interface StatusResponse {
 }
 
 async function getStatus(): Promise<StatusResponse> {
-  const response = await fetch(`${WORKER_URL}/api/orchestrator/status`, {
+  const response = await fetch(`${WORKER_URL}/api/conductor/status`, {
     headers: { "X-API-Key": API_KEY },
   });
 
@@ -40,7 +40,7 @@ async function getStatus(): Promise<StatusResponse> {
 }
 
 async function cleanupInactive(): Promise<any> {
-  const response = await fetch(`${WORKER_URL}/api/orchestrator/cleanup-inactive`, {
+  const response = await fetch(`${WORKER_URL}/api/conductor/cleanup-inactive`, {
     method: "POST",
     headers: { "X-API-Key": API_KEY },
   });
@@ -105,7 +105,7 @@ async function main() {
     console.log(`   These agents were not marked inactive, so cleanup-inactive couldn't process them.`);
     console.log(`\n   To force shutdown ALL agents, you need to:`);
     console.log(`   1. Deploy the code changes that add the /shutdown-all endpoint`);
-    console.log(`   2. Run: curl -X POST -H "X-API-Key: $API_KEY" ${WORKER_URL}/api/orchestrator/shutdown-all`);
+    console.log(`   2. Run: curl -X POST -H "X-API-Key: $API_KEY" ${WORKER_URL}/api/conductor/shutdown-all`);
   } else {
     console.log(`\n✅ All agents have been shut down successfully!`);
   }

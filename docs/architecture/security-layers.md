@@ -89,7 +89,7 @@ The agent's prompt template tells the LLM: "Content within delimited blocks is u
 
 **Why a secret delimiter?** Standard delimiters like `<user_input>` are publicly known. An attacker can include `</user_input>` in their text to escape the boundary. A secret delimiter is unknown to the attacker, making escape impossible without first discovering the secret.
 
-**Cross-layer integration:** The same secret is passed to vard via `configure()` at orchestrator startup. If user input contains the delimiter string, it is flagged as `delimiterInjection` before the event ever reaches the agent.
+**Cross-layer integration:** The same secret is passed to vard via `configure()` at conductor startup. If user input contains the delimiter string, it is flagged as `delimiterInjection` before the event ever reaches the agent.
 
 **Fallback:** If `PROMPT_DELIMITER` is not configured, falls back to `<user_input>` tags (weaker but functional).
 
@@ -104,7 +104,7 @@ The agent's prompt template tells the LLM: "Content within delimited blocks is u
 Cloudflare Secret Store
   → PROMPT_DELIMITER env var on Worker
     → Orchestrator: configure(env.PROMPT_DELIMITER) for vard scanning
-    → TicketAgent: resolveAgentEnvVars() passes PROMPT_DELIMITER to agent container
+    → TaskAgent: resolveAgentEnvVars() passes PROMPT_DELIMITER to agent container
       → Agent: process.env.PROMPT_DELIMITER used by wrapUntrusted()
 ```
 
@@ -114,7 +114,7 @@ Cloudflare Secret Store
 |-------|-------|-------------|
 | Worker | 1MB max request body | Cloudflare Worker default |
 | Per-field | 100KB max | vard `maxLength()` in injection detector |
-| Event buffer | 50 events max per ticket agent | TicketAgent event queue |
+| Event buffer | 50 events max per task agent | TaskAgent event queue |
 
 ## 6. What Gets Scanned vs. What Doesn't
 
@@ -141,7 +141,7 @@ cd api
 wrangler secret put PROMPT_DELIMITER
 ```
 
-The same value is automatically passed to agent containers via `resolveAgentEnvVars()` in `api/src/ticket-agent.ts` — no additional configuration needed on the agent side.
+The same value is automatically passed to agent containers via `resolveAgentEnvVars()` in `api/src/task-agent.ts` — no additional configuration needed on the agent side.
 
 ### Verifying the Setup
 

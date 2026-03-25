@@ -255,21 +255,21 @@ dashboardRouter.get("/user", requireAuth(), async (c) => {
 // List all active agents (protected)
 dashboardRouter.get("/api/agents", requireAuth(), async (c) => {
   try {
-    const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
-    const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
-    const res = await orchestrator.fetch(new Request("http://internal/tickets"));
+    const conductorId = c.env.CONDUCTOR.idFromName("main");
+    const conductor = c.env.CONDUCTOR.get(conductorId);
+    const res = await conductor.fetch(new Request("http://internal/tasks"));
 
     if (!res.ok) {
-      return c.json({ error: "Failed to fetch tickets" }, 500);
+      return c.json({ error: "Failed to fetch tasks" }, 500);
     }
 
-    const data = await res.json() as { tickets: any[] };
+    const data = await res.json() as { tasks: any[] };
 
     // Filter to active agents only (agent_active = 1)
-    const activeAgents = data.tickets
+    const activeAgents = data.tasks
       .filter((t: any) => t.agent_active === 1)
       .map((t: any) => ({
-        id: t.ticket_id || t.ticket_uuid,
+        id: t.task_id || t.task_uuid,
         product: t.product,
         status: t.status,
         slack_thread_ts: t.slack_thread_ts,
@@ -289,28 +289,28 @@ dashboardRouter.get("/api/agents", requireAuth(), async (c) => {
 // Get metrics summary (protected)
 dashboardRouter.get("/api/metrics", requireAuth(), async (c) => {
   try {
-    const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
-    const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
-    const res = await orchestrator.fetch(new Request("http://internal/tickets"));
+    const conductorId = c.env.CONDUCTOR.idFromName("main");
+    const conductor = c.env.CONDUCTOR.get(conductorId);
+    const res = await conductor.fetch(new Request("http://internal/tasks"));
 
     if (!res.ok) {
       return c.json({ error: "Failed to fetch metrics" }, 500);
     }
 
-    const data = await res.json() as { tickets: any[] };
-    const tickets = data.tickets;
+    const data = await res.json() as { tasks: any[] };
+    const tasks = data.tasks;
 
     // Calculate metrics
-    const totalTickets = tickets.length;
-    const merged = tickets.filter((t: any) => t.status === "merged").length;
-    const failed = tickets.filter((t: any) => t.status === "failed").length;
-    const automergeRate = totalTickets > 0 ? `${Math.round((merged / totalTickets) * 100)}%` : "0%";
-    const failureRate = totalTickets > 0 ? `${Math.round((failed / totalTickets) * 100)}%` : "0%";
+    const totalTasks = tasks.length;
+    const merged = tasks.filter((t: any) => t.status === "merged").length;
+    const failed = tasks.filter((t: any) => t.status === "failed").length;
+    const automergeRate = totalTasks > 0 ? `${Math.round((merged / totalTasks) * 100)}%` : "0%";
+    const failureRate = totalTasks > 0 ? `${Math.round((failed / totalTasks) * 100)}%` : "0%";
 
     // TODO: Add cost and decision accuracy metrics when available
     return c.json({
       summary: {
-        totalTickets,
+        totalTasks,
         automergeRate,
         failureRate,
         multiRevisionRate: "0%", // TODO: calculate from revision count
@@ -331,21 +331,21 @@ dashboardRouter.get("/api/metrics", requireAuth(), async (c) => {
 });
 
 // Kill individual agent (protected)
-dashboardRouter.post("/api/agents/:ticketUUID/kill", requireAuth(), async (c) => {
-  const ticketUUID = c.req.param("ticketUUID");
+dashboardRouter.post("/api/agents/:taskUUID/kill", requireAuth(), async (c) => {
+  const taskUUID = c.req.param("taskUUID");
   const session = c.get("session") as Session;
 
-  console.log(`[Dashboard] User ${session.email} killing agent ${ticketUUID}`);
+  console.log(`[Dashboard] User ${session.email} killing agent ${taskUUID}`);
 
   try {
-    // Mark as inactive in orchestrator
-    const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
-    const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
-    await orchestrator.fetch(new Request("http://internal/ticket/status", {
+    // Mark as inactive in conductor
+    const conductorId = c.env.CONDUCTOR.idFromName("main");
+    const conductor = c.env.CONDUCTOR.get(conductorId);
+    await conductor.fetch(new Request("http://internal/task/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ticketUUID: ticketUUID,
+        taskUUID: taskUUID,
         status: "deferred",
       }),
     }));
@@ -363,38 +363,38 @@ dashboardRouter.post("/api/agents/shutdown-all", requireAuth(), async (c) => {
   console.log(`[Dashboard] User ${session.email} requesting shutdown of all agents`);
 
   try {
-    const orchestratorId = c.env.ORCHESTRATOR.idFromName("main");
-    const orchestrator = c.env.ORCHESTRATOR.get(orchestratorId);
+    const conductorId = c.env.CONDUCTOR.idFromName("main");
+    const conductor = c.env.CONDUCTOR.get(conductorId);
 
-    // Get all active tickets
-    const res = await orchestrator.fetch(new Request("http://internal/tickets"));
+    // Get all active tasks
+    const res = await conductor.fetch(new Request("http://internal/tasks"));
     if (!res.ok) {
-      return c.json({ error: "Failed to fetch tickets" }, 500);
+      return c.json({ error: "Failed to fetch tasks" }, 500);
     }
-    const data = await res.json() as { tickets: any[] };
-    const activeTickets = data.tickets.filter((t: any) => t.agent_active === 1);
+    const data = await res.json() as { tasks: any[] };
+    const activeTasks = data.tasks.filter((t: any) => t.agent_active === 1);
 
     // Kill each one, tracking failures
     const failures: string[] = [];
-    for (const ticket of activeTickets) {
+    for (const task of activeTasks) {
       try {
-        const killRes = await orchestrator.fetch(new Request("http://internal/ticket/status", {
+        const killRes = await conductor.fetch(new Request("http://internal/task/status", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ticketUUID: ticket.ticket_uuid,
+            taskUUID: task.task_uuid,
             status: "deferred",
           }),
         }));
         if (!killRes.ok) {
-          failures.push(ticket.ticket_uuid);
+          failures.push(task.task_uuid);
         }
       } catch {
-        failures.push(ticket.ticket_uuid);
+        failures.push(task.task_uuid);
       }
     }
 
-    return c.json({ ok: true, total: activeTickets.length, failed: failures });
+    return c.json({ ok: true, total: activeTasks.length, failed: failures });
   } catch (error) {
     console.error("[Dashboard] Failed to shutdown all agents:", error);
     return c.json({ error: String(error) }, 500);

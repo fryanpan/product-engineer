@@ -7,7 +7,7 @@ All LLM traffic (via Claude Agent SDK) is routed through Cloudflare AI Gateway f
 ## Architecture
 
 ```
-TicketAgent Container
+TaskAgent Container
   ↓ ANTHROPIC_BASE_URL env var
   ↓
 Claude Agent SDK
@@ -32,7 +32,7 @@ Format: `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropi
 
 ### Registry Configuration
 
-The AI Gateway settings are stored in the Orchestrator DO's SQLite database (managed via admin API). The root config includes:
+The AI Gateway settings are stored in the Conductor DO's SQLite database (managed via admin API). The root config includes:
 
 ```json
 {
@@ -80,7 +80,7 @@ cd api
 bun run deploy
 ```
 
-The orchestrator will automatically inject `ANTHROPIC_BASE_URL` into agent containers.
+The conductor will automatically inject `ANTHROPIC_BASE_URL` into agent containers.
 
 ### 4. Verify
 

@@ -1,11 +1,11 @@
-# Active Ticket Agent Dashboard
+# Active Task Agent Dashboard
 
-Web-based dashboard for monitoring and managing active Product Engineer ticket agents.
+Web-based dashboard for monitoring and managing active Product Engineer task agents.
 
 ## Features
 
-- **Real-time monitoring**: View all active ticket agents with their current status
-- **Agent details**: See ticket ID, product, status, last update time, PR link, and Slack thread link
+- **Real-time monitoring**: View all active task agents with their current status
+- **Agent details**: See task ID, product, status, last update time, PR link, and Slack thread link
 - **Health indicators**: Color-coded health status based on heartbeat freshness (💚 fresh, 💛 recent, 🧡 getting stale, ❤️ stale)
 - **Priority alerts**: Agents needing help (asking/failed status) are shown at the top
 - **Agent controls**: Kill individual agents or shutdown all active agents at once
@@ -56,14 +56,14 @@ You'll be redirected to Google login. After authentication, you'll see the dashb
 **Summary Cards:**
 - Active Agents: Total number of running agents
 - Needs Help: Agents in "asking" or "failed" status
-- Completed (24h): Recently completed tickets
+- Completed (24h): Recently completed tasks
 - Stale (>30min): Agents with stale heartbeats
 
 **Agent Cards:**
 
 Each agent shows:
 - Health indicator (💚/💛/🧡/❤️)
-- Ticket ID
+- Task ID
 - Status badge
 - Product name
 - Last update time
@@ -77,7 +77,7 @@ Each agent shows:
 Click "Kill Agent" on any agent card. This:
 - Marks the agent as terminal
 - Shuts down the container immediately
-- Updates ticket status to "deferred"
+- Updates task status to "deferred"
 
 **All agents:**
 Click "Shutdown All Agents" in the header. This:
@@ -101,14 +101,14 @@ Click "Shutdown All Agents" in the header. This:
 - `GET /dashboard/callback` - OAuth callback handler
 - `GET /dashboard/logout` - Logout and clear session
 - `GET /dashboard/user` - Current user info (protected)
-- `POST /dashboard/kill-agent/:ticketId` - Kill specific agent (protected)
+- `POST /dashboard/kill-agent/:taskId` - Kill specific agent (protected)
 
 ### Architecture
 
 - **Stateless sessions**: Stored in Worker memory (Map), not persisted
 - **Auto-refresh**: Client-side polling every 30 seconds
-- **Status API**: Reuses `/api/orchestrator/status` endpoint with session auth
-- **Shutdown API**: Reuses `/api/orchestrator/shutdown-all` with session auth
+- **Status API**: Reuses `/api/conductor/status` endpoint with session auth
+- **Shutdown API**: Reuses `/api/conductor/shutdown-all` with session auth
 
 ### Session Lifecycle
 
@@ -135,5 +135,5 @@ Click "Shutdown All Agents" in the header. This:
 - Refresh page to re-authenticate
 
 **"Failed to load agent status":**
-- Orchestrator DO not responding
+- Conductor DO not responding
 - Check Worker health: `curl https://your-worker-url.workers.dev/health`

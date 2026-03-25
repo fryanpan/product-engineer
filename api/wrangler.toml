@@ -6,32 +6,32 @@ compatibility_flags = ["nodejs_compat"]
 [observability]
 enabled = true
 
-# Orchestrator — always-on, Slack Socket Mode, event routing
+# Conductor — always-on, Slack Socket Mode, event routing
 [[containers]]
-class_name = "Orchestrator"
-image = "../containers/orchestrator/Dockerfile"
+class_name = "Conductor"
+image = "../containers/conductor/Dockerfile"
 instance_type = "lite"
 max_instances = 1
 
-# Per-ticket agents — one per active ticket, runs Claude Agent SDK
+# Per-task agents — one per active task, runs Claude Agent SDK
 [[containers]]
-class_name = "TicketAgent"
+class_name = "TaskAgent"
 image = "../agent/Dockerfile"
 instance_type = "basic"
 max_instances = 20
 
-# Per-product project agents — persistent, accumulate context over time
+# Per-product project leads — persistent, accumulate context over time
 [[containers]]
-class_name = "ProjectAgent"
+class_name = "ProjectLead"
 image = "../agent/Dockerfile"
 instance_type = "basic"
 max_instances = 10
 
 [durable_objects]
 bindings = [
-  { name = "ORCHESTRATOR", class_name = "Orchestrator" },
-  { name = "TICKET_AGENT", class_name = "TicketAgent" },
-  { name = "PROJECT_AGENT", class_name = "ProjectAgent" }
+  { name = "CONDUCTOR", class_name = "Conductor" },
+  { name = "TASK_AGENT", class_name = "TaskAgent" },
+  { name = "PROJECT_LEAD", class_name = "ProjectLead" }
 ]
 
 [[r2_buckets]]
@@ -62,6 +62,11 @@ deleted_classes = ["Sandbox"]
 tag = "v3"
 new_sqlite_classes = ["ProjectAgent"]
 
+[[migrations]]
+tag = "v4"
+deleted_classes = ["Orchestrator", "TicketAgent", "ProjectAgent"]
+new_sqlite_classes = ["Conductor", "TaskAgent", "ProjectLead"]
+
 # ── Staging environment ──────────────────────────────────────────────
 # Deploy with: wrangler deploy --env staging
 [env.staging]
@@ -77,28 +82,28 @@ id = "52c44a6e0d144e53a51c9cb4e9bcbbe0"
 
 [env.staging.durable_objects]
 bindings = [
-  { name = "ORCHESTRATOR", class_name = "Orchestrator" },
-  { name = "TICKET_AGENT", class_name = "TicketAgent" },
-  { name = "PROJECT_AGENT", class_name = "ProjectAgent" }
+  { name = "CONDUCTOR", class_name = "Conductor" },
+  { name = "TASK_AGENT", class_name = "TaskAgent" },
+  { name = "PROJECT_LEAD", class_name = "ProjectLead" }
 ]
 
-# Orchestrator — always-on, Slack Socket Mode, event routing
+# Conductor — always-on, Slack Socket Mode, event routing
 [[env.staging.containers]]
-class_name = "Orchestrator"
-image = "../containers/orchestrator/Dockerfile"
+class_name = "Conductor"
+image = "../containers/conductor/Dockerfile"
 instance_type = "lite"
 max_instances = 1
 
-# Per-ticket agents — one per active ticket, runs Claude Agent SDK
+# Per-task agents — one per active task, runs Claude Agent SDK
 [[env.staging.containers]]
-class_name = "TicketAgent"
+class_name = "TaskAgent"
 image = "../agent/Dockerfile"
 instance_type = "basic"
 max_instances = 5
 
-# Per-product project agents — persistent
+# Per-product project leads — persistent
 [[env.staging.containers]]
-class_name = "ProjectAgent"
+class_name = "ProjectLead"
 image = "../agent/Dockerfile"
 instance_type = "basic"
 max_instances = 3

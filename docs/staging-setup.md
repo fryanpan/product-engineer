@@ -2,11 +2,11 @@
 
 ## Overview
 
-Staging deploys from **development branches**, not main. This allows testing orchestrator and agent changes before promoting to production.
+Staging deploys from **development branches**, not main. This allows testing conductor and agent changes before promoting to production.
 
 ## Architecture
 
-The **production orchestrator** acts as the control plane for staging access. A lock/lease mechanism can allow agents to claim staging for testing, preventing contention when multiple agents work in parallel.
+The **production conductor** acts as the control plane for staging access. A lock/lease mechanism can allow agents to claim staging for testing, preventing contention when multiple agents work in parallel.
 
 ## Components
 

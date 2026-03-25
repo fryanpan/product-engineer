@@ -45,15 +45,15 @@ let registryCache: Registry | null = null;
  * Load registry from DO on first access, then cache for the life of the isolate.
  * Registry changes are rare, so stale-for-one-isolate is acceptable.
  */
-export async function loadRegistry(orchestratorStub: DurableObjectStub): Promise<Registry> {
+export async function loadRegistry(conductorStub: DurableObjectStub): Promise<Registry> {
   if (registryCache) {
     return registryCache;
   }
 
   // Fetch from DO
   const [productsRes, settingsRes] = await Promise.all([
-    orchestratorStub.fetch(new Request("http://internal/products")),
-    orchestratorStub.fetch(new Request("http://internal/settings")),
+    conductorStub.fetch(new Request("http://internal/products")),
+    conductorStub.fetch(new Request("http://internal/settings")),
   ]);
 
   const { products } = await productsRes.json<{ products: Record<string, ProductConfig> }>();
@@ -82,25 +82,25 @@ export function clearRegistryCache() {
 }
 
 export async function getProduct(
-  orchestratorStub: DurableObjectStub,
+  conductorStub: DurableObjectStub,
   name: string,
 ): Promise<ProductConfig | null> {
-  const registry = await loadRegistry(orchestratorStub);
+  const registry = await loadRegistry(conductorStub);
   return registry.products[name] || null;
 }
 
 export async function getProducts(
-  orchestratorStub: DurableObjectStub,
+  conductorStub: DurableObjectStub,
 ): Promise<Record<string, ProductConfig>> {
-  const registry = await loadRegistry(orchestratorStub);
+  const registry = await loadRegistry(conductorStub);
   return registry.products;
 }
 
 export async function getProductByLinearProject(
-  orchestratorStub: DurableObjectStub,
+  conductorStub: DurableObjectStub,
   projectName: string,
 ): Promise<{ name: string; config: ProductConfig } | null> {
-  const registry = await loadRegistry(orchestratorStub);
+  const registry = await loadRegistry(conductorStub);
   const normalized = projectName.toLowerCase();
   for (const [name, config] of Object.entries(registry.products)) {
     if (
@@ -114,23 +114,23 @@ export async function getProductByLinearProject(
 }
 
 export async function isOurTeam(
-  orchestratorStub: DurableObjectStub,
+  conductorStub: DurableObjectStub,
   teamId: string,
 ): Promise<boolean> {
-  const registry = await loadRegistry(orchestratorStub);
+  const registry = await loadRegistry(conductorStub);
   return registry.linear_team_id === teamId;
 }
 
 export async function getLinearAppUserId(
-  orchestratorStub: DurableObjectStub,
+  conductorStub: DurableObjectStub,
 ): Promise<string> {
-  const registry = await loadRegistry(orchestratorStub);
+  const registry = await loadRegistry(conductorStub);
   return registry.linear_app_user_id;
 }
 
 export async function getAIGatewayConfig(
-  orchestratorStub: DurableObjectStub,
+  conductorStub: DurableObjectStub,
 ): Promise<CloudflareAIGateway | null> {
-  const registry = await loadRegistry(orchestratorStub);
+  const registry = await loadRegistry(conductorStub);
   return registry.cloudflare_ai_gateway || null;
 }

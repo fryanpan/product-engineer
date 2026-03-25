@@ -1,23 +1,23 @@
 import { Container } from "@cloudflare/containers";
-import { TERMINAL_STATUSES, TICKET_STATES, type TicketEvent, type HeartbeatPayload, type Bindings } from "./types";
+import { TERMINAL_STATUSES, TASK_STATES, type TaskEvent, type HeartbeatPayload, type Bindings } from "./types";
 import type { ProductConfig, CloudflareAIGateway } from "./registry";
-import { AgentManager, type SpawnConfig } from "./agent-manager";
+import { TaskManager, type SpawnConfig } from "./task-manager";
 import { configure as configureInjectionDetector } from "./security/injection-detector";
-import type { ProjectAgentConfig } from "./project-agent";
-import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTicketMetrics } from "./db";
+import type { ProjectLeadConfig } from "./project-lead";
+import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTaskMetrics } from "./db";
 import {
-  ensureProjectAgent as ensureProjectAgentImpl,
+  ensureProjectLead as ensureProjectLeadImpl,
   ensureConductor as ensureConductorImpl,
-  routeToProjectAgent as routeToProjectAgentImpl,
-  handleProjectAgentRoute as handleProjectAgentRouteImpl,
-  restartProjectAgents as restartProjectAgentsImpl,
-} from "./project-agent-router";
+  routeToProjectLead as routeToProjectLeadImpl,
+  handleProjectLeadRoute as handleProjectLeadRouteImpl,
+  restartProjectLeads as restartProjectLeadsImpl,
+} from "./project-lead-router";
 import {
   getSystemStatus as getSystemStatusData,
   getMetrics as getMetricsData,
   getMetricsSummary as getMetricsSummaryData,
   checkAgentHealth as checkAgentHealthData,
-  listTickets as listTicketsData,
+  listTasks as listTasksData,
   listTranscripts as listTranscriptsData,
 } from "./observability";
 import {
@@ -32,7 +32,7 @@ import {
 } from "./product-crud";
 import { handleSlackEvent as handleSlackEventImpl, refreshLinearToken } from "./slack-handler";
 
-function sanitizeTicketUUID(id: string): string {
+function sanitizeTaskUUID(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
 }
 
@@ -40,15 +40,15 @@ function sanitizeTicketUUID(id: string): string {
 export { resolveProductFromChannel } from "./slack-handler";
 
 // Pure helper — exported for testing
-export function buildTicketEvent(
+export function buildTaskEvent(
   source: string,
   type: string,
   data: Record<string, unknown>,
-): TicketEvent {
+): TaskEvent {
   return {
     type,
     source,
-    ticketUUID: sanitizeTicketUUID((data.ticketUUID || data.id || `${source}-${Date.now()}`) as string),
+    taskUUID: sanitizeTaskUUID((data.taskUUID || data.id || `${source}-${Date.now()}`) as string),
     product: data.product as string,
     payload: data,
     slackThreadTs: data.threadTs as string | undefined,
@@ -56,13 +56,13 @@ export function buildTicketEvent(
   };
 }
 
-export class Orchestrator extends Container<Bindings> {
+export class Conductor extends Container<Bindings> {
   defaultPort = 3000;
   // No sleepAfter — always on
 
   private dbInitialized = false;
   private containerStarted = false;
-  private agentManager!: AgentManager;
+  private taskManager!: TaskManager;
 
   /** Reusable SqlExec wrapper for db.ts helpers. */
   private get sqlExec() {
@@ -79,7 +79,7 @@ export class Orchestrator extends Container<Bindings> {
       SLACK_APP_TOKEN: (env as any).SLACK_APP_TOKEN,
       SLACK_BOT_TOKEN: (env as any).SLACK_BOT_TOKEN,
       SENTRY_DSN: (env as any).SENTRY_DSN || "",
-      WORKER_URL: (env as any).WORKER_URL || (() => { console.error("[Orchestrator] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
+      WORKER_URL: (env as any).WORKER_URL || (() => { console.error("[Conductor] WORKER_URL not configured — run: wrangler secret put WORKER_URL"); return ""; })(),
     };
 
     // Configure injection detector with per-environment secret delimiter
@@ -87,12 +87,12 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   override onStop(params: { exitCode: number; reason: string }) {
-    console.error(`[Orchestrator] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
+    console.error(`[Conductor] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
     this.containerStarted = false;
   }
 
   override onError(error: unknown) {
-    console.error("[Orchestrator] Container error:", error);
+    console.error("[Conductor] Container error:", error);
     throw error;
   }
 
@@ -104,11 +104,11 @@ export class Orchestrator extends Container<Bindings> {
     this.initDb();
     await this.ensureContainerRunning();
 
-    // Run LLM supervisor tick — checks agent health, stale PRs, queued tickets
+    // Run LLM supervisor tick — checks agent health, stale PRs, queued tasks
     try {
       await this.runSupervisorTick();
     } catch (err) {
-      console.error("[Orchestrator] Supervisor tick failed:", err);
+      console.error("[Conductor] Supervisor tick failed:", err);
       // Don't let supervisor failures break the alarm loop
     }
 
@@ -127,7 +127,7 @@ export class Orchestrator extends Container<Bindings> {
         }
       }
     } catch (err) {
-      console.error("[Orchestrator] Linear token refresh check failed:", err);
+      console.error("[Conductor] Linear token refresh check failed:", err);
     }
 
     return super.alarm(alarmProps);
@@ -143,7 +143,7 @@ export class Orchestrator extends Container<Bindings> {
   private async ensureContainerRunning() {
     if (this.containerStarted) {
       // Skip the expensive HTTP health probe if we checked recently
-      if (Date.now() - this.lastHealthCheck < Orchestrator.HEALTH_CHECK_TTL) return;
+      if (Date.now() - this.lastHealthCheck < Conductor.HEALTH_CHECK_TTL) return;
       try {
         // Container handle exists at runtime (from Container SDK) but isn't in Workers types
         const port = (this.ctx as any).container.getTcpPort(this.defaultPort);
@@ -153,18 +153,18 @@ export class Orchestrator extends Container<Bindings> {
           return;
         }
       } catch {
-        console.warn("[Orchestrator] Container flag was set but container is not responsive — restarting");
+        console.warn("[Conductor] Container flag was set but container is not responsive — restarting");
         this.containerStarted = false;
       }
     }
 
-    console.log("[Orchestrator] Starting container (deployment or first start)...");
+    console.log("[Conductor] Starting container (deployment or first start)...");
     try {
       await this.startAndWaitForPorts(this.defaultPort);
       this.containerStarted = true;
-      console.log("[Orchestrator] Container started successfully");
+      console.log("[Conductor] Container started successfully");
     } catch (err) {
-      console.error("[Orchestrator] Container start failed:", err);
+      console.error("[Conductor] Container start failed:", err);
       throw err;
     }
   }
@@ -181,7 +181,7 @@ export class Orchestrator extends Container<Bindings> {
         }
       }
     } catch (err) {
-      console.error("[Orchestrator] Failed to load product configs for GitHub tokens:", err);
+      console.error("[Conductor] Failed to load product configs for GitHub tokens:", err);
     }
     return tokens;
   }
@@ -194,8 +194,8 @@ export class Orchestrator extends Container<Bindings> {
 
     this.dbInitialized = true;
 
-    // Initialize AgentManager after tables are created
-    this.agentManager = new AgentManager(
+    // Initialize TaskManager after tables are created
+    this.taskManager = new TaskManager(
       { exec: (sql: string, ...params: unknown[]) => this.ctx.storage.sql.exec(sql, ...params) },
       this.env as Record<string, unknown>,
     );
@@ -210,9 +210,9 @@ export class Orchestrator extends Container<Bindings> {
       case "/event":
         return this.handleEvent(request);
       case "/health":
-        return Response.json({ ok: true, service: "orchestrator-do" });
+        return Response.json({ ok: true, service: "conductor-do" });
       case "/tickets":
-        return Response.json(listTicketsData(this.sqlExec));
+        return Response.json(listTasksData(this.sqlExec));
       case "/ticket/status":
         return this.handleStatusUpdate(request);
       case "/token-usage":
@@ -236,8 +236,8 @@ export class Orchestrator extends Container<Bindings> {
         return this.cleanupInactiveAgents();
       case "/shutdown-all":
         return this.shutdownAllAgents();
-      case "/restart-project-agents":
-        return restartProjectAgentsImpl(this.env, this.sqlExec);
+      case "/restart-project-leads":
+        return restartProjectLeadsImpl(this.env, this.sqlExec);
       case "/products":
         if (request.method === "GET") return listProductsHandler(this.sqlExec);
         { const { slug, config } = await request.json<{ slug: string; config: unknown }>(); return createProductHandler(this.sqlExec, slug, config); }
@@ -258,17 +258,17 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleDynamicRoute(url: URL, request: Request): Promise<Response> {
-    if (url.pathname.startsWith("/ticket-status/")) {
-      const ticketUUID = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
-      const ticket = this.agentManager.getTicket(ticketUUID);
-      if (!ticket) return Response.json({ error: "not found" }, { status: 404 });
+    if (url.pathname.startsWith("/task-status/")) {
+      const taskUUID = decodeURIComponent(url.pathname.slice("/task-status/".length));
+      const task = this.taskManager.getTask(taskUUID);
+      if (!task) return Response.json({ error: "not found" }, { status: 404 });
       return Response.json({
-        agent_active: ticket.agent_active,
-        status: ticket.status,
-        product: ticket.product,
-        terminal: this.agentManager.isTerminal(ticketUUID),
-        session_id: ticket.session_id,
-        transcript_r2_key: ticket.transcript_r2_key,
+        agent_active: task.agent_active,
+        status: task.status,
+        product: task.product,
+        terminal: this.taskManager.isTerminal(taskUUID),
+        session_id: task.session_id,
+        transcript_r2_key: task.transcript_r2_key,
       });
     }
     if (url.pathname.startsWith("/products/")) {
@@ -284,20 +284,20 @@ export class Orchestrator extends Container<Bindings> {
       const key = url.pathname.split("/").pop()!;
       if (request.method === "PUT") { const { value } = await request.json<{ value: string }>(); return updateSettingHandler(this.sqlExec, key, value); }
     }
-    if (url.pathname.startsWith("/project-agent/")) {
-      const subpath = url.pathname.replace("/project-agent/", "");
-      return handleProjectAgentRouteImpl(subpath, request, this.env, this.sqlExec, this.agentManager);
+    if (url.pathname.startsWith("/project-lead/")) {
+      const subpath = url.pathname.replace("/project-lead/", "");
+      return handleProjectLeadRouteImpl(subpath, request, this.env, this.sqlExec, this.taskManager);
     }
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  // --- Project Agent routing (delegated to project-agent-router.ts) ---
+  // --- Project Lead routing (delegated to project-lead-router.ts) ---
 
-  private async routeToProjectAgent(
+  private async routeToProjectLead(
     product: string,
-    event: TicketEvent,
+    event: TaskEvent,
   ): Promise<void> {
-    return routeToProjectAgentImpl(product, event, this.env, this.sqlExec);
+    return routeToProjectLeadImpl(product, event, this.env, this.sqlExec);
   }
 
   private async ensureConductor(): Promise<DurableObjectStub> {
@@ -305,66 +305,66 @@ export class Orchestrator extends Container<Bindings> {
   }
 
   private async handleEvent(request: Request): Promise<Response> {
-    const event = await request.json<TicketEvent>();
-    event.ticketUUID = sanitizeTicketUUID(event.ticketUUID);
-    console.log(`[Orchestrator] handleEvent: type=${event.type} ticketUUID=${event.ticketUUID} source=${event.source}`);
+    const event = await request.json<TaskEvent>();
+    event.taskUUID = sanitizeTaskUUID(event.taskUUID);
+    console.log(`[Conductor] handleEvent: type=${event.type} taskUUID=${event.taskUUID} source=${event.source}`);
 
-    // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID ticket.
+    // Resolve branch-extracted task IDs (e.g. "PES-5") to their UUID task.
     // GitHub webhooks extract taskId from branch names like "ticket/PES-5",
-    // but the canonical ticket is stored under the Linear UUID. Look up by branch_name
-    // first, then fall back to ticket_id (e.g., "PES-5" matches tickets.ticket_id).
+    // but the canonical task is stored under the Linear UUID. Look up by branch_name
+    // first, then fall back to task_id (e.g., "PES-5" matches tasks.task_id).
     if (event.source === "github") {
       const byBranch = this.ctx.storage.sql.exec(
-        "SELECT ticket_uuid FROM tickets WHERE branch_name = ? OR branch_name = ?",
-        `ticket/${event.ticketUUID}`, `feedback/${event.ticketUUID}`,
-      ).toArray()[0] as { ticket_uuid: string } | undefined;
+        "SELECT task_uuid FROM tasks WHERE branch_name = ? OR branch_name = ?",
+        `ticket/${event.taskUUID}`, `feedback/${event.taskUUID}`,
+      ).toArray()[0] as { task_uuid: string } | undefined;
       if (byBranch) {
-        console.log(`[Orchestrator] Resolved branch task ID ${event.ticketUUID} → ${byBranch.ticket_uuid}`);
-        event.ticketUUID = byBranch.ticket_uuid;
+        console.log(`[Conductor] Resolved branch task ID ${event.taskUUID} → ${byBranch.task_uuid}`);
+        event.taskUUID = byBranch.task_uuid;
       } else {
-        // branch_name may not be set yet — fall back to ticket_id lookup
-        const byIdentifier = this.agentManager.getTicketByIdentifier(event.ticketUUID);
+        // branch_name may not be set yet — fall back to task_id lookup
+        const byIdentifier = this.taskManager.getTaskByIdentifier(event.taskUUID);
         if (byIdentifier) {
-          console.log(`[Orchestrator] Resolved identifier ${event.ticketUUID} → ${byIdentifier.ticket_uuid}`);
-          event.ticketUUID = byIdentifier.ticket_uuid;
+          console.log(`[Conductor] Resolved identifier ${event.taskUUID} → ${byIdentifier.task_uuid}`);
+          event.taskUUID = byIdentifier.task_uuid;
         }
       }
     }
 
-    // Check if this ticket is already in a terminal state — don't re-activate it
-    if (this.agentManager.isTerminal(event.ticketUUID)) {
-      const existing = this.agentManager.getTicket(event.ticketUUID);
-      console.log(`[Orchestrator] Ignoring event for terminal ticket ${event.ticketUUID} (status: ${existing?.status})`);
-      return Response.json({ ok: true, ticketUUID: event.ticketUUID, ignored: true, reason: "terminal ticket" });
+    // Check if this task is already in a terminal state — don't re-activate it
+    if (this.taskManager.isTerminal(event.taskUUID)) {
+      const existing = this.taskManager.getTask(event.taskUUID);
+      console.log(`[Conductor] Ignoring event for terminal task ${event.taskUUID} (status: ${existing?.status})`);
+      return Response.json({ ok: true, taskUUID: event.taskUUID, ignored: true, reason: "terminal task" });
     }
 
-    // For Linear events, look up Slack thread from slack_thread_map (Slack-originated tickets)
+    // For Linear events, look up Slack thread from slack_thread_map (Slack-originated tasks)
     if (event.source === "linear" && !event.slackThreadTs) {
       const threadMap = this.ctx.storage.sql.exec(
         "SELECT slack_thread_ts, slack_channel FROM slack_thread_map WHERE linear_issue_id = ?",
-        event.ticketUUID,
+        event.taskUUID,
       ).toArray()[0] as { slack_thread_ts: string; slack_channel: string } | undefined;
       if (threadMap) {
         event.slackThreadTs = threadMap.slack_thread_ts || undefined;
         event.slackChannel = threadMap.slack_channel || undefined;
-        console.log(`[Orchestrator] Linked Linear issue ${event.ticketUUID} to Slack thread ${threadMap.slack_thread_ts}`);
+        console.log(`[Conductor] Linked Linear issue ${event.taskUUID} to Slack thread ${threadMap.slack_thread_ts}`);
         // Clean up — one-time mapping
-        this.ctx.storage.sql.exec("DELETE FROM slack_thread_map WHERE linear_issue_id = ?", event.ticketUUID);
+        this.ctx.storage.sql.exec("DELETE FROM slack_thread_map WHERE linear_issue_id = ?", event.taskUUID);
       }
     }
 
-    // Create or update ticket
+    // Create or update task
     const payload = event.payload as Record<string, unknown>;
-    const ticketId = (payload.identifier as string) || null;
+    const taskId = (payload.identifier as string) || null;
     const title = (payload.title as string) || null;
-    const existingTicket = this.agentManager.getTicket(event.ticketUUID);
+    const existingTicket = this.taskManager.getTask(event.taskUUID);
     if (!existingTicket) {
-      this.agentManager.createTicket({
-        ticketUUID: event.ticketUUID,
+      this.taskManager.createTask({
+        taskUUID: event.taskUUID,
         product: event.product,
         slackThreadTs: event.slackThreadTs || undefined,
         slackChannel: event.slackChannel || undefined,
-        ticketId: ticketId || undefined,
+        taskId: taskId || undefined,
         title: title || undefined,
       });
     } else {
@@ -373,145 +373,145 @@ export class Orchestrator extends Container<Bindings> {
       if (event.slackThreadTs) metadataUpdate.slack_thread_ts = event.slackThreadTs;
       if (event.slackChannel) metadataUpdate.slack_channel = event.slackChannel;
       if (Object.keys(metadataUpdate).length > 0) {
-        this.agentManager.updateStatus(event.ticketUUID, metadataUpdate as any);
+        this.taskManager.updateStatus(event.taskUUID, metadataUpdate as any);
       }
     }
 
-    // Initialize ticket_metrics row if not exists
-    ensureTicketMetrics(this.sqlExec, event.ticketUUID);
+    // Initialize task_metrics row if not exists
+    ensureTaskMetrics(this.sqlExec, event.taskUUID);
 
-    // For new tickets, use LLM ticket review instead of direct routing
-    if (event.type === "ticket_created") {
-      await this.handleTicketReview(event);
-      return Response.json({ ok: true, ticketUUID: event.ticketUUID });
+    // For new tasks, use LLM task review instead of direct routing
+    if (event.type === "task_created") {
+      await this.handleTaskReview(event);
+      return Response.json({ ok: true, taskUUID: event.taskUUID });
     }
 
-    // For Linear comments, route to running agent or re-evaluate via ticket review
+    // For Linear comments, route to running agent or re-evaluate via task review
     if (event.type === "linear_comment") {
-      const ticketRow = this.agentManager.getTicket(event.ticketUUID);
+      const taskRow = this.taskManager.getTask(event.taskUUID);
 
-      if (ticketRow && this.agentManager.isTerminal(event.ticketUUID)) {
-        console.log(`[Orchestrator] Ignoring linear_comment for terminal ticket ${event.ticketUUID} (status: ${ticketRow.status})`);
-      } else if (ticketRow?.agent_active) {
+      if (taskRow && this.taskManager.isTerminal(event.taskUUID)) {
+        console.log(`[Conductor] Ignoring linear_comment for terminal task ${event.taskUUID} (status: ${taskRow.status})`);
+      } else if (taskRow?.agent_active) {
         // Forward to running agent like a Slack reply
-        await this.agentManager.sendEvent(event.ticketUUID, event);
+        await this.taskManager.sendEvent(event.taskUUID, event);
       } else {
-        // No agent running — re-evaluate via ticket review
-        await this.handleTicketReview(event);
+        // No agent running — re-evaluate via task review
+        await this.handleTaskReview(event);
       }
-      return Response.json({ ok: true, ticketUUID: event.ticketUUID });
+      return Response.json({ ok: true, taskUUID: event.taskUUID });
     }
 
-    // Handle PR merged/closed events directly in orchestrator — don't route to agent.
+    // Handle PR merged/closed events directly in conductor — don't route to agent.
     // The agent container may have already exited, so routing via sendEvent would silently
     // drop the event (sendEvent requires agent_active=1). Update status here instead.
     if (event.type === "pr_merged") {
-      const ticketRow = this.agentManager.getTicket(event.ticketUUID);
-      if (ticketRow) {
-        console.log(`[Orchestrator] PR merged for ${event.ticketUUID} — marking terminal`);
+      const taskRow = this.taskManager.getTask(event.taskUUID);
+      if (taskRow) {
+        console.log(`[Conductor] PR merged for ${event.taskUUID} — marking terminal`);
         try {
-          this.agentManager.updateStatus(event.ticketUUID, { status: "merged" });
+          this.taskManager.updateStatus(event.taskUUID, { status: "merged" });
         } catch {
           // Force update if state transition is invalid (e.g., already in a terminal state)
           this.ctx.storage.sql.exec(
-            "UPDATE tickets SET status = 'merged', agent_active = 0, updated_at = datetime('now') WHERE ticket_uuid = ?",
-            event.ticketUUID,
+            "UPDATE tasks SET status = 'merged', agent_active = 0, updated_at = datetime('now') WHERE task_uuid = ?",
+            event.taskUUID,
           );
         }
         // Clean up merge gate retries
-        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_uuid = ?", event.ticketUUID);
-        await this.agentManager.stopAgent(event.ticketUUID, "pr_merged").catch(err =>
-          console.warn(`[Orchestrator] Failed to stop agent on pr_merged:`, err)
+        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE task_uuid = ?", event.taskUUID);
+        await this.taskManager.stopAgent(event.taskUUID, "pr_merged").catch(err =>
+          console.warn(`[Conductor] Failed to stop agent on pr_merged:`, err)
         );
-        return Response.json({ ok: true, ticketUUID: event.ticketUUID, status: "merged" });
+        return Response.json({ ok: true, taskUUID: event.taskUUID, status: "merged" });
       }
     }
 
     if (event.type === "pr_closed") {
-      const ticketRow = this.agentManager.getTicket(event.ticketUUID);
-      if (ticketRow) {
-        console.log(`[Orchestrator] PR closed (not merged) for ${event.ticketUUID} — marking terminal`);
+      const taskRow = this.taskManager.getTask(event.taskUUID);
+      if (taskRow) {
+        console.log(`[Conductor] PR closed (not merged) for ${event.taskUUID} — marking terminal`);
         try {
-          this.agentManager.updateStatus(event.ticketUUID, { status: "closed" });
+          this.taskManager.updateStatus(event.taskUUID, { status: "closed" });
         } catch {
           // Force update if state transition is invalid
           this.ctx.storage.sql.exec(
-            "UPDATE tickets SET status = 'closed', agent_active = 0, updated_at = datetime('now') WHERE ticket_uuid = ?",
-            event.ticketUUID,
+            "UPDATE tasks SET status = 'closed', agent_active = 0, updated_at = datetime('now') WHERE task_uuid = ?",
+            event.taskUUID,
           );
         }
         // Clean up merge gate retries
-        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE ticket_uuid = ?", event.ticketUUID);
-        await this.agentManager.stopAgent(event.ticketUUID, "pr_closed").catch(err =>
-          console.warn(`[Orchestrator] Failed to stop agent on pr_closed:`, err)
+        this.ctx.storage.sql.exec("DELETE FROM merge_gate_retries WHERE task_uuid = ?", event.taskUUID);
+        await this.taskManager.stopAgent(event.taskUUID, "pr_closed").catch(err =>
+          console.warn(`[Conductor] Failed to stop agent on pr_closed:`, err)
         );
-        return Response.json({ ok: true, ticketUUID: event.ticketUUID, status: "closed" });
+        return Response.json({ ok: true, taskUUID: event.taskUUID, status: "closed" });
       }
     }
 
-    // Route to TicketAgent for all other event types
-    await this.agentManager.sendEvent(event.ticketUUID, event);
+    // Route to TaskAgent for all other event types
+    await this.taskManager.sendEvent(event.taskUUID, event);
 
-    return Response.json({ ok: true, ticketUUID: event.ticketUUID });
+    return Response.json({ ok: true, taskUUID: event.taskUUID });
   }
 
   /**
-   * Review a new ticket and decide how to handle it.
+   * Review a new task and decide how to handle it.
    *
-   * v3 flow: Routes the event to the persistent ProjectAgent for the product.
-   * The ProjectAgent (via coding-project-lead SKILL.md) decides whether to:
-   * - Spawn a TicketAgent for coding tasks
+   * v3 flow: Routes the event to the persistent ProjectLead for the product.
+   * The ProjectLead (via coding-project-lead SKILL.md) decides whether to:
+   * - Spawn a TaskAgent for coding tasks
    * - Handle directly (quick answers, research)
    * - Ask for clarification
    *
-   * Fallback: If ProjectAgent routing fails, spawns a TicketAgent directly
+   * Fallback: If ProjectLead routing fails, spawns a TaskAgent directly
    * (preserves v2 behavior as safety net).
    */
-  private async handleTicketReview(event: TicketEvent): Promise<void> {
+  private async handleTaskReview(event: TaskEvent): Promise<void> {
     const payload = event.payload as Record<string, unknown>;
 
     // Load product config from database
     const productConfig = getProductConfig(this.sqlExec, event.product);
 
     if (!productConfig) {
-      console.error(`[Orchestrator] No product config for ${event.product}`);
+      console.error(`[Conductor] No product config for ${event.product}`);
       return;
     }
 
-    // Get ticket record for slack info
-    const ticketRow = this.agentManager.getTicket(event.ticketUUID) as Record<string, unknown> | null;
+    // Get task record for slack info
+    const taskRow = this.taskManager.getTask(event.taskUUID) as Record<string, unknown> | null;
 
-    // Skip ticket review if agent is already running or ticket is past initial triage.
+    // Skip task review if agent is already running or task is past initial triage.
     // Linear sends multiple webhooks (create + update) and we don't want to re-review
-    // a ticket that already has an active agent.
-    if (ticketRow) {
-      const status = ticketRow.status as string;
-      const agentActive = ticketRow.agent_active as number;
+    // a task that already has an active agent.
+    if (taskRow) {
+      const status = taskRow.status as string;
+      const agentActive = taskRow.agent_active as number;
       if (agentActive === 1 || (status !== "created" && status !== "needs_info")) {
-        console.log(`[Orchestrator] Skipping ticket review for ${event.ticketUUID} — already active (status=${status}, agent_active=${agentActive})`);
+        console.log(`[Conductor] Skipping task review for ${event.taskUUID} — already active (status=${status}, agent_active=${agentActive})`);
         return;
       }
     }
 
-    // Transition to reviewing state (ticket review = the review phase)
+    // Transition to reviewing state (task review = the review phase)
     try {
-      this.agentManager.updateStatus(event.ticketUUID, { status: "reviewing" });
+      this.taskManager.updateStatus(event.taskUUID, { status: "reviewing" });
     } catch {
       // May already be in reviewing state — ignore
     }
 
-    // v3: Route to ProjectAgent — let it decide what to do
+    // v3: Route to ProjectLead — let it decide what to do
     try {
-      await this.routeToProjectAgent(event.product, event);
-      console.log(`[Orchestrator] Routed ticket ${event.ticketUUID} to ProjectAgent for ${event.product}`);
-      return; // ProjectAgent will handle spawning if needed via /project-agent/spawn-task
+      await this.routeToProjectLead(event.product, event);
+      console.log(`[Conductor] Routed task ${event.taskUUID} to ProjectLead for ${event.product}`);
+      return; // ProjectLead will handle spawning if needed via /project-lead/spawn-task
     } catch (err) {
-      console.error(`[Orchestrator] ProjectAgent routing failed for ${event.ticketUUID}, falling back to direct spawn:`, err);
+      console.error(`[Conductor] ProjectLead routing failed for ${event.taskUUID}, falling back to direct spawn:`, err);
     }
 
-    // Fallback: spawn TicketAgent directly (v2 behavior)
+    // Fallback: spawn TaskAgent directly (v2 behavior)
     const model = "sonnet";
-    console.log(`[Orchestrator] Fallback: Starting agent for ticket ${event.ticketUUID} (model=${model})`);
+    console.log(`[Conductor] Fallback: Starting agent for task ${event.taskUUID} (model=${model})`);
 
     // Build spawn config from product
     const gatewayConfig = getGatewayConfig(this.sqlExec);
@@ -520,7 +520,7 @@ export class Orchestrator extends Container<Bindings> {
       product: event.product,
       repos: productConfig.repos,
       slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
-      slackThreadTs: event.slackThreadTs || (ticketRow?.slack_thread_ts as string) || undefined,
+      slackThreadTs: event.slackThreadTs || (taskRow?.slack_thread_ts as string) || undefined,
       secrets: productConfig.secrets,
       gatewayConfig,
       model,
@@ -529,30 +529,30 @@ export class Orchestrator extends Container<Bindings> {
     };
 
     try {
-      await this.agentManager.spawnAgent(event.ticketUUID, spawnConfig);
-      await this.agentManager.sendEvent(event.ticketUUID, event);
+      await this.taskManager.spawnAgent(event.taskUUID, spawnConfig);
+      await this.taskManager.sendEvent(event.taskUUID, event);
     } catch (err) {
-      console.error(`[Orchestrator] Failed to spawn agent for ${event.ticketUUID}:`, err);
+      console.error(`[Conductor] Failed to spawn agent for ${event.taskUUID}:`, err);
     }
   }
 
   /**
-   * Re-spawn a container for a suspended ticket and send the triggering event.
+   * Re-spawn a container for a suspended task and send the triggering event.
    * Uses the product config from the registry to reconstruct spawn config.
    */
-  private async respawnSuspendedAgent(ticketUUID: string, product: string, event: TicketEvent): Promise<void> {
+  private async respawnSuspendedTask(taskUUID: string, product: string, event: TaskEvent): Promise<void> {
     const productConfig = getProductConfig(this.sqlExec, product);
     if (!productConfig) throw new Error(`Product ${product} not found in registry`);
 
     const gatewayConfig = getGatewayConfig(this.sqlExec);
 
-    const ticket = this.agentManager.getTicket(ticketUUID);
+    const task = this.taskManager.getTask(taskUUID);
 
     const spawnConfig: SpawnConfig = {
       product,
       repos: productConfig.repos,
       slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
-      slackThreadTs: event.slackThreadTs || ticket?.slack_thread_ts || undefined,
+      slackThreadTs: event.slackThreadTs || task?.slack_thread_ts || undefined,
       secrets: productConfig.secrets,
       gatewayConfig,
       model: "sonnet",
@@ -561,8 +561,8 @@ export class Orchestrator extends Container<Bindings> {
     };
 
     // spawnAgent accepts active status as a re-spawn
-    await this.agentManager.spawnAgent(ticketUUID, spawnConfig);
-    await this.agentManager.sendEvent(ticketUUID, event);
+    await this.taskManager.spawnAgent(taskUUID, spawnConfig);
+    await this.taskManager.sendEvent(taskUUID, event);
   }
 
   /**
@@ -574,29 +574,29 @@ export class Orchestrator extends Container<Bindings> {
    */
   private async runSupervisorTick(): Promise<void> {
     const staleAgents = this.ctx.storage.sql.exec(`
-      SELECT ticket_uuid, product, last_heartbeat
-      FROM tickets
+      SELECT task_uuid, product, last_heartbeat
+      FROM tasks
       WHERE agent_active = 1
         AND last_heartbeat IS NOT NULL
         AND last_heartbeat < datetime('now', '-5 minutes')
     `).toArray() as Array<{
-      ticket_uuid: string;
+      task_uuid: string;
       product: string;
       last_heartbeat: string;
     }>;
 
     for (const agent of staleAgents) {
-      console.log(`[Supervisor] Agent stale: ${agent.ticket_uuid} (last heartbeat: ${agent.last_heartbeat})`);
+      console.log(`[Supervisor] Agent stale: ${agent.task_uuid} (last heartbeat: ${agent.last_heartbeat})`);
       this.ctx.storage.sql.exec(
-        "UPDATE tickets SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE ticket_uuid = ?",
-        agent.ticket_uuid,
+        "UPDATE tasks SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE task_uuid = ?",
+        agent.task_uuid,
       );
     }
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
     const body = await request.json<{
-      ticketUUID: string;
+      taskUUID: string;
       status?: string;
       pr_url?: string;
       branch_name?: string;
@@ -605,19 +605,19 @@ export class Orchestrator extends Container<Bindings> {
       session_id?: string;
       agent_active?: number;
     }>();
-    const { ticketUUID, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, session_id, agent_active } = body;
+    const { taskUUID, status, pr_url, branch_name, slack_thread_ts, transcript_r2_key, session_id, agent_active } = body;
 
     // Log payloads so they appear in wrangler tail
-    console.log(`[Orchestrator] status update: ticket=${ticketUUID} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
+    console.log(`[Conductor] status update: task=${taskUUID} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
-    // Reject heartbeats/status updates for tickets already in a terminal state.
+    // Reject heartbeats/status updates for tasks already in a terminal state.
     // This prevents agent containers from overwriting supervisor kill decisions.
-    if (this.agentManager.isTerminal(ticketUUID)) {
+    if (this.taskManager.isTerminal(taskUUID)) {
       // Allow explicit agent_active=0 (dashboard kill) but block heartbeats
       if (agent_active === undefined || agent_active !== 0) {
-        const currentTicket = this.agentManager.getTicket(ticketUUID);
-        console.log(`[Orchestrator] Ignoring status update for terminal ticket ${ticketUUID} (current: ${currentTicket?.status})`);
-        return Response.json({ ok: true, ignored: true, reason: "terminal ticket" });
+        const currentTask = this.taskManager.getTask(taskUUID);
+        console.log(`[Conductor] Ignoring status update for terminal task ${taskUUID} (current: ${currentTask?.status})`);
+        return Response.json({ ok: true, ignored: true, reason: "terminal task" });
       }
     }
 
@@ -628,11 +628,11 @@ export class Orchestrator extends Container<Bindings> {
     if (agent_active !== undefined) {
       updates.push("agent_active = ?");
       values.push(agent_active);
-      console.log(`[Orchestrator] Explicitly setting agent_active=${agent_active} for ticket ${ticketUUID}`);
+      console.log(`[Conductor] Explicitly setting agent_active=${agent_active} for task ${taskUUID}`);
     }
 
     if (status) {
-      // Map agent tool status names to valid ticket states
+      // Map agent tool status names to valid task states
       const statusAliases: Record<string, string> = {
         in_progress: "active",
         in_review: "pr_open",
@@ -641,10 +641,10 @@ export class Orchestrator extends Container<Bindings> {
       };
       const resolvedStatus = statusAliases[status] || status;
 
-      // Only accept valid ticket states — reject agent lifecycle messages (e.g., "agent:*")
+      // Only accept valid task states — reject agent lifecycle messages (e.g., "agent:*")
       // that old agent code may still send to this endpoint instead of /heartbeat.
-      if (!(TICKET_STATES as readonly string[]).includes(resolvedStatus)) {
-        console.log(`[Orchestrator] Rejecting invalid status "${status}" for ticket ${ticketUUID} — use /heartbeat for lifecycle messages`);
+      if (!(TASK_STATES as readonly string[]).includes(resolvedStatus)) {
+        console.log(`[Conductor] Rejecting invalid status "${status}" for task ${taskUUID} — use /heartbeat for lifecycle messages`);
         // Still process other fields (pr_url, branch_name, etc.) below
       } else {
         updates.push("status = ?");
@@ -654,34 +654,34 @@ export class Orchestrator extends Container<Bindings> {
       // Track first_response_at when agent starts working
       if (resolvedStatus === "active") {
         this.ctx.storage.sql.exec(
-          `UPDATE ticket_metrics SET first_response_at = COALESCE(first_response_at, datetime('now')), updated_at = datetime('now') WHERE ticket_uuid = ?`,
-          ticketUUID,
+          `UPDATE task_metrics SET first_response_at = COALESCE(first_response_at, datetime('now')), updated_at = datetime('now') WHERE task_uuid = ?`,
+          taskUUID,
         );
       }
 
       // Suspended state: mark agent inactive — container has exited
       if (resolvedStatus === "suspended") {
         updates.push("agent_active = 0");
-        console.log(`[Orchestrator] Marking agent inactive for suspended state: ${ticketUUID}`);
+        console.log(`[Conductor] Marking agent inactive for suspended state: ${taskUUID}`);
       }
 
       // Terminal states: mark agent as inactive so we don't spawn new agents
       // on deployment-triggered events
       if ((TERMINAL_STATUSES as readonly string[]).includes(status)) {
         updates.push("agent_active = 0");
-        console.log(`[Orchestrator] Marking agent inactive for terminal state: ${status}`);
+        console.log(`[Conductor] Marking agent inactive for terminal state: ${status}`);
 
-        // Update ticket_metrics with outcome and completion time
+        // Update task_metrics with outcome and completion time
         const outcome = status === "merged" ? "automerge_success" : status;
         this.ctx.storage.sql.exec(
-          `UPDATE ticket_metrics SET outcome = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE ticket_uuid = ?`,
+          `UPDATE task_metrics SET outcome = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE task_uuid = ?`,
           outcome,
-          ticketUUID,
+          taskUUID,
         );
 
         // Stop the agent container
-        await this.agentManager.stopAgent(ticketUUID, `terminal status: ${status}`).catch(err =>
-          console.error(`[Orchestrator] Failed to stop agent for ${ticketUUID}:`, err)
+        await this.taskManager.stopAgent(taskUUID, `terminal status: ${status}`).catch(err =>
+          console.error(`[Conductor] Failed to stop agent for ${taskUUID}:`, err)
         );
       }
     }
@@ -690,11 +690,11 @@ export class Orchestrator extends Container<Bindings> {
       values.push(pr_url);
 
       // Increment pr_count only when the PR URL actually changes
-      const currentTicket = this.agentManager.getTicket(ticketUUID);
-      if (!currentTicket || currentTicket.pr_url !== pr_url) {
+      const currentTask = this.taskManager.getTask(taskUUID);
+      if (!currentTask || currentTask.pr_url !== pr_url) {
         this.ctx.storage.sql.exec(
-          `UPDATE ticket_metrics SET pr_count = pr_count + 1, updated_at = datetime('now') WHERE ticket_uuid = ?`,
-          ticketUUID,
+          `UPDATE task_metrics SET pr_count = pr_count + 1, updated_at = datetime('now') WHERE task_uuid = ?`,
+          taskUUID,
         );
       }
     }
@@ -715,16 +715,16 @@ export class Orchestrator extends Container<Bindings> {
       values.push(session_id);
     }
 
-    values.push(ticketUUID);
+    values.push(taskUUID);
     this.ctx.storage.sql.exec(
-      `UPDATE tickets SET ${updates.join(", ")} WHERE ticket_uuid = ?`,
+      `UPDATE tasks SET ${updates.join(", ")} WHERE task_uuid = ?`,
       ...values,
     );
 
     // Handle explicit agent_active=0 (dashboard kill) — stop the container
     if (agent_active !== undefined && agent_active === 0) {
-      await this.agentManager.stopAgent(ticketUUID, "explicit agent_active=0").catch(err =>
-        console.error(`[Orchestrator] Failed to stop agent for ${ticketUUID}:`, err)
+      await this.taskManager.stopAgent(taskUUID, "explicit agent_active=0").catch(err =>
+        console.error(`[Conductor] Failed to stop agent for ${taskUUID}:`, err)
       );
     }
 
@@ -733,7 +733,7 @@ export class Orchestrator extends Container<Bindings> {
 
   private async handleTokenUsage(request: Request): Promise<Response> {
     const body = await request.json<{
-      ticketUUID: string;
+      taskUUID: string;
       totalInputTokens: number;
       totalOutputTokens: number;
       totalCacheReadTokens: number;
@@ -743,21 +743,21 @@ export class Orchestrator extends Container<Bindings> {
       sessionMessageCount: number;
       model?: string;
     }>();
-    const { ticketUUID, totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheCreationTokens, totalCostUsd, turns, sessionMessageCount, model } = body;
+    const { taskUUID, totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheCreationTokens, totalCostUsd, turns, sessionMessageCount, model } = body;
 
     console.log(
-      `[Orchestrator] Token usage: ticket=${ticketUUID} input=${totalInputTokens} output=${totalOutputTokens} cost=$${totalCostUsd.toFixed(2)}`
+      `[Conductor] Token usage: task=${taskUUID} input=${totalInputTokens} output=${totalOutputTokens} cost=$${totalCostUsd.toFixed(2)}`
     );
 
     // Upsert token usage data
     this.ctx.storage.sql.exec(
       `INSERT INTO token_usage (
-        ticket_uuid, total_input_tokens, total_output_tokens,
+        task_uuid, total_input_tokens, total_output_tokens,
         total_cache_read_tokens, total_cache_creation_tokens,
         total_cost_usd, turns, session_message_count, model
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(ticket_uuid) DO UPDATE SET
+      ON CONFLICT(task_uuid) DO UPDATE SET
         total_input_tokens = excluded.total_input_tokens,
         total_output_tokens = excluded.total_output_tokens,
         total_cache_read_tokens = excluded.total_cache_read_tokens,
@@ -767,7 +767,7 @@ export class Orchestrator extends Container<Bindings> {
         session_message_count = excluded.session_message_count,
         model = excluded.model,
         updated_at = datetime('now')`,
-      ticketUUID,
+      taskUUID,
       totalInputTokens,
       totalOutputTokens,
       totalCacheReadTokens,
@@ -778,11 +778,11 @@ export class Orchestrator extends Container<Bindings> {
       model,
     );
 
-    // Sync cost to ticket_metrics for unified reporting
+    // Sync cost to task_metrics for unified reporting
     this.ctx.storage.sql.exec(
-      `UPDATE ticket_metrics SET total_cost_usd = ?, updated_at = datetime('now') WHERE ticket_uuid = ?`,
+      `UPDATE task_metrics SET total_cost_usd = ?, updated_at = datetime('now') WHERE task_uuid = ?`,
       totalCostUsd,
-      ticketUUID,
+      taskUUID,
     );
 
     return Response.json({ ok: true });
@@ -790,10 +790,10 @@ export class Orchestrator extends Container<Bindings> {
 
   private async handleHeartbeat(request: Request): Promise<Response> {
     const payload = await request.json<HeartbeatPayload>();
-    const { ticketUUID, message, ci_status, needs_attention, needs_attention_reason } = payload;
+    const { taskUUID, message, ci_status, needs_attention, needs_attention_reason } = payload;
 
-    console.log(`[Orchestrator] heartbeat: ticket=${ticketUUID} ${message || ""}`);
-    this.agentManager.recordPhoneHome(ticketUUID, message);
+    console.log(`[Conductor] heartbeat: task=${taskUUID} ${message || ""}`);
+    this.taskManager.recordPhoneHome(taskUUID, message);
 
     // Store expanded heartbeat fields if provided
     const extraUpdates: string[] = [];
@@ -814,21 +814,21 @@ export class Orchestrator extends Container<Bindings> {
 
     if (extraUpdates.length > 0) {
       this.ctx.storage.sql.exec(
-        `UPDATE tickets SET ${extraUpdates.join(", ")}, updated_at = datetime('now') WHERE ticket_uuid = ?`,
-        ...extraValues, ticketUUID,
+        `UPDATE tasks SET ${extraUpdates.join(", ")}, updated_at = datetime('now') WHERE task_uuid = ?`,
+        ...extraValues, taskUUID,
       );
     }
 
     // Auto-transition spawning → active on first heartbeat.
     // The agent sends heartbeats once it's running — this replaces the old
     // pattern where phoneHome side-effects would overwrite the status field.
-    const ticket = this.agentManager.getTicket(ticketUUID);
-    if (ticket?.status === "spawning") {
+    const task = this.taskManager.getTask(taskUUID);
+    if (task?.status === "spawning") {
       this.ctx.storage.sql.exec(
-        "UPDATE tickets SET status = 'active', updated_at = datetime('now') WHERE ticket_uuid = ?",
-        ticketUUID,
+        "UPDATE tasks SET status = 'active', updated_at = datetime('now') WHERE task_uuid = ?",
+        taskUUID,
       );
-      console.log(`[Orchestrator] Auto-transitioned ticket ${ticketUUID} from spawning → active`);
+      console.log(`[Conductor] Auto-transitioned task ${taskUUID} from spawning → active`);
     }
 
     return Response.json({ ok: true });
@@ -837,34 +837,34 @@ export class Orchestrator extends Container<Bindings> {
 
 
   private async cleanupInactiveAgents(): Promise<Response> {
-    // Force shutdown of containers for tickets marked inactive (agent_active = 0)
+    // Force shutdown of containers for tasks marked inactive (agent_active = 0)
     // or terminal but still marked active.
-    await this.agentManager.cleanupInactive();
+    await this.taskManager.cleanupInactive();
 
-    // Also stop containers for all inactive tickets (agent_active = 0)
-    const inactiveTickets = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid FROM tickets WHERE agent_active = 0`
-    ).toArray() as Array<{ ticket_uuid: string }>;
+    // Also stop containers for all inactive tasks (agent_active = 0)
+    const inactiveTasks = this.ctx.storage.sql.exec(
+      `SELECT task_uuid FROM tasks WHERE agent_active = 0`
+    ).toArray() as Array<{ task_uuid: string }>;
 
-    console.log(`[Orchestrator] Cleanup: found ${inactiveTickets.length} inactive tickets`);
+    console.log(`[Conductor] Cleanup: found ${inactiveTasks.length} inactive tasks`);
 
-    const results: Array<{ ticketUUID: string; success: boolean; error?: string }> = [];
+    const results: Array<{ taskUUID: string; success: boolean; error?: string }> = [];
 
-    for (const ticket of inactiveTickets) {
+    for (const task of inactiveTasks) {
       try {
-        await this.agentManager.stopAgent(ticket.ticket_uuid, "cleanup inactive");
-        results.push({ ticketUUID: ticket.ticket_uuid, success: true });
+        await this.taskManager.stopAgent(task.task_uuid, "cleanup inactive");
+        results.push({ taskUUID: task.task_uuid, success: true });
       } catch (err) {
-        results.push({ ticketUUID: ticket.ticket_uuid, success: false, error: String(err) });
+        results.push({ taskUUID: task.task_uuid, success: false, error: String(err) });
       }
     }
 
     const successCount = results.filter(r => r.success).length;
-    console.log(`[Orchestrator] Cleanup complete: ${successCount}/${results.length} successful`);
+    console.log(`[Conductor] Cleanup complete: ${successCount}/${results.length} successful`);
 
     return Response.json({
       ok: true,
-      total: inactiveTickets.length,
+      total: inactiveTasks.length,
       successful: successCount,
       results,
     });
@@ -874,33 +874,33 @@ export class Orchestrator extends Container<Bindings> {
     // Force shutdown of ALL agent containers, regardless of state.
     // Use case: operator wants to stop all work immediately.
 
-    // Get ALL tickets for response details before stopping
-    const allTickets = this.ctx.storage.sql.exec(
-      `SELECT ticket_uuid, status, agent_active FROM tickets`
-    ).toArray() as Array<{ ticket_uuid: string; status: string; agent_active: number }>;
+    // Get ALL tasks for response details before stopping
+    const allTasks = this.ctx.storage.sql.exec(
+      `SELECT task_uuid, status, agent_active FROM tasks`
+    ).toArray() as Array<{ task_uuid: string; status: string; agent_active: number }>;
 
-    console.log(`[Orchestrator] Shutdown all: found ${allTickets.length} total tickets`);
+    console.log(`[Conductor] Shutdown all: found ${allTasks.length} total tasks`);
 
-    // Stop each ticket individually to track per-ticket success/failure
-    const results: Array<{ ticketUUID: string; previousStatus: string; success: boolean; error?: string }> = [];
+    // Stop each task individually to track per-task success/failure
+    const results: Array<{ taskUUID: string; previousStatus: string; success: boolean; error?: string }> = [];
 
-    for (const ticket of allTickets) {
+    for (const task of allTasks) {
       try {
-        await this.agentManager.stopAgent(ticket.ticket_uuid, "shutdown all requested");
-        results.push({ ticketUUID: ticket.ticket_uuid, previousStatus: ticket.status, success: true });
+        await this.taskManager.stopAgent(task.task_uuid, "shutdown all requested");
+        results.push({ taskUUID: task.task_uuid, previousStatus: task.status, success: true });
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error(`[Orchestrator] Failed to stop ${ticket.ticket_uuid}:`, errorMsg);
-        results.push({ ticketUUID: ticket.ticket_uuid, previousStatus: ticket.status, success: false, error: errorMsg });
+        console.error(`[Conductor] Failed to stop ${task.task_uuid}:`, errorMsg);
+        results.push({ taskUUID: task.task_uuid, previousStatus: task.status, success: false, error: errorMsg });
       }
     }
 
     const successCount = results.filter(r => r.success).length;
-    console.log(`[Orchestrator] Shutdown all complete: ${successCount}/${results.length} successful`);
+    console.log(`[Conductor] Shutdown all complete: ${successCount}/${results.length} successful`);
 
     return Response.json({
       ok: true,
-      total: allTickets.length,
+      total: allTasks.length,
       successful: successCount,
       failed: results.length - successCount,
       results,
@@ -923,11 +923,11 @@ export class Orchestrator extends Container<Bindings> {
     return handleSlackEventImpl(slackEvent, {
       sql: this.sqlExec,
       env: this.env as Record<string, unknown>,
-      agentManager: this.agentManager,
-      routeToProjectAgent: (product, event) => this.routeToProjectAgent(product, event),
+      taskManager: this.taskManager,
+      routeToProjectLead: (product, event) => this.routeToProjectLead(product, event),
       ensureConductor: () => this.ensureConductor(),
-      handleTicketReview: (event) => this.handleTicketReview(event),
-      respawnSuspendedAgent: (ticketUUID, product, event) => this.respawnSuspendedAgent(ticketUUID, product, event),
+      handleTaskReview: (event) => this.handleTaskReview(event),
+      respawnSuspendedTask: (taskUUID, product, event) => this.respawnSuspendedTask(taskUUID, product, event),
     });
   }
 

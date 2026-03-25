@@ -2,14 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { Hono } from "hono";
 import { linearWebhook } from "./webhooks";
 import type { Bindings } from "./types";
-import { createMockOrchestratorStub, TEST_REGISTRY, type MockRegistryData } from "./test-helpers";
+import { createMockConductorStub, TEST_REGISTRY, type MockRegistryData } from "./test-helpers";
 import { clearRegistryCache } from "./registry";
 
-// Mock orchestrator DO that captures events sent to it AND serves registry data
+// Mock conductor DO that captures events sent to it AND serves registry data
 let sentEvents: unknown[] = [];
 
-function createMockOrchestratorWithEvents(registryData: MockRegistryData) {
-  const baseStub = createMockOrchestratorStub(registryData);
+function createMockConductorWithEvents(registryData: MockRegistryData) {
+  const baseStub = createMockConductorStub(registryData);
 
   return {
     fetch: async (req: Request) => {
@@ -28,11 +28,11 @@ function createMockOrchestratorWithEvents(registryData: MockRegistryData) {
   } as unknown as DurableObjectStub;
 }
 
-let mockOrchestratorStub: DurableObjectStub;
+let mockConductorStub: DurableObjectStub;
 
-const mockOrchestratorNamespace = {
+const mockConductorNamespace = {
   idFromName: (_name: string) => "mock-id",
-  get: (_id: unknown) => mockOrchestratorStub,
+  get: (_id: unknown) => mockConductorStub,
 };
 
 function makeApp() {
@@ -45,8 +45,8 @@ const TEST_WEBHOOK_SECRET = "test-linear-webhook-secret";
 
 function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
   return {
-    ORCHESTRATOR: mockOrchestratorNamespace as unknown as DurableObjectNamespace,
-    TICKET_AGENT: {} as unknown as DurableObjectNamespace,
+    CONDUCTOR: mockConductorNamespace as unknown as DurableObjectNamespace,
+    TASK_AGENT: {} as unknown as DurableObjectNamespace,
     API_KEY: "test",
     SLACK_BOT_TOKEN: "test",
     SLACK_APP_TOKEN: "test",
@@ -101,7 +101,7 @@ describe("linear webhook handler", () => {
   beforeEach(() => {
     sentEvents = [];
     clearRegistryCache();
-    mockOrchestratorStub = createMockOrchestratorWithEvents(TEST_REGISTRY);
+    mockConductorStub = createMockConductorWithEvents(TEST_REGISTRY);
 
     // Intercept fetch calls to Linear GraphQL API to prevent real HTTP calls
     originalFetch = globalThis.fetch;
@@ -193,13 +193,13 @@ describe("linear webhook handler", () => {
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ignored).toBe(true);
-    expect(json.reason).toBe("ticket not tracked");
+    expect(json.reason).toBe("task not tracked");
     expect(sentEvents).toHaveLength(0);
   });
 
   it("forwards comments on tracked tickets", async () => {
     // Override the mock to handle ticket-status requests
-    mockOrchestratorStub = {
+    mockConductorStub = {
       fetch: async (req: Request) => {
         const url = new URL(req.url);
 
@@ -209,8 +209,8 @@ describe("linear webhook handler", () => {
           return Response.json({ ok: true });
         }
 
-        if (url.pathname.startsWith("/ticket-status/")) {
-          const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
+        if (url.pathname.startsWith("/task-status/")) {
+          const ticketId = decodeURIComponent(url.pathname.slice("/task-status/".length));
           if (ticketId === "tracked-issue") {
             return Response.json({ status: "in_progress", product: "test-app", agent_active: 1 });
           }
@@ -218,7 +218,7 @@ describe("linear webhook handler", () => {
         }
 
         // Delegate to base stub for registry lookups
-        const baseStub = createMockOrchestratorWithEvents(TEST_REGISTRY);
+        const baseStub = createMockConductorWithEvents(TEST_REGISTRY);
         return baseStub.fetch(req);
       },
     } as unknown as DurableObjectStub;
@@ -239,13 +239,13 @@ describe("linear webhook handler", () => {
     expect(res.status).toBe(200);
     const json = await res.json() as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect(json.ticketUUID).toBe("tracked-issue");
+    expect(json.taskUUID).toBe("tracked-issue");
 
     expect(sentEvents).toHaveLength(1);
     const event = sentEvents[0] as Record<string, unknown>;
     expect(event.type).toBe("linear_comment");
     expect(event.source).toBe("linear");
-    expect(event.ticketUUID).toBe("tracked-issue");
+    expect(event.taskUUID).toBe("tracked-issue");
     expect(event.product).toBe("test-app");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.comment_id).toBe("comment-3");
@@ -352,7 +352,7 @@ describe("linear webhook handler", () => {
 
     expect(sentEvents).toHaveLength(1);
     const event = sentEvents[0] as Record<string, unknown>;
-    expect(event.type).toBe("ticket_created");
+    expect(event.type).toBe("task_created");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.id).toBe("issue-124");
     expect(payload.title).toBe("Another issue");
@@ -385,7 +385,7 @@ describe("linear webhook handler", () => {
 
     expect(sentEvents).toHaveLength(1);
     const event = sentEvents[0] as Record<string, unknown>;
-    expect(event.type).toBe("ticket_created");
+    expect(event.type).toBe("task_created");
     const payload = event.payload as Record<string, unknown>;
     expect(payload.id).toBe("issue-125");
     expect(payload.title).toBe("Issue without identifier");
@@ -607,7 +607,7 @@ describe("linear webhook handler", () => {
     expect(sentEvents).toHaveLength(0);
   });
 
-  it("includes comments in forwarded ticket_created event", async () => {
+  it("includes comments in forwarded task_created event", async () => {
     const app = makeApp();
     const env = makeEnv();
     const res = await postWebhook(app, {

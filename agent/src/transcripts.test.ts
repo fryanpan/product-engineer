@@ -5,7 +5,7 @@ const defaultConfig: TranscriptManagerConfig = {
   agentUuid: "test-uuid-1234",
   workerUrl: "https://worker.example.com",
   apiKey: "test-api-key",
-  ticketUUID: "ticket-uuid-5678",
+  taskUUID: "ticket-uuid-5678",
 };
 
 describe("TranscriptManager", () => {
@@ -126,13 +126,13 @@ describe("TranscriptManager", () => {
         const firstCall = fetchSpy.mock.calls[0];
         expect(firstCall[0]).toBe("https://worker.example.com/api/internal/upload-transcript");
         const body = JSON.parse((firstCall[1] as RequestInit).body as string);
-        expect(body.ticketUUID).toBe("ticket-uuid-5678");
+        expect(body.taskUUID).toBe("ticket-uuid-5678");
         expect(body.r2Key).toBe(`test-uuid-1234-test-session.jsonl`);
 
         // Second upload — same size, should skip
-        fetchSpy.mockClear();
+        const callsBefore = fetchSpy.mock.calls.length;
         await manager.upload();
-        expect(fetchSpy).toHaveBeenCalledTimes(0);
+        expect(fetchSpy.mock.calls.length).toBe(callsBefore);
 
         // Third upload with force — should upload despite same size
         fetchSpy.mockClear();

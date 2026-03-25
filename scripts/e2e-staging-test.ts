@@ -75,7 +75,7 @@ interface TestContext {
 
 interface StatusResponse {
   activeAgents: Array<{
-    ticket_uuid: string;
+    task_uuid: string;
     ticket_id: string | null;
     product: string;
     status: string;
@@ -86,8 +86,8 @@ interface StatusResponse {
   }>;
 }
 
-interface TicketRow {
-  ticket_uuid: string;
+interface TaskRow {
+  task_uuid: string;
   ticket_id: string | null;
   product: string;
   status: string;
@@ -343,17 +343,17 @@ IMPORTANT: The initial implementation should have a syntax error (missing semico
   const message = `<@${botUserId}> ${taskDescription}`;
 
   if (SLACK_USER_TOKEN) {
-    // Best path: real user token triggers Socket Mode
+    // Best path: real user token triggers Socket Mode end-to-end
     const result = await postSlackMessageWithToken(STAGING_SLACK_CHANNEL, message, SLACK_USER_TOKEN);
     ctx.slackThreadTs = result.ts;
-    logSuccess("step1", `Slack mention posted via user token: ts=${result.ts}`);
+    logSuccess("step1", `Slack mention posted via user token: ts=${result.ts} (awaiting Socket Mode delivery)`);
   } else {
     // Fallback: post via bot for visibility, then send event directly to internal endpoint
+    // (Slack doesn't fire app_mention when the bot itself posts the message)
     const result = await postSlackMessage(STAGING_SLACK_CHANNEL, message);
     ctx.slackThreadTs = result.ts;
     log("step1", `Slack message posted via bot: ts=${result.ts}`);
 
-    // Send event directly to the internal endpoint (same path Socket Mode uses)
     if (SLACK_APP_TOKEN) {
       const eventRes = await fetch(`${STAGING_URL}/api/internal/slack-event`, {
         method: "POST",
@@ -488,22 +488,23 @@ async function step2_verifyTicketCreated(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-      const ticket = tickets.tickets.find(
-        (t) => t.title?.includes(ctx.testId),
+      const tickets = await apiCall<{ tasks: TaskRow[] }>("/api/conductor/tickets");
+      // Match by slack_thread_ts (reliable) or title containing test ID (fallback)
+      const ticket = tickets.tasks.find(
+        (t) => t.slack_thread_ts === ctx.slackThreadTs || t.title?.includes(ctx.testId),
       );
 
       if (ticket) {
-        ctx.linearIssueId = ticket.ticket_uuid;
+        ctx.linearIssueId = ticket.task_uuid;
         ctx.slackThreadTs = ticket.slack_thread_ts || ctx.slackThreadTs;
-        log("step2", `Found ticket: ${ticket.ticket_uuid} (status: ${ticket.status})`);
+        log("step2", `Found ticket: ${ticket.task_uuid} (status: ${ticket.status})`);
 
         // Try to get Linear issue details
         try {
-          const issue = await getLinearIssue(ticket.ticket_uuid);
-          logSuccess("step2", `Ticket created: ${ticket.ticket_uuid} (Linear state: ${issue.state.name})`);
+          const issue = await getLinearIssue(ticket.task_uuid);
+          logSuccess("step2", `Ticket created: ${ticket.task_uuid} (Linear state: ${issue.state.name})`);
         } catch {
-          logSuccess("step2", `Ticket created: ${ticket.ticket_uuid} (could not fetch Linear details)`);
+          logSuccess("step2", `Ticket created: ${ticket.task_uuid} (could not fetch Linear details)`);
         }
         return;
       }
@@ -526,10 +527,10 @@ async function step3_verifyAgentSpawned(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const status = await apiCall<StatusResponse>("/api/orchestrator/status");
+      const status = await apiCall<StatusResponse>("/api/conductor/status");
 
       // Check for direct TicketAgent
-      const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
+      const agent = status.activeAgents.find((a) => a.task_uuid === ctx.linearIssueId);
       if (agent?.last_heartbeat) {
         logSuccess("step3", `TicketAgent spawned: status=${agent.status}, heartbeat=${agent.last_heartbeat}`);
         return;
@@ -539,12 +540,12 @@ async function step3_verifyAgentSpawned(ctx: TestContext): Promise<void> {
       try {
         const paStatus = await apiCall<{
           project_agents: Record<string, { sessionActive?: boolean; sessionMessageCount?: number; error?: string }>;
-        }>("/api/project-agent/status?product=staging-test-app");
+        }>("/api/project-lead/status?product=staging-test-app");
 
         const pa = paStatus.project_agents?.["staging-test-app"];
         if (pa?.sessionActive) {
-          const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-          const ticket = tickets.tickets.find((t) => t.ticket_uuid === ctx.linearIssueId);
+          const tickets = await apiCall<{ tasks: TaskRow[] }>("/api/conductor/tickets");
+          const ticket = tickets.tasks.find((t) => t.task_uuid === ctx.linearIssueId);
 
           if (ticket && ["reviewing", "active", "spawning"].includes(ticket.status)) {
             logSuccess("step3", `ProjectAgent is processing ticket (status: ${ticket.status}, PA messages: ${pa.sessionMessageCount})`);
@@ -692,7 +693,7 @@ async function step6_verifyProjectAgentStatus(): Promise<void> {
   log("step6", "Checking ProjectAgent status endpoint...");
 
   try {
-    const res = await fetch(`${STAGING_URL}/api/project-agent/status`, {
+    const res = await fetch(`${STAGING_URL}/api/project-lead/status`, {
       headers: { "X-Internal-Key": API_KEY! },
     });
 
@@ -839,7 +840,7 @@ async function stepC2_conductorTaskDetails(): Promise<void> {
 
   // First, check if there are any active tasks we can ask about
   try {
-    const status = await apiCall<StatusResponse>("/api/project-agent/v3/status");
+    const status = await apiCall<StatusResponse>("/api/project-lead/v3/status");
     const activeAgents = status.activeAgents || [];
 
     if (activeAgents.length === 0) {
@@ -957,8 +958,8 @@ async function step7_waitForPR(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const status = await apiCall<StatusResponse>("/api/orchestrator/status");
-      const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
+      const status = await apiCall<StatusResponse>("/api/conductor/status");
+      const agent = status.activeAgents.find((a) => a.task_uuid === ctx.linearIssueId);
 
       if (agent?.pr_url) {
         ctx.prUrl = agent.pr_url;
@@ -1111,8 +1112,8 @@ async function step10_verifyAgentTerminated(ctx: TestContext): Promise<void> {
   await sleep(5000);
 
   try {
-    const status = await apiCall<StatusResponse>("/api/orchestrator/status");
-    const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
+    const status = await apiCall<StatusResponse>("/api/conductor/status");
+    const agent = status.activeAgents.find((a) => a.task_uuid === ctx.linearIssueId);
 
     if (!agent) {
       logSuccess("step10", "Agent terminated after merge (no longer in active agents)");
@@ -1131,8 +1132,8 @@ async function step10_verifyAgentTerminated(ctx: TestContext): Promise<void> {
 
   // Verify ticket status in DB
   try {
-    const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
-    const ticket = tickets.tickets.find((t) => t.ticket_uuid === ctx.linearIssueId);
+    const tickets = await apiCall<{ tasks: TaskRow[] }>("/api/conductor/tickets");
+    const ticket = tickets.tasks.find((t) => t.task_uuid === ctx.linearIssueId);
     if (ticket) {
       log("step10", `Ticket final status: ${ticket.status}, agent_active: ${ticket.agent_active}`);
       if (ticket.agent_active === 0) {

@@ -9,7 +9,7 @@ import type { TokenTracker, ReportOptions } from "./token-tracker";
 
 function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
-    ticketUUID: "test-uuid",
+    taskUUID: "test-uuid",
     product: "test-product",
     repos: ["org/repo"],
     anthropicApiKey: "sk-test",
@@ -194,13 +194,13 @@ describe("AgentLifecycle", () => {
   describe("phoneHome", () => {
     test("sends POST to orchestrator heartbeat endpoint", () => {
       const { lifecycle } = createLifecycle({
-        config: { workerUrl: "https://test.worker", apiKey: "key123", ticketUUID: "uuid-abc" },
+        config: { workerUrl: "https://test.worker", apiKey: "key123", taskUUID: "uuid-abc" },
       });
 
       lifecycle.phoneHome("test_message");
 
       expect(fetchCalls.length).toBe(1);
-      expect(fetchCalls[0].url).toBe("https://test.worker/api/orchestrator/heartbeat");
+      expect(fetchCalls[0].url).toBe("https://test.worker/api/conductor/heartbeat");
       expect(fetchCalls[0].init.method).toBe("POST");
 
       const headers = fetchCalls[0].init.headers as Record<string, string>;
@@ -208,7 +208,7 @@ describe("AgentLifecycle", () => {
       expect(headers["X-Internal-Key"]).toBe("key123");
 
       const body = JSON.parse(fetchCalls[0].init.body as string);
-      expect(body.ticketUUID).toBe("uuid-abc");
+      expect(body.taskUUID).toBe("uuid-abc");
       expect(body.message).toBe("test_message");
     });
 
@@ -268,7 +268,7 @@ describe("AgentLifecycle", () => {
 
       // Token report called once (in autoSuspend only — handleSessionEnd delegates to it)
       expect(tokenTracker.report).toHaveBeenCalledTimes(1);
-      expect(tokenTracker.reportCalls[0].ticketUUID).toBe("test-uuid");
+      expect(tokenTracker.reportCalls[0].taskUUID).toBe("test-uuid");
       expect(tokenTracker.reportCalls[0].sessionMessageCount).toBe(15);
 
       // Exit callback was called with 0 (from autoSuspend)

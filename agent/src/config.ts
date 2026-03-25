@@ -1,7 +1,7 @@
 /**
  * Agent configuration from environment variables.
  *
- * The TicketAgent DO injects these into the sandbox container via envVars.
+ * The TaskAgent DO injects these into the sandbox container via envVars.
  */
 
 export type TaskType = "feedback" | "ticket" | "command";
@@ -11,8 +11,8 @@ export interface TaskPayload {
   product: string;
   repos: string[];
   data: FeedbackData | TicketData | CommandData;
-  /** Ticket UUID from the orchestrator — needed so project leads can pass it to spawn_task. */
-  ticketUUID?: string;
+  /** Task UUID from the conductor — needed so project leads can pass it to spawn_task. */
+  taskUUID?: string;
 }
 
 export interface FeedbackData {
@@ -80,10 +80,10 @@ export function normalizeImageMediaType(mimetype: string): "image/png" | "image/
   return IMAGE_MEDIA_TYPES[mimetype] || "image/png";
 }
 
-export interface TicketEvent {
+export interface TaskEvent {
   type: string;
   source: string;
-  ticketUUID: string;
+  taskUUID: string;
   product: string;
   payload: unknown;
   slackThreadTs?: string;
@@ -93,7 +93,7 @@ export interface TicketEvent {
 }
 
 export interface AgentConfig {
-  ticketUUID: string;
+  taskUUID: string;
   product: string;
   repos: string[];
   anthropicApiKey: string;
@@ -104,8 +104,8 @@ export interface AgentConfig {
   linearAppToken: string;
   workerUrl: string;
   apiKey: string;
-  ticketIdentifier?: string;  // e.g., "BC-84"
-  ticketTitle?: string;        // Brief title for display
+  taskIdentifier?: string;  // e.g., "BC-84"
+  taskTitle?: string;        // Brief title for display
   model?: string;              // Claude model to use (sonnet, opus, haiku)
   slackPersona?: { username: string; icon_emoji?: string; icon_url?: string };
 }
@@ -118,7 +118,7 @@ export function loadConfig(): AgentConfig {
   };
 
   return {
-    ticketUUID: required("TICKET_UUID"),
+    taskUUID: required("TASK_UUID"),
     product: required("PRODUCT"),
     repos: process.env.REPOS ? JSON.parse(process.env.REPOS) : [],
     anthropicApiKey: required("ANTHROPIC_API_KEY"),
@@ -129,8 +129,8 @@ export function loadConfig(): AgentConfig {
     linearAppToken: process.env.LINEAR_APP_TOKEN || "",
     workerUrl: required("WORKER_URL"),
     apiKey: process.env.API_KEY || "",
-    ticketIdentifier: process.env.TICKET_IDENTIFIER || undefined,
-    ticketTitle: process.env.TICKET_TITLE || undefined,
+    taskIdentifier: process.env.TASK_IDENTIFIER || undefined,
+    taskTitle: process.env.TASK_TITLE || undefined,
     model: process.env.MODEL || undefined,
     slackPersona: process.env.SLACK_PERSONA ? JSON.parse(process.env.SLACK_PERSONA) : undefined,
   };

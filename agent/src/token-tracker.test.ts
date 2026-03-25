@@ -242,7 +242,7 @@ describe("TokenTracker", () => {
       tracker.recordTurn({ inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheCreationTokens: 0 });
 
       await tracker.report({
-        ticketUUID: "ticket-123",
+        taskUUID: "ticket-123",
         workerUrl: "https://worker.example.com",
         apiKey: "api-key",
         slackBotToken: "xoxb-test",
@@ -255,7 +255,7 @@ describe("TokenTracker", () => {
       // API call
       expect(fetchCalls[0].url).toBe("https://worker.example.com/api/internal/token-usage");
       const apiBody = JSON.parse(fetchCalls[0].options.body);
-      expect(apiBody.ticketUUID).toBe("ticket-123");
+      expect(apiBody.taskUUID).toBe("ticket-123");
       expect(apiBody.totalInputTokens).toBe(1000);
       expect(apiBody.totalOutputTokens).toBe(500);
 
@@ -270,7 +270,7 @@ describe("TokenTracker", () => {
       tracker.recordTurn({ inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 });
 
       await tracker.report({
-        ticketUUID: "ticket-123",
+        taskUUID: "ticket-123",
         workerUrl: "https://worker.example.com",
         apiKey: "api-key",
         slackBotToken: "xoxb-test",
@@ -286,7 +286,7 @@ describe("TokenTracker", () => {
       tracker.recordTurn({ inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 });
 
       await tracker.report({
-        ticketUUID: "ticket-123",
+        taskUUID: "ticket-123",
         workerUrl: "https://worker.example.com",
         apiKey: "api-key",
         slackBotToken: "xoxb-test",
@@ -302,7 +302,7 @@ describe("TokenTracker", () => {
       tracker.recordTurn({ inputTokens: 200, outputTokens: 100, cacheReadTokens: 0, cacheCreationTokens: 0 });
 
       await tracker.report({
-        ticketUUID: "ticket-123",
+        taskUUID: "ticket-123",
         workerUrl: "https://worker.example.com",
         apiKey: "api-key",
         slackBotToken: "xoxb-test",
@@ -324,7 +324,7 @@ describe("TokenTracker", () => {
 
       // Should not throw
       await tracker.report({
-        ticketUUID: "ticket-123",
+        taskUUID: "ticket-123",
         workerUrl: "https://worker.example.com",
         apiKey: "api-key",
         slackBotToken: "xoxb-test",
@@ -340,7 +340,7 @@ describe("TokenTracker", () => {
       tracker.recordTurn({ inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 });
 
       await tracker.report({
-        ticketUUID: "ticket-123",
+        taskUUID: "ticket-123",
         workerUrl: "https://worker.example.com",
         apiKey: "api-key",
         slackBotToken: "xoxb-test",

@@ -140,25 +140,25 @@ Then forwards verified events to Orchestrator DO.
 - `POST /api/webhooks/github` — GitHub PR/CI webhooks (signature-verified)
 - `POST /api/internal/slack-event` — From Socket Mode container (API key auth)
 - `POST /api/internal/status` — Agent status updates
-- `POST /api/orchestrator/heartbeat` — Agent heartbeat phone-home
+- `POST /api/conductor/heartbeat` — Agent heartbeat phone-home
 - `GET/POST/PUT/DELETE /api/products` — Product registry management
 
-### Orchestrator DO (`orchestrator/src/orchestrator.ts`)
+### Conductor DO (`api/src/conductor.ts`)
 Singleton Durable Object. Thin state store and event router — **no decision logic**.
 
 **What it does:**
 - Product registry (SQLite): repos, channels, secrets, triggers per product
-- Ticket tracking: status, slack_thread_ts, agent_active, last_heartbeat
+- Task tracking: status, slack_thread_ts, agent_active, last_heartbeat
 - Channel → product lookup (deterministic, no LLM)
 - Routes events to the Project Lead DO for the product
-- Spawns Task Agent DOs when a Project Lead requests (via `/project-agent/spawn-task`)
+- Spawns Task Agent DOs when a Project Lead requests (via `/project-lead/spawn-task`)
 
 **What it doesn't do:**
 - No merge gates (agents self-manage via `check_ci_status` + `merge_pr` tools)
 - No CI monitoring (agents do this)
 - No decision-making (that's in Project Lead/Task Agent/Conductor SKILL.md files)
 
-### Project Lead (`orchestrator/src/project-agent.ts`)
+### Project Lead (`api/src/project-lead.ts`)
 One Durable Object per registered product. Runs a **persistent Agent SDK session** that accumulates context over time.
 
 **Lifetime:** Indefinite (no timeouts). Only replaced on deploy.
@@ -171,8 +171,8 @@ One Durable Object per registered product. Runs a **persistent Agent SDK session
 
 **Recovery:** `alarm()` every 5 min health-checks the container. If dead, restarts from SQLite-persisted config. Events that arrived while dead are buffered and drained on restart.
 
-### Task Agent (`orchestrator/src/ticket-agent.ts`)
-One Durable Object per ticket. Ephemeral container (2-4h) that implements a single ticket end-to-end.
+### Task Agent (`api/src/task-agent.ts`)
+One Durable Object per task. Ephemeral container (2-4h) that implements a single task end-to-end.
 
 **Lifetime:** 2 hours (coding) or 4 hours (research), exits on completion (merged/closed/failed)
 
@@ -186,7 +186,7 @@ One Durable Object per ticket. Ephemeral container (2-4h) that implements a sing
 
 Uses `ticket-agent` or `research-agent` SKILL.md depending on mode.
 
-### Conductor (`orchestrator/src/project-agent.ts`, role=conductor)
+### Conductor (`api/src/project-lead.ts`, role=conductor)
 A specialized Project Lead that coordinates across all registered products. Runs in its own dedicated Slack channel.
 
 **Lifetime:** Persistent (same as Project Lead).

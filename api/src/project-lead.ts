@@ -1,25 +1,25 @@
 /**
- * ProjectAgent — persistent Container DO, one per registered product.
+ * ProjectLead — persistent Container DO, one per registered product.
  *
  * Runs a long-lived Agent SDK session that accumulates product context over time.
- * The project agent decides what to do with incoming events (answer directly,
- * spawn a ticket agent, ask a question) using the coding-project-lead SKILL.md.
+ * The project lead decides what to do with incoming events (answer directly,
+ * spawn a task agent, ask a question) using the coding-project-lead SKILL.md.
  *
- * Key differences from TicketAgent:
- * - Keyed by product slug (not ticket UUID)
+ * Key differences from TaskAgent:
+ * - Keyed by product slug (not task UUID)
  * - No sleepAfter — persistent (like Orchestrator)
  * - alarm() restarts container if it dies
  * - Skills loaded from product-engineer repo via settingSources + cwd
  */
 
 import { Container } from "@cloudflare/containers";
-import type { TicketEvent, Bindings } from "./types";
+import type { TaskEvent, Bindings } from "./types";
 import type { CloudflareAIGateway } from "./registry";
 import { resolveContainerEnvVars } from "./container-env";
 import { EventBuffer } from "./event-buffer";
 import { PersistentConfig } from "./persistent-config";
 
-export interface ProjectAgentConfig {
+export interface ProjectLeadConfig {
   product: string;
   repos: string[];
   slackChannel: string;
@@ -31,8 +31,8 @@ export interface ProjectAgentConfig {
 }
 
 // Pure helper — exported for testing (delegates to shared resolveContainerEnvVars)
-export function resolveProjectAgentEnvVars(
-  config: ProjectAgentConfig,
+export function resolveProjectLeadEnvVars(
+  config: ProjectLeadConfig,
   env: Record<string, string>,
   gatewayConfig?: CloudflareAIGateway | null,
 ): Record<string, string> {
@@ -42,29 +42,29 @@ export function resolveProjectAgentEnvVars(
     gatewayConfig,
     {
       AGENT_ROLE: config.product === "__conductor__" ? "conductor" : "project-lead",
-      TICKET_UUID: `project-agent-${config.product}`,
-      TICKET_IDENTIFIER: "",
-      TICKET_TITLE: `Project agent for ${config.product}`,
+      TASK_UUID: `project-lead-${config.product}`,
+      TASK_IDENTIFIER: "",
+      TASK_TITLE: `Project lead for ${config.product}`,
     },
   );
 }
 
-export class ProjectAgent extends Container<Bindings> {
+export class ProjectLead extends Container<Bindings> {
   defaultPort = 3000;
   // No sleepAfter — persistent session
 
-  private persistentConfig: PersistentConfig<ProjectAgentConfig>;
+  private persistentConfig: PersistentConfig<ProjectLeadConfig>;
   private eventBuffer: EventBuffer;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     // @ts-expect-error — DurableObjectState generic mismatch
     super(ctx, env);
-    this.persistentConfig = new PersistentConfig<ProjectAgentConfig>(ctx.storage.sql);
-    this.eventBuffer = new EventBuffer(ctx.storage.sql, "ProjectAgent");
+    this.persistentConfig = new PersistentConfig<ProjectLeadConfig>(ctx.storage.sql);
+    this.eventBuffer = new EventBuffer(ctx.storage.sql, "ProjectLead");
     // Restore envVars from persisted config (for auto-restart after deploy)
     const config = this.getConfig();
     if (config) {
-      this.envVars = resolveProjectAgentEnvVars(
+      this.envVars = resolveProjectLeadEnvVars(
         config,
         env as unknown as Record<string, string>,
         config.gatewayConfig,
@@ -72,13 +72,13 @@ export class ProjectAgent extends Container<Bindings> {
     }
   }
 
-  private getConfig(): ProjectAgentConfig | null {
+  private getConfig(): ProjectLeadConfig | null {
     return this.persistentConfig.get();
   }
 
-  private setConfig(config: ProjectAgentConfig) {
+  private setConfig(config: ProjectLeadConfig) {
     this.persistentConfig.set(config);
-    this.envVars = resolveProjectAgentEnvVars(
+    this.envVars = resolveProjectLeadEnvVars(
       config,
       this.env as unknown as Record<string, string>,
       config.gatewayConfig,
@@ -86,20 +86,20 @@ export class ProjectAgent extends Container<Bindings> {
   }
 
   override onStop(params: { exitCode: number; reason: string }) {
-    console.error(`[ProjectAgent] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
+    console.error(`[ProjectLead] Container stopped: exitCode=${params.exitCode} reason=${params.reason}`);
   }
 
   override onError(error: unknown) {
-    console.error("[ProjectAgent] Container error:", error);
+    console.error("[ProjectLead] Container error:", error);
     throw error;
   }
 
-  private bufferEvent(event: TicketEvent) {
+  private bufferEvent(event: TaskEvent) {
     this.eventBuffer.buffer(event);
   }
 
-  private drainEventBuffer(): TicketEvent[] {
-    return this.eventBuffer.drain<TicketEvent>();
+  private drainEventBuffer(): TaskEvent[] {
+    return this.eventBuffer.drain<TaskEvent>();
   }
 
   private async replayBufferedEvents() {
@@ -136,7 +136,7 @@ export class ProjectAgent extends Container<Bindings> {
         return super.alarm(alarmProps);
       }
     } catch {
-      console.log(`[ProjectAgent] Container not healthy for ${config.product}, restarting...`);
+      console.log(`[ProjectLead] Container not healthy for ${config.product}, restarting...`);
     }
 
     // Container is dead — restart
@@ -145,9 +145,9 @@ export class ProjectAgent extends Container<Bindings> {
         ports: this.defaultPort,
         startOptions: { envVars: this.envVars as Record<string, string> },
       });
-      console.log(`[ProjectAgent] Container restarted for ${config.product}`);
+      console.log(`[ProjectLead] Container restarted for ${config.product}`);
     } catch (err) {
-      console.error(`[ProjectAgent] Container restart failed for ${config.product}:`, err);
+      console.error(`[ProjectLead] Container restart failed for ${config.product}:`, err);
     }
 
     this.ctx.storage.setAlarm(Date.now() + 300_000); // retry in 5 min
@@ -160,7 +160,7 @@ export class ProjectAgent extends Container<Bindings> {
     switch (url.pathname) {
       case "/initialize":
       case "/ensure-running": {
-        const config = await request.json<ProjectAgentConfig>();
+        const config = await request.json<ProjectLeadConfig>();
         const existing = this.getConfig();
 
         // If config hasn't changed, just ensure container is running
@@ -194,7 +194,7 @@ export class ProjectAgent extends Container<Bindings> {
       }
 
       case "/event": {
-        const event = await request.json<TicketEvent>();
+        const event = await request.json<TaskEvent>();
         try {
           const res = await this.containerFetch("http://localhost/event", {
             method: "POST",
@@ -212,7 +212,7 @@ export class ProjectAgent extends Container<Bindings> {
           }
           return res;
         } catch (err) {
-          console.warn("[ProjectAgent] Container not ready, buffering event:", err);
+          console.warn("[ProjectLead] Container not ready, buffering event:", err);
           this.bufferEvent(event);
           return Response.json({ buffered: true }, { status: 202 });
         }
@@ -224,7 +224,7 @@ export class ProjectAgent extends Container<Bindings> {
       }
 
       case "/health": {
-        return Response.json({ ok: true, service: "project-agent-do" });
+        return Response.json({ ok: true, service: "project-lead-do" });
       }
 
       case "/restart": {
@@ -234,7 +234,7 @@ export class ProjectAgent extends Container<Bindings> {
         if (!config) {
           return Response.json({ error: "No config — agent never initialized" }, { status: 400 });
         }
-        console.log(`[ProjectAgent] Force restarting container for ${config.product}`);
+        console.log(`[ProjectLead] Force restarting container for ${config.product}`);
         try {
           await this.startAndWaitForPorts({
             ports: this.defaultPort,
@@ -244,7 +244,7 @@ export class ProjectAgent extends Container<Bindings> {
           this.ctx.storage.setAlarm(Date.now() + 300_000);
           return Response.json({ ok: true, status: "restarted" });
         } catch (err) {
-          console.error(`[ProjectAgent] Restart failed:`, err);
+          console.error(`[ProjectLead] Restart failed:`, err);
           return Response.json({ error: String(err) }, { status: 500 });
         }
       }

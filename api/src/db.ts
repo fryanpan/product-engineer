@@ -1,7 +1,7 @@
 /**
- * Shared database helpers for the Orchestrator DO.
+ * Shared database helpers for the Conductor DO.
  *
- * All functions accept a `SqlExec` interface (the same one used by AgentManager)
+ * All functions accept a `SqlExec` interface (the same one used by TaskManager)
  * so they can be called with `this.ctx.storage.sql` from any DO method.
  */
 
@@ -23,22 +23,27 @@ export interface SqlExec {
  * Create all tables and run migrations. Idempotent — safe to call on every request.
  */
 export function initSchema(sql: SqlExec): void {
-  // Tickets table
+  // Tasks table
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS tickets (
-      ticket_uuid TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS tasks (
+      task_uuid TEXT PRIMARY KEY,
       product TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'created',
       slack_thread_ts TEXT,
       slack_channel TEXT,
       pr_url TEXT,
       branch_name TEXT,
+      task_id TEXT,
+      title TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       agent_active INTEGER NOT NULL DEFAULT 1,
       last_heartbeat TEXT,
       transcript_r2_key TEXT,
-      session_id TEXT
+      session_id TEXT,
+      agent_message TEXT,
+      checks_passed INTEGER DEFAULT 0,
+      last_merge_decision_sha TEXT
     )
   `);
 
@@ -63,7 +68,7 @@ export function initSchema(sql: SqlExec): void {
   // Token usage table
   sql.exec(`
     CREATE TABLE IF NOT EXISTS token_usage (
-      ticket_uuid TEXT PRIMARY KEY,
+      task_uuid TEXT PRIMARY KEY,
       total_input_tokens INTEGER NOT NULL DEFAULT 0,
       total_output_tokens INTEGER NOT NULL DEFAULT 0,
       total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
@@ -86,11 +91,11 @@ export function initSchema(sql: SqlExec): void {
     )
   `);
 
-  // Ticket queue table
+  // Task queue table
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS ticket_queue (
+    CREATE TABLE IF NOT EXISTS task_queue (
       id TEXT PRIMARY KEY,
-      ticket_uuid TEXT NOT NULL,
+      task_uuid TEXT NOT NULL,
       product TEXT NOT NULL,
       priority INTEGER DEFAULT 3,
       payload TEXT NOT NULL,
@@ -98,10 +103,10 @@ export function initSchema(sql: SqlExec): void {
     )
   `);
 
-  // Ticket metrics table
+  // Task metrics table
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS ticket_metrics (
-      ticket_uuid TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS task_metrics (
+      task_uuid TEXT PRIMARY KEY,
       outcome TEXT,
       pr_count INTEGER NOT NULL DEFAULT 0,
       revision_count INTEGER NOT NULL DEFAULT 0,
@@ -129,20 +134,20 @@ export function initSchema(sql: SqlExec): void {
     }
   };
 
-  addColumn("tickets", "agent_active INTEGER NOT NULL DEFAULT 1");
-  addColumn("tickets", "last_heartbeat TEXT");
-  addColumn("tickets", "transcript_r2_key TEXT");
-  addColumn("tickets", "session_id TEXT");
-  addColumn("tickets", "identifier TEXT"); // renamed to ticket_id below
-  addColumn("tickets", "title TEXT");
-  addColumn("tickets", "agent_message TEXT");
-  addColumn("tickets", "checks_passed INTEGER DEFAULT 0");
-  addColumn("tickets", "last_merge_decision_sha TEXT");
+  addColumn("tasks", "agent_active INTEGER NOT NULL DEFAULT 1");
+  addColumn("tasks", "last_heartbeat TEXT");
+  addColumn("tasks", "transcript_r2_key TEXT");
+  addColumn("tasks", "session_id TEXT");
+  addColumn("tasks", "identifier TEXT"); // renamed to task_id below
+  addColumn("tasks", "title TEXT");
+  addColumn("tasks", "agent_message TEXT");
+  addColumn("tasks", "checks_passed INTEGER DEFAULT 0");
+  addColumn("tasks", "last_merge_decision_sha TEXT");
 
   // Merge gate retry state
   sql.exec(`
     CREATE TABLE IF NOT EXISTS merge_gate_retries (
-      ticket_uuid TEXT PRIMARY KEY,
+      task_uuid TEXT PRIMARY KEY,
       product TEXT NOT NULL,
       retry_count INTEGER NOT NULL DEFAULT 0,
       next_retry_at TEXT NOT NULL,
@@ -157,38 +162,51 @@ export function initSchema(sql: SqlExec): void {
     // Column already exists
   }
 
-  // Migration: rename id → ticket_uuid
+  // Migration: rename id → ticket_uuid (legacy)
   try {
     sql.exec(`ALTER TABLE tickets RENAME COLUMN id TO ticket_uuid`);
   } catch {
     // Column already renamed or table created with new name
   }
-  // Migration: rename identifier → ticket_id
+  // Migration: rename identifier → ticket_id (legacy)
   try {
     sql.exec(`ALTER TABLE tickets RENAME COLUMN identifier TO ticket_id`);
   } catch {
     // Column already renamed or table created with new name
   }
-  // Migration: rename ticket_id → ticket_uuid in merge_gate_retries
+  // Migration: rename ticket_id → ticket_uuid in merge_gate_retries (legacy)
   try {
     sql.exec(`ALTER TABLE merge_gate_retries RENAME COLUMN ticket_id TO ticket_uuid`);
   } catch {}
-  // Migration: rename ticket_id → ticket_uuid in token_usage
+  // Migration: rename ticket_id → ticket_uuid in token_usage (legacy)
   try {
     sql.exec(`ALTER TABLE token_usage RENAME COLUMN ticket_id TO ticket_uuid`);
   } catch {}
-  // Migration: rename ticket_id → ticket_uuid in ticket_queue
+  // Migration: rename ticket_id → ticket_uuid in ticket_queue (legacy)
   try {
     sql.exec(`ALTER TABLE ticket_queue RENAME COLUMN ticket_id TO ticket_uuid`);
   } catch {}
-  // Migration: rename ticket_id → ticket_uuid in ticket_metrics
+  // Migration: rename ticket_id → ticket_uuid in ticket_metrics (legacy)
   try {
     sql.exec(`ALTER TABLE ticket_metrics RENAME COLUMN ticket_id TO ticket_uuid`);
   } catch {}
 
-  addColumn("tickets", "ci_status TEXT DEFAULT NULL");
-  addColumn("tickets", "needs_attention INTEGER DEFAULT 0");
-  addColumn("tickets", "needs_attention_reason TEXT DEFAULT NULL");
+  addColumn("tasks", "ci_status TEXT DEFAULT NULL");
+  addColumn("tasks", "needs_attention INTEGER DEFAULT 0");
+  addColumn("tasks", "needs_attention_reason TEXT DEFAULT NULL");
+
+  // Migration: rename ticket terminology → task (tables first, then columns)
+  try { sql.exec("ALTER TABLE tickets RENAME TO tasks"); } catch { /* already renamed */ }
+  try { sql.exec("ALTER TABLE ticket_queue RENAME TO task_queue"); } catch { /* already renamed */ }
+  try { sql.exec("ALTER TABLE ticket_metrics RENAME TO task_metrics"); } catch { /* already renamed */ }
+  try { sql.exec("ALTER TABLE tasks RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
+  try { sql.exec("ALTER TABLE tasks RENAME COLUMN ticket_id TO task_id"); } catch { /* already renamed */ }
+  // Fresh Conductor DOs: identifier was added by addColumn but never renamed through the legacy chain
+  try { sql.exec("ALTER TABLE tasks RENAME COLUMN identifier TO task_id"); } catch { /* already renamed or doesn't exist */ }
+  try { sql.exec("ALTER TABLE task_queue RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
+  try { sql.exec("ALTER TABLE task_metrics RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
+  try { sql.exec("ALTER TABLE merge_gate_retries RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
+  try { sql.exec("ALTER TABLE token_usage RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,14 +268,14 @@ export function getAllProductConfigs(sql: SqlExec): Record<string, ProductConfig
 }
 
 // ---------------------------------------------------------------------------
-// Ticket metrics
+// Task metrics
 // ---------------------------------------------------------------------------
 
-/** Idempotent creation of a ticket_metrics row. */
-export function ensureTicketMetrics(sql: SqlExec, ticketUUID: string): void {
+/** Idempotent creation of a task_metrics row. */
+export function ensureTaskMetrics(sql: SqlExec, taskUUID: string): void {
   sql.exec(
-    `INSERT INTO ticket_metrics (ticket_uuid) VALUES (?)
-     ON CONFLICT(ticket_uuid) DO NOTHING`,
-    ticketUUID,
+    `INSERT INTO task_metrics (task_uuid) VALUES (?)
+     ON CONFLICT(task_uuid) DO NOTHING`,
+    taskUUID,
   );
 }

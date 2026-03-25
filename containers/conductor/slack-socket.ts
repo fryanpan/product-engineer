@@ -94,8 +94,8 @@ export class SlackSocket {
             // Only forward thread replies (not top-level messages, edits, joins, etc.)
             this.onEvent(slackEvent);
           } else if (slackEvent.type === "message" && !slackEvent.thread_ts && !slackEvent.subtype) {
-            // Top-level messages: check for slash commands, then forward to orchestrator.
-            // The orchestrator routes conductor-channel messages directly and ignores
+            // Top-level messages: check for slash commands, then forward to conductor.
+            // The conductor routes conductor-channel messages directly and ignores
             // non-mention messages in product channels.
             const text = slackEvent.text?.trim() || "";
             if (/(^|\s)\/agent-status(\s|$)/.test(text)) {

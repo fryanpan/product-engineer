@@ -19,7 +19,7 @@ Gather:
 
 ### Step 2: Add to Registry
 
-Add the product to the orchestrator's registry in `api/src/registry.ts`:
+Add the product to the conductor's registry in `api/src/registry.ts`:
 
 ```typescript
 "product-name": {
@@ -65,7 +65,7 @@ For each secret in the product's config:
    - `message.channels` enables thread replies without @mentions to continue conversations
 
 **For the Conductor channel (cross-product coordination):**
-1. Set the conductor channel so the orchestrator routes messages there without requiring @mentions:
+1. Set the conductor channel so the conductor routes messages there without requiring @mentions:
    ```bash
    curl -X PUT <WORKER_URL>/api/settings/conductor_channel \
      -H "Content-Type: application/json" \
@@ -76,8 +76,8 @@ For each secret in the product's config:
 3. Without this setting, plain messages in the conductor channel are silently ignored — only @mentions work.
 
 **For feedback widgets (web apps only):**
-1. The product's worker dispatches to the orchestrator: `POST /api/dispatch`
-2. Include `X-API-Key` header with the orchestrator's API key
+1. The product's worker dispatches to the conductor: `POST /api/dispatch`
+2. Include `X-API-Key` header with the conductor's API key
 
 **For GitHub PR merge detection:**
 1. Add webhook to the repo: `https://product-engineer.<your-subdomain>.workers.dev/api/webhooks/github`

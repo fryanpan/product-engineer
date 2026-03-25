@@ -1,13 +1,13 @@
 # Product Engineer Metrics System
 
-This document describes the metrics and observability system for the Product Engineer orchestrator.
+This document describes the metrics and observability system for the Product Engineer conductor.
 
 ## Overview
 
 The metrics system tracks:
-1. **Decision correctness** — how well the orchestrator makes decisions
-2. **Time/cost efficiency** — how efficiently tickets are processed
-3. **Feedback integration** — human feedback on orchestrator decisions
+1. **Decision correctness** — how well the conductor makes decisions
+2. **Time/cost efficiency** — how efficiently tasks are processed
+3. **Feedback integration** — human feedback on conductor decisions
 
 ## Metrics Summary
 
@@ -15,29 +15,29 @@ The metrics system tracks:
 
 | Metric | Description | Target |
 |--------|-------------|--------|
-| **Automerge Rate** | % of tickets that complete with automerge (no human intervention) | > 80% |
+| **Automerge Rate** | % of tasks that complete with automerge (no human intervention) | > 80% |
 | **Decision Accuracy** | % of decisions marked "good" by humans | > 90% (based on feedback received) |
-| **Failure Rate** | % of tickets that end in `failed` status | < 5% |
-| **Multi-PR Rate** | % of tickets requiring 2+ PRs to complete | < 15% |
-| **Multi-Revision Rate** | % of tickets sent back for revision 2+ times | < 10% |
+| **Failure Rate** | % of tasks that end in `failed` status | < 5% |
+| **Multi-PR Rate** | % of tasks requiring 2+ PRs to complete | < 15% |
+| **Multi-Revision Rate** | % of tasks sent back for revision 2+ times | < 10% |
 
 ### Efficiency Metrics
 
 | Metric | Description | Target |
 |--------|-------------|--------|
-| **Avg Cost/Ticket** | Average LLM cost per completed ticket | < $3 |
+| **Avg Cost/Task** | Average LLM cost per completed task | < $3 |
 | **Daily Cost** | Total LLM spend per day | < $25 |
-| **Avg Completion Time** | Time from ticket creation to merge | < 60 min (simple), < 4 hours (complex) |
+| **Avg Completion Time** | Time from task creation to merge | < 60 min (simple), < 4 hours (complex) |
 
-### Per-Ticket Metrics
+### Per-Task Metrics
 
-Each ticket tracks:
+Each task tracks:
 - `outcome` — final state (automerge_success, manual_merge, failed, deferred, closed)
 - `pr_count` — number of PRs created
 - `revision_count` — times sent back for revision
-- `total_cost_usd` — LLM costs for this ticket
+- `total_cost_usd` — LLM costs for this task
 - `first_response_at` — when agent first started working
-- `completed_at` — when ticket reached terminal state
+- `completed_at` — when task reached terminal state
 - `hands_on_sessions` — manual tracking for human involvement
 - `hands_on_notes` — notes on where human time was needed
 
@@ -45,10 +45,10 @@ Each ticket tracks:
 
 ### Automatic Collection
 
-The orchestrator automatically tracks:
+The conductor automatically tracks:
 
-1. **On ticket creation:**
-   - Initialize `ticket_metrics` row
+1. **On task creation:**
+   - Initialize `task_metrics` row
    - Record `identifier` and `title` from Linear payload
 
 2. **On status updates:**
@@ -90,7 +90,7 @@ Decisions are logged with `slack_message_ts` for feedback correlation. Users can
 
 ### Manual Tracking
 
-For hands-on time tracking, use the `/retro` skill after completing tickets. The retro:
+For hands-on time tracking, use the `/retro` skill after completing tasks. The retro:
 - Analyzes transcript for time breakdown
 - Records `hands_on_sessions` and `hands_on_notes`
 - Identifies where human intervention was needed
@@ -99,7 +99,7 @@ For hands-on time tracking, use the `/retro` skill after completing tickets. The
 
 ### GET `/api/metrics`
 
-Returns detailed per-ticket metrics.
+Returns detailed per-task metrics.
 
 Query params:
 - `limit` — max results (default 50)
@@ -110,7 +110,7 @@ Response:
 {
   "metrics": [
     {
-      "ticket_id": "uuid",
+      "task_id": "uuid",
       "identifier": "BC-137",
       "title": "Add metrics tracking",
       "product": "product-engineer",
@@ -136,7 +136,7 @@ Response:
 ```json
 {
   "summary": {
-    "totalTickets": 45,
+    "totalTasks": 45,
     "completed": 40,
     "automergeRate": "82.5%",
     "failureRate": "5.0%",
@@ -153,7 +153,7 @@ Response:
     "average": "2.81",
     "max": "8.50",
     "daily": [
-      { "day": "2026-03-10", "cost": 15.20, "tickets": 6 }
+      { "day": "2026-03-10", "cost": 15.20, "tasks": 6 }
     ]
   },
   "decisions": {
@@ -241,11 +241,11 @@ Start with **Option 1** (dashboard enhancements) for operational metrics. Consid
 
 ## Database Schema
 
-### ticket_metrics
+### task_metrics
 
 ```sql
-CREATE TABLE ticket_metrics (
-  ticket_id TEXT PRIMARY KEY,
+CREATE TABLE task_metrics (
+  task_id TEXT PRIMARY KEY,
   outcome TEXT,                    -- automerge_success, manual_merge, failed, etc.
   pr_count INTEGER DEFAULT 0,
   revision_count INTEGER DEFAULT 0,

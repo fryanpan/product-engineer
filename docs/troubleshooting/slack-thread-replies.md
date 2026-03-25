@@ -2,13 +2,13 @@
 
 ## Problem
 
-**Issue 1:** Agent doesn't respond to messages sent in per-ticket threads unless explicitly mentioned with `@product-engineer`.
+**Issue 1:** Agent doesn't respond to messages sent in per-task threads unless explicitly mentioned with `@product-engineer`.
 
-**Issue 2:** Agent replies are posted to the main channel instead of the ticket thread.
+**Issue 2:** Agent replies are posted to the main channel instead of the task thread.
 
 ## Expected Behavior
 
-Once a ticket thread is created (via Linear ticket or initial @mention), subsequent messages in that thread should be queued and processed by the agent **without requiring additional @mentions**.
+Once a task thread is created (via Linear ticket or initial @mention), subsequent messages in that thread should be queued and processed by the agent **without requiring additional @mentions**.
 
 ## Root Cause
 
@@ -20,9 +20,9 @@ The Slack app needs to be subscribed to the `message.channels` event to receive 
    - Filters for messages with `thread_ts` (thread replies)
    - Ignores bot messages and message edits
 
-2. **Orchestrator looks up ticket** (`api/src/orchestrator.ts:258-277`)
-   - Queries SQLite: `SELECT id, product FROM tickets WHERE slack_thread_ts = ?`
-   - If found, routes event to TicketAgent with type `slack_reply`
+2. **Conductor looks up task** (`api/src/conductor.ts:258-277`)
+   - Queries SQLite: `SELECT id, product FROM tasks WHERE slack_thread_ts = ?`
+   - If found, routes event to TaskAgent with type `slack_reply`
 
 3. **Agent processes message** (`agent/src/server.ts:270-272`, `agent/src/prompt.ts:120-121`)
    - Yields continuation prompt to running session
@@ -35,7 +35,7 @@ The Slack app needs to be subscribed to the `message.channels` event to receive 
 Go to [api.slack.com/apps](https://api.slack.com/apps) → Your App:
 
 **Event Subscriptions** → Subscribe to bot events:
-- ✅ `app_mention` (enables initial ticket creation)
+- ✅ `app_mention` (enables initial task creation)
 - ✅ `message.channels` ← **MUST BE ENABLED**
 
 **OAuth & Permissions** → Bot Token Scopes:
@@ -49,36 +49,36 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) → Your App:
 
 ### 2. Verify Container Logs
 
-Check if messages are reaching the orchestrator:
+Check if messages are reaching the conductor:
 
 ```bash
-wrangler tail --durable-object Orchestrator
+wrangler tail --durable-object Conductor
 ```
 
-Send a test message in a ticket thread (without @mention). You should see:
+Send a test message in a task thread (without @mention). You should see:
 ```
-[Orchestrator Container] Slack event: message from U123456
+[Conductor Container] Slack event: message from U123456
 ```
 
 If you DON'T see this log, the issue is with Slack app configuration (step 1).
 
 If you DO see this log but the agent doesn't respond, check the next step.
 
-### 3. Verify Ticket Lookup
+### 3. Verify Task Lookup
 
 In the same `wrangler tail` output, you should see the event being routed:
 ```
-[Orchestrator] Event: slack_reply
+[Conductor] Event: slack_reply
 ```
 
-If the message is received but NOT routed, the ticket might not exist or `thread_ts` doesn't match. Check:
+If the message is received but NOT routed, the task might not exist or `thread_ts` doesn't match. Check:
 
 ```bash
 curl -H "X-API-Key: YOUR_API_KEY" \
-  https://product-engineer.YOUR_SUBDOMAIN.workers.dev/api/orchestrator/tickets
+  https://product-engineer.YOUR_SUBDOMAIN.workers.dev/api/conductor/tasks
 ```
 
-Verify the ticket has a `slack_thread_ts` that matches the thread you're messaging in.
+Verify the task has a `slack_thread_ts` that matches the thread you're messaging in.
 
 ### 4. Verify Agent is Running
 
@@ -86,13 +86,13 @@ Check agent container status:
 
 ```bash
 curl -H "X-API-Key: YOUR_API_KEY" \
-  https://product-engineer.YOUR_SUBDOMAIN.workers.dev/api/agent/TICKET_ID/status
+  https://product-engineer.YOUR_SUBDOMAIN.workers.dev/api/agent/TASK_ID/status
 ```
 
 Expected response:
 ```json
 {
-  "service": "ticket-agent-container",
+  "service": "task-agent-container",
   "sessionActive": true,
   "sessionStatus": "running",
   "sessionMessageCount": 5
@@ -110,13 +110,13 @@ If the issue is Slack configuration (step 1):
 3. Event Subscriptions → Subscribe to bot events → Add `message.channels`
 4. OAuth & Permissions → Bot Token Scopes → Add `channels:history` (if missing)
 5. Save changes (Slack may require reinstalling the app)
-6. Test by sending a message in an existing ticket thread without @mention
+6. Test by sending a message in an existing task thread without @mention
 
 ## Testing
 
 After fixing configuration:
 
-1. Create a new ticket with: `@product-engineer test thread replies`
+1. Create a new task with: `@product-engineer test thread replies`
 2. Wait for agent's first response (creates the thread)
 3. Send a follow-up message in the thread: `hello, can you hear me?` (NO @mention)
 4. Agent should respond within 1-2 minutes
@@ -125,21 +125,21 @@ After fixing configuration:
 
 ### Agent Replies Going to Main Channel (Fixed in BC-133)
 
-**Symptom:** Agent posts replies to the main channel instead of in the ticket thread.
+**Symptom:** Agent posts replies to the main channel instead of in the task thread.
 
-**Root cause:** The `slack_thread_ts` was not being passed from the orchestrator to the agent container on initialization. The agent would only learn the thread_ts when receiving subsequent events, but by then it had already posted its first message to the main channel.
+**Root cause:** The `slack_thread_ts` was not being passed from the conductor to the agent container on initialization. The agent would only learn the thread_ts when receiving subsequent events, but by then it had already posted its first message to the main channel.
 
-**Fix:** The orchestrator now loads `slack_thread_ts` from the database when initializing the agent and passes it in the `TicketAgentConfig`. This ensures the agent knows the correct thread from the start.
+**Fix:** The conductor now loads `slack_thread_ts` from the database when initializing the agent and passes it in the `TaskAgentConfig`. This ensures the agent knows the correct thread from the start.
 
 **Related changes:**
-- `api/src/types.ts`: Added `slackThreadTs` field to `TicketAgentConfig`
-- `api/src/orchestrator.ts`: Load `slack_thread_ts` from DB when building agent config
-- `api/src/ticket-agent.ts`: Use `config.slackThreadTs` when resolving env vars
+- `api/src/types.ts`: Added `slackThreadTs` field to `TaskAgentConfig`
+- `api/src/conductor.ts`: Load `slack_thread_ts` from DB when building agent config
+- `api/src/task-agent.ts`: Use `config.slackThreadTs` when resolving env vars
 
 ## Related Files
 
 - `containers/orchestrator/slack-socket.ts` — Socket Mode message filtering
-- `api/src/orchestrator.ts` — Ticket lookup and routing
+- `api/src/conductor.ts` — Task lookup and routing
 - `agent/src/prompt.ts` — Event prompt formatting
 - `agent/src/tools.ts` — Slack posting logic (uses config.slackThreadTs)
 - `scripts/slack-app-manifest.yaml` — Reference Slack app configuration

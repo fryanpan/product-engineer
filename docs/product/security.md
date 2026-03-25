@@ -21,22 +21,22 @@ graph TB
     end
 
     subgraph "Cloudflare Containers - Private Network"
-        OrcDO[Orchestrator DO]
-        OrcContainer[Orchestrator Container<br/>Slack Socket Mode]
-        TA1[TicketAgent DO #1]
+        ConductorDO[Conductor DO]
+        ConductorContainer[Conductor Container<br/>Slack Socket Mode]
+        TA1[TaskAgent DO #1]
         TA1C[Agent Container #1]
-        TA2[TicketAgent DO #2]
+        TA2[TaskAgent DO #2]
         TA2C[Agent Container #2]
     end
 
     Linear -->|HMAC-SHA256| Worker
     GitHub -->|HMAC-SHA256| Worker
-    Worker -->|Internal| OrcDO
-    OrcContainer <-->|Socket Mode WSS| SlackAPI
-    OrcContainer -->|X-Internal-Key| Worker
-    OrcDO -->|getTcpPort| OrcContainer
-    OrcDO -->|DO RPC| TA1
-    OrcDO -->|DO RPC| TA2
+    Worker -->|Internal| ConductorDO
+    ConductorContainer <-->|Socket Mode WSS| SlackAPI
+    ConductorContainer -->|X-Internal-Key| Worker
+    ConductorDO -->|getTcpPort| ConductorContainer
+    ConductorDO -->|DO RPC| TA1
+    ConductorDO -->|DO RPC| TA2
     TA1 -->|getTcpPort + X-Internal-Key| TA1C
     TA2 -->|getTcpPort + X-Internal-Key| TA2C
     TA1C -->|X-Internal-Key| Worker
@@ -47,7 +47,7 @@ graph TB
 
 ### Slack Message Flow
 
-**Inbound (user → agent):** Slack → Socket Mode WSS → Orchestrator Container → Worker → Orchestrator DO → TicketAgent DO → Agent Container → SDK session continuation
+**Inbound (user → agent):** Slack → Socket Mode WSS → Conductor Container → Worker → Conductor DO → TaskAgent DO → Agent Container → SDK session continuation
 
 **Outbound (agent → user):** Agent SDK calls `notify_slack`/`ask_question` tools → direct HTTP POST to Slack Web API → message appears in product channel thread
 
@@ -58,7 +58,7 @@ Cloudflare Containers provide the strongest security layer — **containers are 
 | Property | Detail |
 |----------|--------|
 | **Network isolation** | Container ports are not publicly routable. Only the parent DO can reach the container via `getTcpPort()` |
-| **Per-ticket isolation** | Each ticket gets its own TicketAgent DO + container instance. No shared state between tickets |
+| **Per-task isolation** | Each task gets its own TaskAgent DO + container instance. No shared state between tasks |
 | **Automatic cleanup** | Containers sleep after 2 hours of inactivity (`sleepAfter: "2h"`) |
 | **Internet access** | Containers CAN make outbound requests (needed for Slack API, GitHub API, MCP servers) |
 
@@ -84,9 +84,9 @@ All Worker endpoints that accept requests from containers or external clients us
 | Endpoint | Auth Method | Who Calls It |
 |----------|-------------|--------------|
 | `POST /api/dispatch` | `X-API-Key` header, timing-safe comparison against `API_KEY` | External programmatic triggers |
-| `POST /api/internal/slack-event` | `X-Internal-Key` header, timing-safe against `SLACK_APP_TOKEN` | Orchestrator container (Socket Mode) |
+| `POST /api/internal/slack-event` | `X-Internal-Key` header, timing-safe against `SLACK_APP_TOKEN` | Conductor container (Socket Mode) |
 | `POST /api/internal/status` | `X-Internal-Key` header, timing-safe against `API_KEY` | Agent containers (status updates) |
-| `GET /api/orchestrator/tickets` | `X-API-Key` header, timing-safe against `API_KEY` | Admin/debugging |
+| `GET /api/conductor/tasks` | `X-API-Key` header, timing-safe against `API_KEY` | Admin/debugging |
 
 The timing-safe comparison uses `crypto.subtle.timingSafeEqual()` to prevent timing side-channel attacks.
 
@@ -109,21 +109,21 @@ This mitigates prompt injection by clearly separating instructions from data in 
 | Control | Location | Detail |
 |---------|----------|--------|
 | **Request size limit** | Worker middleware | 1MB max body size via `Content-Length` header check. Returns 413 |
-| **Ticket ID sanitization** | Orchestrator DO | Truncated to 128 chars, non-alphanumeric chars replaced with `_` |
+| **Task ID sanitization** | Conductor DO | Truncated to 128 chars, non-alphanumeric chars replaced with `_` |
 | **Repo name validation** | Agent container | Regex check `^[a-zA-Z0-9._-]+$` before use in `git clone` path |
-| **Event type filtering** | Orchestrator DO | Only `app_mention` Slack events create new tickets; thread replies route to existing tickets only |
+| **Event type filtering** | Conductor DO | Only `app_mention` Slack events create new tasks; thread replies route to existing tasks only |
 
 ### Cold Start Resilience
 
-When the Orchestrator routes an event to a TicketAgent whose container isn't ready, it retries with exponential backoff (2s, 4s, 6s — 3 attempts). This prevents silent event loss on container cold starts.
+When the Conductor routes an event to a TaskAgent whose container isn't ready, it retries with exponential backoff (2s, 4s, 6s — 3 attempts). This prevents silent event loss on container cold starts.
 
 ## Layer 4: Observability
 
 | Tool | Scope |
 |------|-------|
-| **Sentry** | Worker (`@sentry/cloudflare`), Orchestrator container (`@sentry/bun`), Agent container (`@sentry/bun`). DSN injected via env var |
-| **Console logging** | Structured `[Agent]`, `[Orchestrator]`, `[TicketAgent]` prefixed logs. Secret binding names redacted |
-| **Health endpoints** | `/health` on Worker, Orchestrator DO, TicketAgent DO, and Agent container. Minimal info returned (no product/ticket data) |
+| **Sentry** | Worker (`@sentry/cloudflare`), Conductor container (`@sentry/bun`), Agent container (`@sentry/bun`). DSN injected via env var |
+| **Console logging** | Structured `[Agent]`, `[Conductor]`, `[TaskAgent]` prefixed logs. Secret binding names redacted |
+| **Health endpoints** | `/health` on Worker, Conductor DO, TaskAgent DO, and Agent container. Minimal info returned (no product/task data) |
 
 ## Accepted Risks
 
@@ -149,7 +149,7 @@ These are known risks we've evaluated and accepted, with mitigations noted:
 
 **Risk:** Agent containers have full outbound internet access, which means a compromised agent could exfiltrate data to external servers.
 
-**Mitigation:** Per-ticket isolation limits the blast radius (one ticket's agent can't access another's data). GitHub tokens are per-product with minimal scopes. The agent only has access to the repos listed in its product config.
+**Mitigation:** Per-task isolation limits the blast radius (one task's agent can't access another's data). GitHub tokens are per-product with minimal scopes. The agent only has access to the repos listed in its product config.
 
 **Alternative considered:** `enableInternet: false` with Worker-based proxy for all outbound traffic. Rejected as too much work — the agent needs internet for MCP servers, Slack API, and GitHub API. A proxy would require reimplementing all API clients.
 
@@ -182,19 +182,19 @@ These are known risks we've evaluated and accepted, with mitigations noted:
 | Linear webhook HMAC verification | **Implemented** | `api/src/linear-webhook.ts` |
 | GitHub webhook HMAC verification | **Implemented** | `api/src/github-webhook.ts` |
 | Worker endpoint timing-safe auth | **Implemented** | `api/src/index.ts` |
-| Agent container auth (defense-in-depth) | **Implemented** | `agent/src/server.ts`, `api/src/ticket-agent.ts` |
+| Agent container auth (defense-in-depth) | **Implemented** | `agent/src/server.ts`, `api/src/task-agent.ts` |
 | Request body size limit (1MB) | **Implemented** | `api/src/index.ts` middleware |
-| Ticket ID sanitization | **Implemented** | `api/src/orchestrator.ts` |
+| Task ID sanitization | **Implemented** | `api/src/conductor.ts` |
 | Repo name validation | **Implemented** | `agent/src/server.ts` |
 | Untrusted content delimiters | **Implemented** | `agent/src/prompt.ts` |
-| Slack event type filtering | **Implemented** | `api/src/orchestrator.ts` |
-| Cold start retry with backoff | **Implemented** | `api/src/orchestrator.ts` |
-| Sentry error tracking | **Implemented** | Worker, orchestrator container, agent container |
+| Slack event type filtering | **Implemented** | `api/src/conductor.ts` |
+| Cold start retry with backoff | **Implemented** | `api/src/conductor.ts` |
+| Sentry error tracking | **Implemented** | Worker, conductor container, agent container |
 | Health endpoint info minimization | **Implemented** | `agent/src/server.ts` |
-| Secret binding name redaction | **Implemented** | `api/src/ticket-agent.ts` |
+| Secret binding name redaction | **Implemented** | `api/src/task-agent.ts` |
 | Empty signature crash protection | **Implemented** | Both webhook handlers |
 | Fail-closed on missing webhook secret | **Implemented** | Both webhook handlers |
 | Per-product secret scoping (GitHub) | **Implemented** | `api/src/registry.ts` |
 | Conditional MCP server inclusion | **Implemented** | `agent/src/mcp.ts` |
-| GH_TOKEN headless auth (no .netrc for gh) | **Implemented** | `api/src/ticket-agent.ts` |
+| GH_TOKEN headless auth (no .netrc for gh) | **Implemented** | `api/src/task-agent.ts` |
 | MCP auth via env vars (not CLI args) | **Implemented** | `agent/src/mcp.ts` |

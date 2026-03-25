@@ -135,7 +135,7 @@ Call `update_task_status` at every phase transition:
 
 ## Communication
 
-- Use `update_task_status` at **every state transition** (updates orchestrator, Linear, and Slack header automatically)
+- Use `update_task_status` at **every state transition** (updates conductor, Linear, and Slack header automatically)
 - Use `notify_slack` for progress updates — but always combine with other work in the same turn
 - Use `ask_question` when you need clarification (reply comes as your next message)
 - Target: 3-5 Slack notifications per session max (start, PR, merge). Not 10+.

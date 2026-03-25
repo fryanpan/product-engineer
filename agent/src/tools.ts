@@ -2,7 +2,7 @@
  * Generic communication tools for the Product Engineer agent.
  *
  * These supplement Claude Code's built-in tools (file edit, bash, git).
- * Tools are product-agnostic — they use config values injected by the TicketAgent DO.
+ * Tools are product-agnostic — they use config values injected by the TaskAgent DO.
  */
 
 import { tool, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
@@ -44,7 +44,7 @@ export async function persistSlackThreadTs(
           "X-Internal-Key": config.apiKey,
         },
         body: JSON.stringify({
-          ticketUUID: config.ticketUUID,
+          taskUUID: config.taskUUID,
           slack_thread_ts: ts,
         }),
       });
@@ -103,13 +103,13 @@ export function createTools(config: AgentConfig) {
   const statusUpdater = new StatusUpdater({
     workerUrl: config.workerUrl,
     apiKey: config.apiKey,
-    ticketUUID: config.ticketUUID,
+    taskUUID: config.taskUUID,
     slackBotToken: config.slackBotToken,
     slackChannel: config.slackChannel,
     slackThreadTs: config.slackThreadTs,
     linearAppToken: config.linearAppToken,
-    ticketIdentifier: config.ticketIdentifier,
-    ticketTitle: config.ticketTitle,
+    taskIdentifier: config.taskIdentifier,
+    taskTitle: config.taskTitle,
   });
 
   const notifySlack = tool(
@@ -159,9 +159,9 @@ export function createTools(config: AgentConfig) {
         .describe("ID of the created or referenced Linear ticket"),
     },
     async ({ status, reason, pr_url, linear_ticket_id }) => {
-      const ticketId = linear_ticket_id || config.ticketUUID;
-      console.log(`[Agent] Status update: ${status}`, JSON.stringify({ reason, pr_url, ticketId }));
-      await statusUpdater.updateAll(status, { pr_url, linearTicketId: ticketId });
+      const taskId = linear_ticket_id || config.taskUUID;
+      console.log(`[Agent] Status update: ${status}`, JSON.stringify({ reason, pr_url, taskId }));
+      await statusUpdater.updateAll(status, { pr_url, linearTicketId: taskId });
       return { content: [{ type: "text" as const, text: `Task status updated to ${status}` }] };
     },
   );
@@ -188,9 +188,9 @@ export function createTools(config: AgentConfig) {
           return { content: [{ type: "text" as const, text: `Failed to list transcripts: ${res.status}` }] };
         }
 
-        const data = (await res.json()) as { transcripts: Array<{ ticketUUID: string; ticketId: string; r2Key: string; uploadedAt: string; product: string; status: string }> };
+        const data = (await res.json()) as { transcripts: Array<{ taskUUID: string; taskId: string; r2Key: string; uploadedAt: string; product: string; status: string }> };
         const transcriptList = data.transcripts
-          .map((t: { ticketId: string; product: string; status: string; r2Key: string }) => `- ${t.ticketId} (${t.product}, ${t.status}) — ${t.r2Key}`)
+          .map((t: { taskId: string; product: string; status: string; r2Key: string }) => `- ${t.taskId} (${t.product}, ${t.status}) — ${t.r2Key}`)
           .join("\n");
 
         return {
@@ -340,7 +340,7 @@ export function createTools(config: AgentConfig) {
               "X-Internal-Key": config.apiKey,
             },
             body: JSON.stringify({
-              ticketUUID: config.ticketUUID,
+              taskUUID: config.taskUUID,
               status: "merged",
             }),
           });
@@ -365,7 +365,7 @@ export function createTools(config: AgentConfig) {
         const params = new URLSearchParams();
         if (product_filter) params.append("product", product_filter);
 
-        const res = await fetch(`${config.workerUrl}/api/orchestrator/status`, {
+        const res = await fetch(`${config.workerUrl}/api/conductor/status`, {
           headers: { "X-API-Key": config.apiKey },
         });
         if (!res.ok) {
@@ -373,17 +373,17 @@ export function createTools(config: AgentConfig) {
         }
         const data = await res.json() as {
           activeAgents?: Array<{
-            ticket_uuid: string; ticket_id: string; product: string;
+            task_uuid: string; task_id: string; product: string;
             status: string; agent_message: string | null; pr_url: string | null;
             last_heartbeat: string | null;
           }>;
-          tickets?: Array<{
-            ticket_uuid: string; ticket_id: string; product: string;
+          tasks?: Array<{
+            task_uuid: string; task_id: string; product: string;
             status: string; agent_message: string | null; pr_url: string | null;
           }>;
         };
 
-        let agents = data.activeAgents || data.tickets || [];
+        let agents = data.activeAgents || data.tasks || [];
         if (status_filter) {
           agents = agents.filter(a => a.status === status_filter);
         }
@@ -396,7 +396,7 @@ export function createTools(config: AgentConfig) {
         }
 
         const summary = agents.map(a =>
-          `- **${a.product}** [${a.status}] ${a.ticket_id || a.ticket_uuid}: ${(a.agent_message || "no recent message").slice(0, 100)}${a.pr_url ? ` | PR: ${a.pr_url}` : ""}`
+          `- **${a.product}** [${a.status}] ${a.task_id || a.task_uuid}: ${(a.agent_message || "no recent message").slice(0, 100)}${a.pr_url ? ` | PR: ${a.pr_url}` : ""}`
         ).join("\n");
 
         return { content: [{ type: "text" as const, text: `Tasks (${agents.length}):\n\n${summary}` }] };
@@ -408,16 +408,16 @@ export function createTools(config: AgentConfig) {
 
   const spawnTask = tool(
     "spawn_task",
-    "Spawn a ticket agent to work on a task. If a ticketUUID is provided (e.g., from a ticket_created event), the agent works on that existing ticket. Otherwise a new ticket is created.",
+    "Spawn a task agent to work on a task. If a taskUUID is provided (e.g., from a task_created event), the agent works on that existing task. Otherwise a new task is created.",
     {
       product: z.string().describe("Product slug (e.g., 'staging-test-app')"),
       description: z.string().describe("Task description — what should be done"),
-      ticketUUID: z.string().optional().describe("Existing ticket UUID to spawn an agent for (from event payload). Omit to create a new ticket."),
+      taskUUID: z.string().optional().describe("Existing task UUID to spawn an agent for (from event payload). Omit to create a new task."),
     },
-    async ({ product, description, ticketUUID: existingUUID }) => {
+    async ({ product, description, taskUUID: existingUUID }) => {
       try {
-        const ticketUUID = existingUUID || `conductor-task-${Date.now()}`;
-        const res = await fetch(`${config.workerUrl}/api/project-agent/spawn-task`, {
+        const taskUUID = existingUUID || `conductor-task-${Date.now()}`;
+        const res = await fetch(`${config.workerUrl}/api/project-lead/spawn-task`, {
           method: "POST",
           headers: {
             "X-Internal-Key": config.apiKey,
@@ -425,9 +425,9 @@ export function createTools(config: AgentConfig) {
           },
           body: JSON.stringify({
             product,
-            ticketUUID,
-            ticketTitle: description.slice(0, 80),
-            ticketDescription: description,
+            taskUUID,
+            taskTitle: description.slice(0, 80),
+            taskDescription: description,
             mode: "coding",
           }),
         });
@@ -435,8 +435,8 @@ export function createTools(config: AgentConfig) {
           const text = await res.text();
           return { content: [{ type: "text" as const, text: `Failed to spawn task: ${res.status} ${text}` }] };
         }
-        const data = await res.json() as { ticketUUID?: string };
-        return { content: [{ type: "text" as const, text: `Task spawned for ${product}: ${data.ticketUUID || ticketUUID}` }] };
+        const data = await res.json() as { taskUUID?: string };
+        return { content: [{ type: "text" as const, text: `Task spawned for ${product}: ${data.taskUUID || taskUUID}` }] };
       } catch (err) {
         return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
       }
@@ -452,7 +452,7 @@ export function createTools(config: AgentConfig) {
     },
     async ({ product, message }) => {
       try {
-        const res = await fetch(`${config.workerUrl}/api/project-agent/relay-to-project`, {
+        const res = await fetch(`${config.workerUrl}/api/project-lead/relay-to-project`, {
           method: "POST",
           headers: {
             "X-Internal-Key": config.apiKey,
@@ -463,7 +463,7 @@ export function createTools(config: AgentConfig) {
             event: {
               type: "conductor_message",
               source: "internal",
-              ticketUUID: `conductor-relay-${Date.now()}`,
+              taskUUID: `conductor-relay-${Date.now()}`,
               product,
               payload: { text: message, from: "conductor" },
             },
