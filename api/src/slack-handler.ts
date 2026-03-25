@@ -313,7 +313,7 @@ async function handleLinearProductMessage(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${linearToken}`,
+      Authorization: linearToken.startsWith("lin_api_") ? linearToken : `Bearer ${linearToken}`,
     },
     body: JSON.stringify({
       query: `query($teamId: String!) {
@@ -348,7 +348,7 @@ async function handleLinearProductMessage(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${linearToken}`,
+      Authorization: linearToken.startsWith("lin_api_") ? linearToken : `Bearer ${linearToken}`,
     },
     body: JSON.stringify({
       query: `mutation($input: IssueCreateInput!) {
