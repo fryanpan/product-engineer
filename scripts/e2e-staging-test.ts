@@ -491,8 +491,9 @@ async function step2_verifyTicketCreated(ctx: TestContext): Promise<void> {
   while (Date.now() < deadline) {
     try {
       const tickets = await apiCall<{ tasks: TaskRow[] }>("/api/conductor/tickets");
+      // Match by slack_thread_ts (reliable) or title containing test ID (fallback)
       const ticket = tickets.tasks.find(
-        (t) => t.title?.includes(ctx.testId),
+        (t) => t.slack_thread_ts === ctx.slackThreadTs || t.title?.includes(ctx.testId),
       );
 
       if (ticket) {
