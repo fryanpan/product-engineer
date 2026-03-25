@@ -106,7 +106,7 @@ export class TaskManager {
     const task = this.getTask(taskUUID);
     if (!task) throw new Error(`Task ${taskUUID} not found`);
 
-    if (this.isTerminal(taskUUID)) {
+    if (this.isTerminalStatus(task.status)) {
       console.log(`[TaskManager] Ignoring update for terminal task ${taskUUID}`);
       return task;
     }
@@ -159,7 +159,7 @@ export class TaskManager {
   async spawnAgent(taskUUID: string, config: SpawnConfig): Promise<void> {
     const task = this.getTask(taskUUID);
     if (!task) throw new Error(`Task ${taskUUID} not found`);
-    if (this.isTerminal(taskUUID)) throw new Error(`Task ${taskUUID} is terminal`);
+    if (this.isTerminalStatus(task.status)) throw new Error(`Task ${taskUUID} is terminal`);
 
     const isRespawn = task.status === "spawning" || task.status === "active";
 
@@ -396,9 +396,10 @@ export class TaskManager {
   }
 
   async cleanupInactive(): Promise<void> {
-    const terminalList = TERMINAL_STATUSES.map(s => `'${s}'`).join(", ");
+    const placeholders = TERMINAL_STATUSES.map(() => "?").join(", ");
     const inactive = this.sql.exec(
-      `SELECT task_uuid FROM tasks WHERE agent_active = 1 AND status IN (${terminalList})`,
+      `SELECT task_uuid FROM tasks WHERE agent_active = 1 AND status IN (${placeholders})`,
+      ...TERMINAL_STATUSES,
     ).toArray() as { task_uuid: string }[];
 
     for (const { task_uuid } of inactive) {

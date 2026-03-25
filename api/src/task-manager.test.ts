@@ -55,8 +55,15 @@ function createMockSql() {
 
       // SELECT task_uuid FROM tasks WHERE agent_active = 1 AND status IN (...)
       if (trimmed.includes("agent_active = 1") && trimmed.includes("status IN")) {
-        const statusMatch = trimmed.match(/IN \(([^)]+)\)/);
-        const statuses = statusMatch ? statusMatch[1].split(",").map(s => s.trim().replace(/'/g, "")) : [];
+        // Support both parameterized (?-based) and literal ('value'-based) IN clauses
+        const inMatch = trimmed.match(/IN \(([^)]+)\)/);
+        let statuses: string[];
+        if (inMatch && inMatch[1].includes("?")) {
+          // Parameterized: statuses come from params
+          statuses = params.map(p => String(p));
+        } else {
+          statuses = inMatch ? inMatch[1].split(",").map(s => s.trim().replace(/'/g, "")) : [];
+        }
         const matching = [...tasks.values()].filter(
           t => t.agent_active === 1 && statuses.includes(t.status as string),
         );

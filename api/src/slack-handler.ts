@@ -258,6 +258,207 @@ async function handleStatusCommand(
 }
 
 // ---------------------------------------------------------------------------
+// Linear product message handler — extracted from handleSlackEvent
+// ---------------------------------------------------------------------------
+
+async function handleLinearProductMessage(
+  slackEvent: { text?: string; user?: string; channel?: string; thread_ts?: string; ts?: string },
+  product: string,
+  productConfig: ProductConfig,
+  rawText: string,
+  slackThreadTs: string | undefined,
+  deps: SlackHandlerDeps,
+): Promise<Response> {
+  const { sql, env, taskManager, handleTaskReview } = deps;
+  const slackBotToken = (env.SLACK_BOT_TOKEN as string) || "";
+  const projectName = productConfig.triggers!.linear!.project_name!;
+
+  // Load settings for Linear API
+  const settings = sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
+  const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
+  const teamId: string | undefined = settingsMap.linear_team_id;
+  const appUserId: string | undefined = settingsMap.linear_app_user_id;
+  const linearToken = getLinearAppToken(sql, env);
+
+  if (!teamId || !linearToken) {
+    await postSlackMessage(
+      slackBotToken,
+      slackEvent.channel || "",
+      `❌ Linear integration not configured (missing team ID or token).`,
+      slackThreadTs || "",
+    );
+    return Response.json({ error: "linear not configured" }, { status: 500 });
+  }
+
+  // Use LLM to generate a structured title, description, and taskId
+  let title: string;
+  let description: string;
+  let taskId: string | undefined;
+  try {
+    const generated = await generateTaskSummary(rawText, product, slackEvent.user || "unknown", env, sql);
+    title = generated.title;
+    description = generated.description;
+    taskId = generated.taskId || undefined;
+  } catch (err) {
+    console.error("[slack-handler] LLM title generation failed, using fallback:", err);
+    const normalized = rawText.replace(/\s+/g, " ").trim();
+    title = normalized
+      ? (normalized.length <= 200 ? normalized : normalized.slice(0, 197) + "...")
+      : "Slack request (no description)";
+    description = `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`;
+  }
+
+  // Look up the Linear project ID by name
+  const projectRes = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${linearToken}`,
+    },
+    body: JSON.stringify({
+      query: `query($teamId: String!) {
+        team(id: $teamId) {
+          projects { nodes { id name } }
+        }
+      }`,
+      variables: { teamId },
+    }),
+  });
+
+  let projectId: string | null = null;
+  if (projectRes.ok) {
+    const projectData = await projectRes.json() as {
+      data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } };
+      errors?: Array<{ message: string }>;
+    };
+    if (projectData.errors) {
+      console.error(`[slack-handler] Linear project lookup errors:`, JSON.stringify(projectData.errors));
+    }
+    const normalizedName = projectName.toLowerCase();
+    const projectList = projectData.data?.team?.projects?.nodes || [];
+    projectId = projectList.find(p => p.name.toLowerCase() === normalizedName)?.id || null;
+    console.log(`[slack-handler] Project lookup: name="${projectName}" found=${!!projectId} (${projectList.length} projects in team)`);
+  } else {
+    console.error(`[slack-handler] Linear project lookup failed: ${projectRes.status} ${await projectRes.text().catch(() => "")}`);
+  }
+
+  // Create the Linear issue
+  console.log(`[slack-handler] Creating Linear issue: team=${teamId} project=${projectId} assignee=${appUserId} title="${title}"`);
+  const createRes = await fetch("https://api.linear.app/graphql", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${linearToken}`,
+    },
+    body: JSON.stringify({
+      query: `mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          success
+          issue { id identifier url }
+        }
+      }`,
+      variables: {
+        input: {
+          teamId,
+          title,
+          description,
+          ...(projectId && { projectId }),
+          ...(appUserId && { assigneeId: appUserId }),
+        },
+      },
+    }),
+  });
+
+  if (!createRes.ok) {
+    const errText = await createRes.text();
+    console.error(`[slack-handler] Failed to create Linear issue: ${createRes.status} ${errText}`);
+    await postSlackMessage(
+      slackBotToken,
+      slackEvent.channel || "",
+      `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+      slackThreadTs || "",
+    );
+    return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+  }
+
+  const createData = await createRes.json() as {
+    data?: { issueCreate?: { success: boolean; issue?: { id: string; identifier: string; url: string } } }
+  };
+  const issue = createData.data?.issueCreate?.issue;
+
+  if (!issue) {
+    console.error("[slack-handler] Linear issueCreate returned no issue:", JSON.stringify(createData));
+    await postSlackMessage(
+      slackBotToken,
+      slackEvent.channel || "",
+      `❌ Failed to create Linear ticket. Please try again or create one manually.`,
+      slackThreadTs || "",
+    );
+    return Response.json({ error: "linear issue creation failed" }, { status: 500 });
+  }
+
+  console.log(`[slack-handler] Created Linear issue ${issue.identifier} (${issue.id}) from Slack message`);
+
+  // Use user's original thread — no separate bot thread
+  const threadTsToStore = slackThreadTs || null;
+
+  // Store the Slack thread association so the Linear webhook handler can link them.
+  sql.exec(
+    `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
+     VALUES (?, ?, ?)
+     ON CONFLICT(linear_issue_id) DO UPDATE SET
+       slack_thread_ts = excluded.slack_thread_ts,
+       slack_channel = excluded.slack_channel`,
+    issue.id, threadTsToStore, slackEvent.channel || null,
+  );
+
+  // Dispatch task review directly instead of waiting for the Linear webhook roundtrip.
+  const taskEvent: TaskEvent = {
+    type: "task_created",
+    source: "slack",
+    taskUUID: issue.id,
+    product,
+    payload: {
+      id: issue.id,
+      identifier: issue.identifier,
+      title,
+      description: rawText,
+      priority: 3,
+      labels: [],
+    },
+    slackThreadTs: threadTsToStore || undefined,
+    slackChannel: slackEvent.channel || undefined,
+  };
+
+  // Create task in DB before review
+  try {
+    taskManager.createTask({
+      taskUUID: issue.id,
+      product,
+      slackThreadTs: threadTsToStore || undefined,
+      slackChannel: slackEvent.channel || undefined,
+      taskId: issue.identifier,
+      title,
+    });
+  } catch (err) {
+    // Expected for re-delivery or fast webhook race
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("already exists")) {
+      console.warn(`[slack-handler] Unexpected error creating task:`, err);
+    }
+  }
+
+  // Initialize task_metrics row
+  ensureTaskMetrics(sql, issue.id);
+
+  handleTaskReview(taskEvent).catch(err =>
+    console.error("[slack-handler] Direct task review failed:", err)
+  );
+
+  return Response.json({ ok: true, linearIssue: issue.identifier });
+}
+
+// ---------------------------------------------------------------------------
 // Main Slack event handler
 // ---------------------------------------------------------------------------
 
@@ -319,9 +520,9 @@ export async function handleSlackEvent(
   if (slackEvent.thread_ts) {
     console.log(`[slack-handler] Thread reply received: thread_ts=${slackEvent.thread_ts} type=${slackEvent.type} user=${slackEvent.user || "unknown"}`);
     const rows = sql.exec(
-      "SELECT task_uuid, product, status, agent_active FROM tasks WHERE slack_thread_ts = ?",
+      "SELECT task_uuid, product, status, agent_active, session_id, transcript_r2_key FROM tasks WHERE slack_thread_ts = ?",
       slackEvent.thread_ts,
-    ).toArray() as { task_uuid: string; product: string; status: string; agent_active: number }[];
+    ).toArray() as { task_uuid: string; product: string; status: string; agent_active: number; session_id: string | null; transcript_r2_key: string | null }[];
 
     if (rows.length > 0) {
       const task = rows[0];
@@ -339,14 +540,8 @@ export async function handleSlackEvent(
       let resumeSessionId: string | undefined;
       let resumeTranscriptR2Key: string | undefined;
       if (needsRespawn) {
-        const fullTask = sql.exec(
-          "SELECT session_id, transcript_r2_key FROM tasks WHERE task_uuid = ?",
-          task.task_uuid,
-        ).toArray()[0] as { session_id: string | null; transcript_r2_key: string | null } | undefined;
-        if (fullTask) {
-          resumeSessionId = fullTask.session_id || undefined;
-          resumeTranscriptR2Key = fullTask.transcript_r2_key || undefined;
-        }
+        resumeSessionId = task.session_id || undefined;
+        resumeTranscriptR2Key = task.transcript_r2_key || undefined;
         console.log(`[slack-handler] Will respawn for task ${task.task_uuid} (status=${task.status}, agent_active=${task.agent_active}) session=${resumeSessionId || "none"} transcript=${resumeTranscriptR2Key || "none"}`);
       }
 
@@ -466,189 +661,7 @@ export async function handleSlackEvent(
   const hasLinear = !!productConfig.triggers?.linear?.project_name;
 
   if (hasLinear) {
-    // --- Linear path: create Linear issue, use user's thread (no separate bot thread) ---
-
-    const projectName = productConfig.triggers!.linear!.project_name!;
-
-    // Load settings for Linear API
-    const settings = sql.exec("SELECT key, value FROM settings").toArray() as Array<{ key: string; value: string }>;
-    const settingsMap = Object.fromEntries(settings.map(s => [s.key, s.value]));
-    const teamId: string | undefined = settingsMap.linear_team_id;
-    const appUserId: string | undefined = settingsMap.linear_app_user_id;
-    const linearToken = getLinearAppToken(sql, env);
-
-    if (!teamId || !linearToken) {
-      await postSlackMessage(
-        slackBotToken,
-        slackEvent.channel || "",
-        `❌ Linear integration not configured (missing team ID or token).`,
-        slackThreadTs || "",
-      );
-      return Response.json({ error: "linear not configured" }, { status: 500 });
-    }
-
-    // Use LLM to generate a structured title, description, and taskId
-    let title: string;
-    let description: string;
-    let taskId: string | undefined;
-    try {
-      const generated = await generateTaskSummary(rawText, product, slackEvent.user || "unknown", env, sql);
-      title = generated.title;
-      description = generated.description;
-      taskId = generated.taskId || undefined;
-    } catch (err) {
-      console.error("[slack-handler] LLM title generation failed, using fallback:", err);
-      const normalized = rawText.replace(/\s+/g, " ").trim();
-      title = normalized
-        ? (normalized.length <= 200 ? normalized : normalized.slice(0, 197) + "...")
-        : "Slack request (no description)";
-      description = `**Slack request from <@${slackEvent.user}>:**\n\n${rawText}`;
-    }
-
-    // Look up the Linear project ID by name
-    const projectRes = await fetch("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${linearToken}`,
-      },
-      body: JSON.stringify({
-        query: `query($teamId: String!) {
-          team(id: $teamId) {
-            projects { nodes { id name } }
-          }
-        }`,
-        variables: { teamId },
-      }),
-    });
-
-    let projectId: string | null = null;
-    if (projectRes.ok) {
-      const projectData = await projectRes.json() as {
-        data?: { team?: { projects?: { nodes?: Array<{ id: string; name: string }> } } };
-        errors?: Array<{ message: string }>;
-      };
-      if (projectData.errors) {
-        console.error(`[slack-handler] Linear project lookup errors:`, JSON.stringify(projectData.errors));
-      }
-      const normalizedName = projectName.toLowerCase();
-      const projectList = projectData.data?.team?.projects?.nodes || [];
-      projectId = projectList.find(p => p.name.toLowerCase() === normalizedName)?.id || null;
-      console.log(`[slack-handler] Project lookup: name="${projectName}" found=${!!projectId} (${projectList.length} projects in team)`);
-    } else {
-      console.error(`[slack-handler] Linear project lookup failed: ${projectRes.status} ${await projectRes.text().catch(() => "")}`);
-    }
-
-    // Create the Linear issue
-    console.log(`[slack-handler] Creating Linear issue: team=${teamId} project=${projectId} assignee=${appUserId} title="${title}"`);
-    const createRes = await fetch("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${linearToken}`,
-      },
-      body: JSON.stringify({
-        query: `mutation($input: IssueCreateInput!) {
-          issueCreate(input: $input) {
-            success
-            issue { id identifier url }
-          }
-        }`,
-        variables: {
-          input: {
-            teamId,
-            title,
-            description,
-            ...(projectId && { projectId }),
-            ...(appUserId && { assigneeId: appUserId }),
-          },
-        },
-      }),
-    });
-
-    if (!createRes.ok) {
-      const errText = await createRes.text();
-      console.error(`[slack-handler] Failed to create Linear issue: ${createRes.status} ${errText}`);
-      await postSlackMessage(
-        slackBotToken,
-        slackEvent.channel || "",
-        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
-        slackThreadTs || "",
-      );
-      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
-    }
-
-    const createData = await createRes.json() as {
-      data?: { issueCreate?: { success: boolean; issue?: { id: string; identifier: string; url: string } } }
-    };
-    const issue = createData.data?.issueCreate?.issue;
-
-    if (!issue) {
-      console.error("[slack-handler] Linear issueCreate returned no issue:", JSON.stringify(createData));
-      await postSlackMessage(
-        slackBotToken,
-        slackEvent.channel || "",
-        `❌ Failed to create Linear ticket. Please try again or create one manually.`,
-        slackThreadTs || "",
-      );
-      return Response.json({ error: "linear issue creation failed" }, { status: 500 });
-    }
-
-    console.log(`[slack-handler] Created Linear issue ${issue.identifier} (${issue.id}) from Slack message`);
-
-    // Use user's original thread — no separate bot thread
-    const threadTsToStore = slackThreadTs || null;
-
-    // Store the Slack thread association so the Linear webhook handler can link them.
-    sql.exec(
-      `INSERT INTO slack_thread_map (linear_issue_id, slack_thread_ts, slack_channel)
-       VALUES (?, ?, ?)
-       ON CONFLICT(linear_issue_id) DO UPDATE SET
-         slack_thread_ts = excluded.slack_thread_ts,
-         slack_channel = excluded.slack_channel`,
-      issue.id, threadTsToStore, slackEvent.channel || null,
-    );
-
-    // Dispatch task review directly instead of waiting for the Linear webhook roundtrip.
-    const taskEvent: TaskEvent = {
-      type: "task_created",
-      source: "slack",
-      taskUUID: issue.id,
-      product,
-      payload: {
-        id: issue.id,
-        identifier: issue.identifier,
-        title,
-        description: rawText,
-        priority: 3,
-        labels: [],
-      },
-      slackThreadTs: threadTsToStore || undefined,
-      slackChannel: slackEvent.channel || undefined,
-    };
-
-    // Create task in DB before review
-    try {
-      taskManager.createTask({
-        taskUUID: issue.id,
-        product,
-        slackThreadTs: threadTsToStore || undefined,
-        slackChannel: slackEvent.channel || undefined,
-        taskId: issue.identifier,
-        title,
-      });
-    } catch {
-      // Task already exists (from a fast Linear webhook) — safe to proceed
-    }
-
-    // Initialize task_metrics row
-    ensureTaskMetrics(sql, issue.id);
-
-    handleTaskReview(taskEvent).catch(err =>
-      console.error("[slack-handler] Direct task review failed:", err)
-    );
-
-    return Response.json({ ok: true, linearIssue: issue.identifier });
+    return handleLinearProductMessage(slackEvent, product, productConfig, rawText, slackThreadTs, deps);
   }
 
   // --- No-Linear path: create task record, route to ProjectLead ---
@@ -675,7 +688,13 @@ export async function handleSlackEvent(
       taskId,
       title,
     });
-  } catch { /* Already exists */ }
+  } catch (err) {
+    // Expected for re-delivery or fast webhook race
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("already exists")) {
+      console.warn(`[slack-handler] Unexpected error creating task:`, err);
+    }
+  }
 
   ensureTaskMetrics(sql, taskUUID);
 
