@@ -155,7 +155,7 @@ async function drainBufferedEvents() {
 
   // ProjectLeads use a different drain endpoint than TaskAgents
   const drainUrl = roleConfig.isProjectLead
-    ? `${config.workerUrl}/api/project-agent/drain-events?product=${encodeURIComponent(config.product)}`
+    ? `${config.workerUrl}/api/project-lead/drain-events?product=${encodeURIComponent(config.product)}`
     : `${config.workerUrl}/api/agent/${encodeURIComponent(config.taskUUID)}/drain-events`;
 
   try {

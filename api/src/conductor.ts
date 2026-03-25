@@ -258,8 +258,8 @@ export class Conductor extends Container<Bindings> {
   }
 
   private async handleDynamicRoute(url: URL, request: Request): Promise<Response> {
-    if (url.pathname.startsWith("/ticket-status/")) {
-      const taskUUID = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
+    if (url.pathname.startsWith("/task-status/")) {
+      const taskUUID = decodeURIComponent(url.pathname.slice("/task-status/".length));
       const task = this.taskManager.getTask(taskUUID);
       if (!task) return Response.json({ error: "not found" }, { status: 404 });
       return Response.json({

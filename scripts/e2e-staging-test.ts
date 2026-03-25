@@ -488,7 +488,7 @@ async function step2_verifyTicketCreated(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
+      const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/conductor/tickets");
       const ticket = tickets.tickets.find(
         (t) => t.title?.includes(ctx.testId),
       );
@@ -526,7 +526,7 @@ async function step3_verifyAgentSpawned(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const status = await apiCall<StatusResponse>("/api/orchestrator/status");
+      const status = await apiCall<StatusResponse>("/api/conductor/status");
 
       // Check for direct TicketAgent
       const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
@@ -539,11 +539,11 @@ async function step3_verifyAgentSpawned(ctx: TestContext): Promise<void> {
       try {
         const paStatus = await apiCall<{
           project_agents: Record<string, { sessionActive?: boolean; sessionMessageCount?: number; error?: string }>;
-        }>("/api/project-agent/status?product=staging-test-app");
+        }>("/api/project-lead/status?product=staging-test-app");
 
         const pa = paStatus.project_agents?.["staging-test-app"];
         if (pa?.sessionActive) {
-          const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
+          const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/conductor/tickets");
           const ticket = tickets.tickets.find((t) => t.ticket_uuid === ctx.linearIssueId);
 
           if (ticket && ["reviewing", "active", "spawning"].includes(ticket.status)) {
@@ -692,7 +692,7 @@ async function step6_verifyProjectAgentStatus(): Promise<void> {
   log("step6", "Checking ProjectAgent status endpoint...");
 
   try {
-    const res = await fetch(`${STAGING_URL}/api/project-agent/status`, {
+    const res = await fetch(`${STAGING_URL}/api/project-lead/status`, {
       headers: { "X-Internal-Key": API_KEY! },
     });
 
@@ -839,7 +839,7 @@ async function stepC2_conductorTaskDetails(): Promise<void> {
 
   // First, check if there are any active tasks we can ask about
   try {
-    const status = await apiCall<StatusResponse>("/api/project-agent/v3/status");
+    const status = await apiCall<StatusResponse>("/api/project-lead/v3/status");
     const activeAgents = status.activeAgents || [];
 
     if (activeAgents.length === 0) {
@@ -957,7 +957,7 @@ async function step7_waitForPR(ctx: TestContext): Promise<void> {
 
   while (Date.now() < deadline) {
     try {
-      const status = await apiCall<StatusResponse>("/api/orchestrator/status");
+      const status = await apiCall<StatusResponse>("/api/conductor/status");
       const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
 
       if (agent?.pr_url) {
@@ -1111,7 +1111,7 @@ async function step10_verifyAgentTerminated(ctx: TestContext): Promise<void> {
   await sleep(5000);
 
   try {
-    const status = await apiCall<StatusResponse>("/api/orchestrator/status");
+    const status = await apiCall<StatusResponse>("/api/conductor/status");
     const agent = status.activeAgents.find((a) => a.ticket_uuid === ctx.linearIssueId);
 
     if (!agent) {
@@ -1131,7 +1131,7 @@ async function step10_verifyAgentTerminated(ctx: TestContext): Promise<void> {
 
   // Verify ticket status in DB
   try {
-    const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/orchestrator/tickets");
+    const tickets = await apiCall<{ tickets: TicketRow[] }>("/api/conductor/tickets");
     const ticket = tickets.tickets.find((t) => t.ticket_uuid === ctx.linearIssueId);
     if (ticket) {
       log("step10", `Ticket final status: ${ticket.status}, agent_active: ${ticket.agent_active}`);

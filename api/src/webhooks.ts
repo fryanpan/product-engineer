@@ -182,7 +182,7 @@ linearWebhook.post("/", async (c) => {
 
     // Check if we're tracking this task
     const statusRes = await conductor.fetch(
-      new Request(`http://internal/ticket-status/${encodeURIComponent(commentData.issue.id)}`)
+      new Request(`http://internal/task-status/${encodeURIComponent(commentData.issue.id)}`)
     );
 
     if (!statusRes.ok) {

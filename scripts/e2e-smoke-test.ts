@@ -96,7 +96,7 @@ async function testWorkerHealth(baseUrl: string): Promise<{ message: string; det
 async function testOrchestratorStatus(baseUrl: string): Promise<{ message: string; details?: unknown }> {
   if (!API_KEY) throw new Error("API_KEY not set");
 
-  const res = await fetch(`${baseUrl}/api/orchestrator/status`, {
+  const res = await fetch(`${baseUrl}/api/conductor/status`, {
     headers: { "X-API-Key": API_KEY },
   });
 
@@ -182,7 +182,7 @@ async function testGitHubConnectivity(repo: string): Promise<{ message: string; 
 async function testProjectAgentStatus(baseUrl: string): Promise<{ message: string; details?: unknown }> {
   if (!API_KEY) throw new Error("API_KEY not set");
 
-  const res = await fetch(`${baseUrl}/api/project-agent/status`, {
+  const res = await fetch(`${baseUrl}/api/project-lead/status`, {
     headers: { "X-Internal-Key": API_KEY },
   });
 

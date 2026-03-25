@@ -274,14 +274,14 @@ app.get("/api/transcripts/:r2Key", async (c) => {
 });
 
 // Internal: check conductor ticket state (used by agent auto-resume)
-app.get("/api/conductor/ticket-status/:taskUUID", async (c) => {
+app.get("/api/conductor/task-status/:taskUUID", async (c) => {
   const key = c.req.header("X-Internal-Key");
   if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
   const taskUUID = c.req.param("taskUUID");
   const conductor = getConductor(c.env);
-  return conductor.fetch(new Request(`http://internal/ticket-status/${encodeURIComponent(taskUUID)}`));
+  return conductor.fetch(new Request(`http://internal/task-status/${encodeURIComponent(taskUUID)}`));
 });
 
 // Internal: drain buffered events from a ticket agent (called by agent on session start)

@@ -200,7 +200,7 @@ describe("AgentLifecycle", () => {
       lifecycle.phoneHome("test_message");
 
       expect(fetchCalls.length).toBe(1);
-      expect(fetchCalls[0].url).toBe("https://test.worker/api/orchestrator/heartbeat");
+      expect(fetchCalls[0].url).toBe("https://test.worker/api/conductor/heartbeat");
       expect(fetchCalls[0].init.method).toBe("POST");
 
       const headers = fetchCalls[0].init.headers as Record<string, string>;

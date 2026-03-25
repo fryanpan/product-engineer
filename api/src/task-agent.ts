@@ -101,7 +101,7 @@ export class TaskAgent extends Container<Bindings> {
         const conductorId = this.env.CONDUCTOR.idFromName("main");
         const conductorStub = this.env.CONDUCTOR.get(conductorId);
         const statusRes = await conductorStub.fetch(
-          new Request(`http://internal/ticket-status/${encodeURIComponent(config.taskUUID)}`)
+          new Request(`http://internal/task-status/${encodeURIComponent(config.taskUUID)}`)
         );
         if (statusRes.ok) {
           const status = await statusRes.json<{ agent_active: number; status: string }>();

@@ -78,10 +78,10 @@ export class AgentLifecycle {
 
   // ── Phone-home ─────────────────────────────────────────────────────────
 
-  /** Send a heartbeat/log message to the orchestrator (fire-and-forget). */
+  /** Send a heartbeat/log message to the conductor (fire-and-forget). */
   phoneHome(message: string): void {
     console.log(`[Agent] phoneHome: ${message}`);
-    fetch(`${this.config.workerUrl}/api/orchestrator/heartbeat`, {
+    fetch(`${this.config.workerUrl}/api/conductor/heartbeat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -272,7 +272,7 @@ export class AgentLifecycle {
       if (this.state.sessionStatus === "idle") return;
 
       // Send heartbeat to orchestrator for monitoring
-      fetch(`${this.config.workerUrl}/api/orchestrator/heartbeat`, {
+      fetch(`${this.config.workerUrl}/api/conductor/heartbeat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

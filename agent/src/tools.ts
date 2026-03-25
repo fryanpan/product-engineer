@@ -365,7 +365,7 @@ export function createTools(config: AgentConfig) {
         const params = new URLSearchParams();
         if (product_filter) params.append("product", product_filter);
 
-        const res = await fetch(`${config.workerUrl}/api/orchestrator/status`, {
+        const res = await fetch(`${config.workerUrl}/api/conductor/status`, {
           headers: { "X-API-Key": config.apiKey },
         });
         if (!res.ok) {
@@ -417,7 +417,7 @@ export function createTools(config: AgentConfig) {
     async ({ product, description, taskUUID: existingUUID }) => {
       try {
         const taskUUID = existingUUID || `conductor-task-${Date.now()}`;
-        const res = await fetch(`${config.workerUrl}/api/project-agent/spawn-task`, {
+        const res = await fetch(`${config.workerUrl}/api/project-lead/spawn-task`, {
           method: "POST",
           headers: {
             "X-Internal-Key": config.apiKey,
@@ -452,7 +452,7 @@ export function createTools(config: AgentConfig) {
     },
     async ({ product, message }) => {
       try {
-        const res = await fetch(`${config.workerUrl}/api/project-agent/relay-to-project`, {
+        const res = await fetch(`${config.workerUrl}/api/project-lead/relay-to-project`, {
           method: "POST",
           headers: {
             "X-Internal-Key": config.apiKey,

@@ -209,8 +209,8 @@ describe("linear webhook handler", () => {
           return Response.json({ ok: true });
         }
 
-        if (url.pathname.startsWith("/ticket-status/")) {
-          const ticketId = decodeURIComponent(url.pathname.slice("/ticket-status/".length));
+        if (url.pathname.startsWith("/task-status/")) {
+          const ticketId = decodeURIComponent(url.pathname.slice("/task-status/".length));
           if (ticketId === "tracked-issue") {
             return Response.json({ status: "in_progress", product: "test-app", agent_active: 1 });
           }
