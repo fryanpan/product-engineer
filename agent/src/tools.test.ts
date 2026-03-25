@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from "bun:test";
 
 // Mock the agent SDK before importing tools.ts
 // The `tool` function captures the handler so we can invoke it directly in tests.
@@ -144,10 +144,13 @@ function getToolHandler(config: AgentConfig, toolName: string): Function {
 }
 
 describe("update_task_status", () => {
-  const originalFetch = globalThis.fetch;
+  let fetchSpy: ReturnType<typeof spyOn> | null = null;
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    if (fetchSpy) {
+      fetchSpy.mockRestore();
+      fetchSpy = null;
+    }
   });
 
   function mockFetchResponses(
@@ -157,14 +160,14 @@ describe("update_task_status", () => {
     }>,
   ) {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       calls.push({ url: urlStr, init });
       for (const h of handlers) {
         if (h.match(urlStr, init)) return h.response();
       }
       return new Response("Not found", { status: 404 });
-    }) as any;
+    }) as any);
     return calls;
   }
 
@@ -210,7 +213,7 @@ describe("update_task_status", () => {
       const config = makeConfig({ linearAppToken: "lin-test", taskUUID: "ticket-uuid-123" });
       const handler = getToolHandler(config, "update_task_status");
 
-      globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === "string" ? url : url.toString();
         if (urlStr.includes("/api/internal/status")) {
           return new Response(null, { status: 200 });
@@ -256,7 +259,7 @@ describe("update_task_status", () => {
           }
         }
         return new Response("Not found", { status: 404 });
-      }) as any;
+      }) as any);
 
       await handler({ status });
       expect<string | null>(queriedStateName).toBe(expectedLinearState);
@@ -271,7 +274,7 @@ describe("update_task_status", () => {
     let linearMutationCalled = false;
     let mutationVariables: any = null;
 
-    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("/api/internal/status")) {
         return new Response(null, { status: 200 });
@@ -314,7 +317,7 @@ describe("update_task_status", () => {
         }
       }
       return new Response("Not found", { status: 404 });
-    }) as any;
+    }) as any);
 
     await handler({ status: "merged" });
 
@@ -329,13 +332,13 @@ describe("update_task_status", () => {
     const handler = getToolHandler(config, "update_task_status");
 
     let linearCalled = false;
-    globalThis.fetch = (async (url: string | URL | Request) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("api.linear.app")) {
         linearCalled = true;
       }
       return new Response(null, { status: 200 });
-    }) as any;
+    }) as any);
 
     await handler({ status: "in_progress" });
     expect(linearCalled).toBe(false);
@@ -352,7 +355,7 @@ describe("update_task_status", () => {
     let slackUpdateCalled = false;
     let slackUpdateBody: any = null;
 
-    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("/api/internal/status")) {
         return new Response(null, { status: 200 });
@@ -366,7 +369,7 @@ describe("update_task_status", () => {
         });
       }
       return new Response(null, { status: 200 });
-    }) as any;
+    }) as any);
 
     await handler({ status: "pr_open" });
 
@@ -383,13 +386,13 @@ describe("update_task_status", () => {
     const handler = getToolHandler(config, "update_task_status");
 
     let slackUpdateCalled = false;
-    globalThis.fetch = (async (url: string | URL | Request) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("slack.com/api/chat.update")) {
         slackUpdateCalled = true;
       }
       return new Response(null, { status: 200 });
-    }) as any;
+    }) as any);
 
     await handler({ status: "in_progress" });
     expect(slackUpdateCalled).toBe(false);
@@ -399,13 +402,13 @@ describe("update_task_status", () => {
     const config = makeConfig({ linearAppToken: "" });
     const handler = getToolHandler(config, "update_task_status");
 
-    globalThis.fetch = (async (url: string | URL | Request) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("/api/internal/status")) {
         throw new Error("Network unreachable");
       }
       return new Response(null, { status: 200 });
-    }) as any;
+    }) as any);
 
     // Should not throw — error is caught internally
     const result = await handler({ status: "in_progress" });
@@ -416,7 +419,7 @@ describe("update_task_status", () => {
     const config = makeConfig({ linearAppToken: "lin-test", taskUUID: "uuid-123" });
     const handler = getToolHandler(config, "update_task_status");
 
-    globalThis.fetch = (async (url: string | URL | Request) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("/api/internal/status")) {
         return new Response(null, { status: 200 });
@@ -425,7 +428,7 @@ describe("update_task_status", () => {
         throw new Error("Linear API down");
       }
       return new Response(null, { status: 200 });
-    }) as any;
+    }) as any);
 
     // Should not throw — Linear errors are caught internally
     const result = await handler({ status: "merged" });
@@ -437,13 +440,13 @@ describe("update_task_status", () => {
     const handler = getToolHandler(config, "update_task_status");
 
     let capturedBody: any = null;
-    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("/api/internal/status")) {
         capturedBody = JSON.parse(init!.body as string);
       }
       return new Response(null, { status: 200 });
-    }) as any;
+    }) as any);
 
     await handler({ status: "pr_open", pr_url: "https://github.com/org/repo/pull/42" });
 
@@ -456,7 +459,7 @@ describe("update_task_status", () => {
     const handler = getToolHandler(config, "update_task_status");
 
     let queriedIssueId: string | null = null;
-    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       if (urlStr.includes("/api/internal/status")) {
         return new Response(null, { status: 200 });
@@ -472,7 +475,7 @@ describe("update_task_status", () => {
         }
       }
       return new Response(null, { status: 200 });
-    }) as any;
+    }) as any);
 
     await handler({ status: "in_progress", linear_ticket_id: "explicit-uuid" });
 
