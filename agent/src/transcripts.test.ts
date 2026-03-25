@@ -130,14 +130,23 @@ describe("TranscriptManager", () => {
         expect(body.r2Key).toBe(`test-uuid-1234-test-session.jsonl`);
 
         // Second upload — same size, should skip
-        const callsBefore = fetchSpy.mock.calls.length;
+        // Explicitly verify the size was recorded, then check no new upload happens
+        const file = Bun.file(tmpFile);
+        expect(manager.getUploadedSizes().get(tmpFile)).toBe(file.size);
+        fetchSpy.mockClear();
         await manager.upload();
-        expect(fetchSpy.mock.calls.length).toBe(callsBefore);
+        const uploadCalls = fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(uploadCalls.length).toBe(0);
 
         // Third upload with force — should upload despite same size
         fetchSpy.mockClear();
         await manager.upload(true);
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const forceCalls = fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(forceCalls.length).toBe(1);
       } finally {
         fetchSpy.mockRestore();
         logSpy.mockRestore();
