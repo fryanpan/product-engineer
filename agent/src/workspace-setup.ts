@@ -197,7 +197,7 @@ export async function setupWorkspace(
   } else {
     agentCwd = `/workspace/${repoName(repos[0])}`;
     additionalDirs = [];
-    console.log(`[Workspace] Ticket agent: cwd=${agentCwd}`);
+    console.log(`[Workspace] Task agent: cwd=${agentCwd}`);
   }
 
   // 5. Inject skills (single code path for both roles)

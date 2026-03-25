@@ -10,13 +10,13 @@
 export interface StatusUpdaterConfig {
   workerUrl: string;
   apiKey: string;
-  ticketUUID: string;
+  taskUUID: string;
   slackBotToken: string;
   slackChannel: string;
   slackThreadTs?: string;
   linearAppToken?: string;
-  ticketIdentifier?: string;
-  ticketTitle?: string;
+  taskIdentifier?: string;
+  taskTitle?: string;
   fetchFn?: typeof fetch;
 }
 
@@ -51,7 +51,7 @@ export class StatusUpdater {
   }
 
   /**
-   * POST status to the orchestrator's internal status endpoint.
+   * POST status to the conductor's internal status endpoint.
    */
   async updateOrchestrator(status: string, pr_url?: string): Promise<void> {
     try {
@@ -62,14 +62,14 @@ export class StatusUpdater {
           "X-Internal-Key": this.config.apiKey,
         },
         body: JSON.stringify({
-          ticketUUID: this.config.ticketUUID,
+          taskUUID: this.config.taskUUID,
           status,
           pr_url,
           branch_name: undefined,
         }),
       });
     } catch (err) {
-      console.error("[StatusUpdater] Failed to update orchestrator status:", err);
+      console.error("[StatusUpdater] Failed to update conductor status:", err);
     }
   }
 
@@ -77,7 +77,7 @@ export class StatusUpdater {
    * Update the Linear ticket's workflow state via GraphQL.
    * Skips if no linearAppToken is configured.
    */
-  async updateLinear(status: string, ticketId: string): Promise<void> {
+  async updateLinear(status: string, taskId: string): Promise<void> {
     if (!this.config.linearAppToken) {
       console.log(`[StatusUpdater] Skipping Linear update — no token configured`);
       return;
@@ -99,7 +99,7 @@ export class StatusUpdater {
               team { states { nodes { id name } } }
             }
           }`,
-          variables: { issueId: ticketId },
+          variables: { issueId: taskId },
         }),
       });
 
@@ -134,7 +134,7 @@ export class StatusUpdater {
 
       if (!targetState) {
         console.warn(
-          `[StatusUpdater] Could not find Linear state "${linearState}" for ticket ${ticketId}. Available states: ${states.map(s => s.name).join(", ")}`
+          `[StatusUpdater] Could not find Linear state "${linearState}" for task ${taskId}. Available states: ${states.map(s => s.name).join(", ")}`
         );
         return;
       }
@@ -153,7 +153,7 @@ export class StatusUpdater {
             }
           }`,
           variables: {
-            issueId: ticketId,
+            issueId: taskId,
             stateId: targetState.id,
           },
         }),
@@ -183,13 +183,13 @@ export class StatusUpdater {
 
       if (!updateData.data?.issueUpdate?.success) {
         console.error(
-          `[StatusUpdater] Linear update returned success=false for ticket ${ticketId}`
+          `[StatusUpdater] Linear update returned success=false for task ${taskId}`
         );
         return;
       }
 
       console.log(
-        `[StatusUpdater] ✓ Updated Linear ticket ${ticketId} to ${linearState}`
+        `[StatusUpdater] ✓ Updated Linear task ${taskId} to ${linearState}`
       );
     } catch (err) {
       console.error("[StatusUpdater] Failed to update Linear ticket:", err);
@@ -221,9 +221,9 @@ export class StatusUpdater {
         statusText = "FAILED";
       }
 
-      const ticketIdentifier =
-        this.config.ticketIdentifier || this.config.ticketUUID;
-      let briefSummary = this.config.ticketTitle || "Working on task";
+      const taskIdentifier =
+        this.config.taskIdentifier || this.config.taskUUID;
+      let briefSummary = this.config.taskTitle || "Working on task";
 
       if (briefSummary.length > 100) {
         const firstSentence = briefSummary.match(/^[^.!?]+[.!?]/);
@@ -232,7 +232,7 @@ export class StatusUpdater {
           : briefSummary.slice(0, 100) + "...";
       }
 
-      const updatedText = `${statusEmoji} ${statusText} - ${ticketIdentifier}: ${briefSummary}`;
+      const updatedText = `${statusEmoji} ${statusText} - ${taskIdentifier}: ${briefSummary}`;
 
       const res = await this.fetch("https://slack.com/api/chat.update", {
         method: "POST",
@@ -276,11 +276,11 @@ export class StatusUpdater {
     status: string,
     opts?: { pr_url?: string; linearTicketId?: string },
   ): Promise<void> {
-    const ticketId = opts?.linearTicketId || this.config.ticketUUID;
+    const taskId = opts?.linearTicketId || this.config.taskUUID;
 
     await Promise.all([
       this.updateOrchestrator(status, opts?.pr_url),
-      this.updateLinear(status, ticketId),
+      this.updateLinear(status, taskId),
       this.updateSlackStatus(status),
     ]);
   }

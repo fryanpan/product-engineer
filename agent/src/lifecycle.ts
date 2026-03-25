@@ -87,7 +87,7 @@ export class AgentLifecycle {
         "Content-Type": "application/json",
         "X-Internal-Key": this.config.apiKey,
       },
-      body: JSON.stringify({ ticketUUID: this.config.ticketUUID, message }),
+      body: JSON.stringify({ taskUUID: this.config.taskUUID, message }),
     }).catch((err) => console.error("[Agent] phoneHome failed:", err));
   }
 
@@ -110,7 +110,7 @@ export class AgentLifecycle {
     // 2. Report token usage
     try {
       await this.tokenTracker.report({
-        ticketUUID: this.config.ticketUUID,
+        taskUUID: this.config.taskUUID,
         workerUrl: this.config.workerUrl,
         apiKey: this.config.apiKey,
         slackBotToken: this.config.slackBotToken,
@@ -132,7 +132,7 @@ export class AgentLifecycle {
           "X-Internal-Key": this.config.apiKey,
         },
         body: JSON.stringify({
-          ticketUUID: this.config.ticketUUID,
+          taskUUID: this.config.taskUUID,
           status: "suspended",
           session_id: this.state.currentSessionId,
         }),
@@ -206,7 +206,7 @@ export class AgentLifecycle {
       // Project lead/research session completed — report tokens here since
       // autoSuspend won't be called (persistent agents stay alive).
       await this.tokenTracker.report({
-        ticketUUID: this.config.ticketUUID,
+        taskUUID: this.config.taskUUID,
         workerUrl: this.config.workerUrl,
         apiKey: this.config.apiKey,
         slackBotToken: this.config.slackBotToken,
@@ -278,7 +278,7 @@ export class AgentLifecycle {
           "Content-Type": "application/json",
           "X-Internal-Key": this.config.apiKey,
         },
-        body: JSON.stringify({ ticketUUID: this.config.ticketUUID }),
+        body: JSON.stringify({ taskUUID: this.config.taskUUID }),
       }).catch((err) => console.error("[Agent] Heartbeat failed:", err));
 
       this.phoneHome(`heartbeat status=${this.state.sessionStatus} msgs=${this.state.sessionMessageCount}`);

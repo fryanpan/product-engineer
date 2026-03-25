@@ -20,7 +20,7 @@ import type {
   FeedbackData,
   TicketData,
   CommandData,
-  TicketEvent,
+  TaskEvent,
   SlackFile,
   MessageContent,
   ContentBlock,
@@ -104,7 +104,7 @@ export async function buildPrompt(
   const header = Mustache.render(template, {
     product: task.product,
     taskDescription: formatTask(task),
-    ticketUUID: task.ticketUUID || "",
+    taskUUID: task.taskUUID || "",
     reposList: task.repos.map((r) => `- \`${r}\``).join("\n"),
     reposContext:
       task.repos.length > 1
@@ -131,7 +131,7 @@ function formatTask(task: TaskPayload): string {
     case "feedback":
       return formatFeedback(task.data as FeedbackData);
     case "ticket":
-      return formatTicket(task.data as TicketData, task.ticketUUID);
+      return formatTicket(task.data as TicketData, task.taskUUID);
     case "command":
       return formatCommand(task.data as CommandData);
   }
@@ -149,7 +149,7 @@ function formatFeedback(data: FeedbackData): string {
   return parts.filter(Boolean).join("\n");
 }
 
-function formatTicket(data: TicketData, ticketUUID?: string): string {
+function formatTicket(data: TicketData, taskUUID?: string): string {
   const parts = [
     `**Type:** Linear ticket`,
     data.identifier && `**Ticket:** ${data.identifier} (https://linear.app/issue/${data.identifier})`,
@@ -158,7 +158,7 @@ function formatTicket(data: TicketData, ticketUUID?: string): string {
     `**Priority:** ${data.priority ?? "unset"}`,
     (data.labels?.length ?? 0) > 0 && `**Labels:** ${data.labels.join(", ")}`,
     `**Ticket ID:** ${data.id}`,
-    ticketUUID && `**Ticket UUID:** ${ticketUUID}`,
+    taskUUID && `**Task UUID:** ${taskUUID}`,
   ];
 
   // Include comments if present
@@ -198,7 +198,7 @@ function formatCommand(data: CommandData): string {
 }
 
 export async function buildEventPrompt(
-  event: TicketEvent,
+  event: TaskEvent,
   slackBotToken: string,
 ): Promise<MessageContent> {
   const payload = event.payload as Record<string, unknown>;
@@ -238,9 +238,9 @@ export async function buildEventPrompt(
       return message + `\n\nContinue processing with this information.`;
     }
     case "ticket_created":
-      return `A new ticket was created and assigned to you.\n\n**ticketUUID:** ${event.ticketUUID}\n**Product:** ${event.product}\n**Title:** ${wrapUntrusted(String(payload.title || "(no title)"))}\n**Description:** ${wrapUntrusted(String(payload.description || "(no description)"))}\n\nSpawn a ticket agent to work on this. Pass the ticketUUID above to spawn_task so the agent works on the existing ticket.`;
+      return `A new ticket was created and assigned to you.\n\n**taskUUID:** ${event.taskUUID}\n**Product:** ${event.product}\n**Title:** ${wrapUntrusted(String(payload.title || "(no title)"))}\n**Description:** ${wrapUntrusted(String(payload.description || "(no description)"))}\n\nSpawn a task agent to work on this. Pass the taskUUID above to spawn_task so the agent works on the existing task.`;
     default:
-      return `New event: ${event.type} (ticketUUID: ${event.ticketUUID})\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
+      return `New event: ${event.type} (taskUUID: ${event.taskUUID})\n\n${JSON.stringify(payload, null, 2)}\n\nProcess this event appropriately.`;
   }
 }
 

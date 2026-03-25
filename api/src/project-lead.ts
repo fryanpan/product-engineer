@@ -42,9 +42,9 @@ export function resolveProjectLeadEnvVars(
     gatewayConfig,
     {
       AGENT_ROLE: config.product === "__conductor__" ? "conductor" : "project-lead",
-      TICKET_UUID: `project-lead-${config.product}`,
-      TICKET_IDENTIFIER: "",
-      TICKET_TITLE: `Project lead for ${config.product}`,
+      TASK_UUID: `project-lead-${config.product}`,
+      TASK_IDENTIFIER: "",
+      TASK_TITLE: `Project lead for ${config.product}`,
     },
   );
 }

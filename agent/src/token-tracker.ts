@@ -40,7 +40,7 @@ export interface TokenSummary {
 }
 
 export interface ReportOptions {
-  ticketUUID: string;
+  taskUUID: string;
   workerUrl: string;
   apiKey: string;
   slackBotToken: string;
@@ -194,7 +194,7 @@ export class TokenTracker {
 
       // Post to orchestrator API
       const usagePayload = {
-        ticketUUID: options.ticketUUID,
+        taskUUID: options.taskUUID,
         totalInputTokens: summary.totalInputTokens,
         totalOutputTokens: summary.totalOutputTokens,
         totalCacheReadTokens: summary.totalCacheReadTokens,

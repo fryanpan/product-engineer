@@ -1,7 +1,7 @@
 /**
  * Long-lived HTTP server wrapping the Agent SDK.
  *
- * Receives events via POST /event from the TicketAgent DO.
+ * Receives events via POST /event from the TaskAgent DO.
  * On first event: clones repos, starts Agent SDK session.
  * On subsequent events: yields new messages into the running session.
  */
@@ -13,7 +13,7 @@ import {
   createSdkMcpServer,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { loadConfig, type TaskPayload, type TicketEvent, type MessageContent } from "./config";
+import { loadConfig, type TaskPayload, type TaskEvent, type MessageContent } from "./config";
 import { createTools } from "./tools";
 import { buildPrompt, buildEventPrompt, buildResumePrompt } from "./prompt";
 import { buildMcpServers } from "./mcp";
@@ -46,14 +46,14 @@ console.log("[Agent] Starting server...");
 console.log(`[Agent] Running as: uid=${process.getuid?.()} gid=${process.getgid?.()} HOME=${process.env.HOME}`);
 console.log(`[Agent] Env check: ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ? "SET" : "MISSING"}`);
 console.log(`[Agent] Env check: GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? "SET" : "MISSING"}`);
-console.log(`[Agent] Env check: TICKET_UUID=${process.env.TICKET_UUID || "MISSING"}`);
+console.log(`[Agent] Env check: TASK_UUID=${process.env.TASK_UUID || "MISSING"}`);
 console.log(`[Agent] Env check: PRODUCT=${process.env.PRODUCT || "MISSING"}`);
 console.log(`[Agent] Env check: REPOS=${process.env.REPOS || "MISSING"}`);
 
 const config = loadConfig();
 const roleConfig = resolveRoleConfig(process.env.AGENT_ROLE, process.env.MODE);
 
-console.log(`[Agent] Config loaded: ticket=${config.ticketUUID} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"} role=${roleConfig.role}`);
+console.log(`[Agent] Config loaded: task=${config.taskUUID} product=${config.product} repos=${config.repos.join(",")} model=${config.model || "default"} role=${roleConfig.role}`);
 
 // ── Shared instances ─────────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ const transcriptMgr = new TranscriptManager({
   agentUuid,
   workerUrl: config.workerUrl,
   apiKey: config.apiKey,
-  ticketUUID: config.ticketUUID,
+  taskUUID: config.taskUUID,
 });
 const slackEcho = new SlackEcho({
   slackBotToken: config.slackBotToken,
@@ -153,10 +153,10 @@ async function drainBufferedEvents() {
     return;
   }
 
-  // ProjectAgents use a different drain endpoint than TicketAgents
+  // ProjectLeads use a different drain endpoint than TaskAgents
   const drainUrl = roleConfig.isProjectLead
     ? `${config.workerUrl}/api/project-agent/drain-events?product=${encodeURIComponent(config.product)}`
-    : `${config.workerUrl}/api/agent/${encodeURIComponent(config.ticketUUID)}/drain-events`;
+    : `${config.workerUrl}/api/agent/${encodeURIComponent(config.taskUUID)}/drain-events`;
 
   try {
     let batch = 0;
@@ -167,7 +167,7 @@ async function drainBufferedEvents() {
       });
       if (!drainRes.ok) break;
 
-      const { events } = (await drainRes.json()) as { events: TicketEvent[] };
+      const { events } = (await drainRes.json()) as { events: TaskEvent[] };
       if (!events || events.length === 0) break;
 
       batch++;
@@ -332,7 +332,7 @@ app.post("/event", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
-  const event = await c.req.json<TicketEvent>();
+  const event = await c.req.json<TaskEvent>();
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
   lifecycle.recordActivity();
 
@@ -372,13 +372,13 @@ app.post("/event", async (c) => {
         product: config.product,
         repos: config.repos,
         data: event.payload as TaskPayload["data"],
-        ticketUUID: event.ticketUUID,
+        taskUUID: event.taskUUID,
       };
 
       if (taskType === "ticket") {
-        const ticketData = event.payload as any;
-        config.ticketIdentifier = ticketData.identifier;
-        config.ticketTitle = ticketData.title;
+        const taskData = event.payload as any;
+        config.taskIdentifier = taskData.identifier;
+        config.taskTitle = taskData.title;
       }
 
       const prompt = await buildPrompt(taskPayload, config.slackBotToken, process.env.MODE, roleConfig.role);
@@ -400,13 +400,13 @@ app.post("/event", async (c) => {
 });
 
 app.get("/health", (c) =>
-  c.json({ ok: true, service: "ticket-agent-container" }),
+  c.json({ ok: true, service: "task-agent-container" }),
 );
 
 app.get("/status", (c) =>
   c.json({
-    service: "ticket-agent-container",
-    ticketUUID: config.ticketUUID,
+    service: "task-agent-container",
+    taskUUID: config.taskUUID,
     product: config.product,
     sessionActive: lifecycle.state.sessionActive,
     sessionStatus: lifecycle.state.sessionStatus,
@@ -431,7 +431,7 @@ app.post("/shutdown", async (c) => {
     await transcriptMgr.upload(true);
     if (lifecycle.state.sessionActive || lifecycle.state.sessionMessageCount > 0) {
       await tokenTracker.report({
-        ticketUUID: config.ticketUUID,
+        taskUUID: config.taskUUID,
         workerUrl: config.workerUrl,
         apiKey: config.apiKey,
         slackBotToken: config.slackBotToken,
@@ -470,30 +470,30 @@ setTimeout(async () => {
 
   try {
     await ensureWorkspace();
-    const branch = await checkAndCheckoutWorkBranch(config.ticketUUID);
+    const branch = await checkAndCheckoutWorkBranch(config.taskUUID);
 
     if (branch) {
-      // Check orchestrator state before resuming
+      // Check conductor state before resuming
       try {
         const statusRes = await fetch(
-          `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketUUID)}`,
+          `${config.workerUrl}/api/conductor/task-status/${encodeURIComponent(config.taskUUID)}`,
           { headers: { "X-Internal-Key": config.apiKey } },
         );
         if (statusRes.ok) {
-          const ticketStatus = (await statusRes.json()) as {
+          const taskStatus = (await statusRes.json()) as {
             agent_active?: number;
             status?: string;
             terminal?: boolean;
           };
-          if (ticketStatus.agent_active === 0 || ticketStatus.terminal) {
-            console.log(`[Agent] Ticket ${config.ticketUUID} is inactive — skipping auto-resume`);
-            lifecycle.phoneHome(`auto_resume_skipped reason=inactive status=${ticketStatus.status}`);
+          if (taskStatus.agent_active === 0 || taskStatus.terminal) {
+            console.log(`[Agent] Task ${config.taskUUID} is inactive — skipping auto-resume`);
+            lifecycle.phoneHome(`auto_resume_skipped reason=inactive status=${taskStatus.status}`);
             process.exit(0);
             return;
           }
         }
       } catch (err) {
-        console.warn("[Agent] Could not check orchestrator status, proceeding with resume:", err);
+        console.warn("[Agent] Could not check conductor status, proceeding with resume:", err);
       }
 
       console.log(`[Agent] Auto-resuming from branch: ${branch}`);
@@ -513,25 +513,25 @@ setTimeout(async () => {
       // Try transcript-based session resume for full conversation history
       let autoResumeSessionId: string | undefined;
       try {
-        const ticketInfoRes = await fetch(
-          `${config.workerUrl}/api/orchestrator/ticket-status/${encodeURIComponent(config.ticketUUID)}`,
+        const taskInfoRes = await fetch(
+          `${config.workerUrl}/api/conductor/task-status/${encodeURIComponent(config.taskUUID)}`,
           { headers: { "X-Internal-Key": config.apiKey } },
         );
-        if (ticketInfoRes.ok) {
-          const ticketInfo = await ticketInfoRes.json() as {
+        if (taskInfoRes.ok) {
+          const taskInfo = await taskInfoRes.json() as {
             session_id?: string;
             transcript_r2_key?: string;
           };
-          if (ticketInfo.transcript_r2_key) {
-            const downloadedSessionId = await transcriptMgr.download(ticketInfo.transcript_r2_key);
+          if (taskInfo.transcript_r2_key) {
+            const downloadedSessionId = await transcriptMgr.download(taskInfo.transcript_r2_key);
             if (downloadedSessionId) {
-              autoResumeSessionId = ticketInfo.session_id || downloadedSessionId;
+              autoResumeSessionId = taskInfo.session_id || downloadedSessionId;
               console.log(`[Agent] Auto-resume will use session: ${autoResumeSessionId}`);
             }
           }
         }
       } catch (err) {
-        console.warn("[Agent] Could not fetch ticket info for transcript resume:", err);
+        console.warn("[Agent] Could not fetch task info for transcript resume:", err);
       }
 
       if (config.slackChannel && config.slackBotToken) {

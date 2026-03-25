@@ -65,13 +65,13 @@ function makeConfig(overrides: Partial<StatusUpdaterConfig> = {}): StatusUpdater
   return {
     workerUrl: "https://worker.test",
     apiKey: "test-key",
-    ticketUUID: "issue-uuid-123",
+    taskUUID: "issue-uuid-123",
     slackBotToken: "xoxb-test",
     slackChannel: "#test",
     slackThreadTs: "1234.5678",
     linearAppToken: "lin_test_token",
-    ticketIdentifier: "PE-42",
-    ticketTitle: "Fix status sync",
+    taskIdentifier: "PE-42",
+    taskTitle: "Fix status sync",
     ...overrides,
   };
 }
@@ -79,7 +79,7 @@ function makeConfig(overrides: Partial<StatusUpdaterConfig> = {}): StatusUpdater
 describe("Linear status synchronization", () => {
   test("updateAll() calls Linear API with correct issue UUID", async () => {
     const { fn, calls } = makeMockFetch();
-    const config = makeConfig({ fetchFn: fn, ticketUUID: "linear-issue-uuid-abc" });
+    const config = makeConfig({ fetchFn: fn, taskUUID: "linear-issue-uuid-abc" });
     const updater = new StatusUpdater(config);
 
     await updater.updateAll("in_progress");
@@ -154,7 +154,7 @@ describe("Linear status synchronization", () => {
     const { fn, calls } = makeMockFetch();
     const config = makeConfig({
       fetchFn: fn,
-      ticketUUID: "config-uuid-abc",
+      taskUUID: "config-uuid-abc",
     });
     const updater = new StatusUpdater(config);
 

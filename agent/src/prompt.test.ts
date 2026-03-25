@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { buildPrompt, buildEventPrompt } from "./prompt";
-import type { TaskPayload, TicketEvent } from "./config";
+import type { TaskPayload, TaskEvent } from "./config";
 
 // Mock Slack bot token for tests
 const MOCK_SLACK_TOKEN = "xoxb-test-token";
@@ -277,10 +277,10 @@ describe("buildPrompt", () => {
   });
 });
 
-function makeEvent(overrides: Partial<TicketEvent> & { type: string; payload: unknown }): TicketEvent {
+function makeEvent(overrides: Partial<TaskEvent> & { type: string; payload: unknown }): TaskEvent {
   return {
     source: "test",
-    ticketUUID: "PE-1",
+    taskUUID: "PE-1",
     product: "test-product",
     ...overrides,
   };

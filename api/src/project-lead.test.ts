@@ -30,8 +30,8 @@ describe("resolveProjectLeadEnvVars", () => {
     expect(vars.AGENT_ROLE).toBe("project-lead");
     expect(vars.MODEL).toBe("sonnet"); // default
     expect(vars.MODE).toBe("coding"); // default
-    expect(vars.TICKET_UUID).toBe("project-lead-health-tool");
-    expect(vars.TICKET_TITLE).toBe("Project lead for health-tool");
+    expect(vars.TASK_UUID).toBe("project-lead-health-tool");
+    expect(vars.TASK_TITLE).toBe("Project lead for health-tool");
   });
 
   test("resolves per-product secrets from env bindings", () => {

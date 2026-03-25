@@ -14,7 +14,7 @@ import type { AgentConfig } from "./config";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
-    ticketUUID: "slack-123",
+    taskUUID: "slack-123",
     product: "test-app",
     repos: ["test-org/test-app"],
     anthropicApiKey: "ak-test",
@@ -47,7 +47,7 @@ describe("persistSlackThreadTs", () => {
     expect(url).toBe("https://worker.example.com/api/internal/status");
     expect(opts.method).toBe("POST");
     const body = JSON.parse(opts.body as string);
-    expect(body.ticketUUID).toBe("slack-123");
+    expect(body.taskUUID).toBe("slack-123");
     expect(body.slack_thread_ts).toBe("1234567890.123456");
   });
 
@@ -186,7 +186,7 @@ describe("update_task_status", () => {
     const orchestratorCall = calls.find((c) => c.url.includes("/api/internal/status"));
     expect(orchestratorCall).toBeTruthy();
     const body = JSON.parse(orchestratorCall!.init!.body as string);
-    expect(body.ticketUUID).toBe("slack-123");
+    expect(body.taskUUID).toBe("slack-123");
     expect(body.status).toBe("in_progress");
   });
 
@@ -207,7 +207,7 @@ describe("update_task_status", () => {
     for (const [status, expectedLinearState] of Object.entries(expectedMappings)) {
       let queriedStateName: string | null = null;
 
-      const config = makeConfig({ linearAppToken: "lin-test", ticketUUID: "ticket-uuid-123" });
+      const config = makeConfig({ linearAppToken: "lin-test", taskUUID: "ticket-uuid-123" });
       const handler = getToolHandler(config, "update_task_status");
 
       globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -264,7 +264,7 @@ describe("update_task_status", () => {
   });
 
   test("updates Linear ticket when linearAppToken is configured", async () => {
-    const config = makeConfig({ linearAppToken: "lin-test-token", ticketUUID: "uuid-abc" });
+    const config = makeConfig({ linearAppToken: "lin-test-token", taskUUID: "uuid-abc" });
     const handler = getToolHandler(config, "update_task_status");
 
     let linearQueryCalled = false;
@@ -344,8 +344,8 @@ describe("update_task_status", () => {
   test("updates Slack message when slackThreadTs is set", async () => {
     const config = makeConfig({
       slackThreadTs: "1234567890.000000",
-      ticketIdentifier: "PE-42",
-      ticketTitle: "Fix the widget",
+      taskIdentifier: "PE-42",
+      taskTitle: "Fix the widget",
     });
     const handler = getToolHandler(config, "update_task_status");
 
@@ -413,7 +413,7 @@ describe("update_task_status", () => {
   });
 
   test("gracefully handles Linear update failure — does not throw", async () => {
-    const config = makeConfig({ linearAppToken: "lin-test", ticketUUID: "uuid-123" });
+    const config = makeConfig({ linearAppToken: "lin-test", taskUUID: "uuid-123" });
     const handler = getToolHandler(config, "update_task_status");
 
     globalThis.fetch = (async (url: string | URL | Request) => {
@@ -452,7 +452,7 @@ describe("update_task_status", () => {
   });
 
   test("uses explicit linear_ticket_id over config.ticketUUID", async () => {
-    const config = makeConfig({ linearAppToken: "lin-test", ticketUUID: "config-uuid" });
+    const config = makeConfig({ linearAppToken: "lin-test", taskUUID: "config-uuid" });
     const handler = getToolHandler(config, "update_task_status");
 
     let queriedIssueId: string | null = null;

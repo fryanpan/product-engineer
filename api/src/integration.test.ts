@@ -112,7 +112,7 @@ describe("Agent Lifecycle Integration", () => {
 
       // Core config
       expect(vars.PRODUCT).toBe("test-app");
-      expect(vars.TICKET_UUID).toBe("test-123");
+      expect(vars.TASK_UUID).toBe("test-123");
       expect(vars.REPOS).toBe(JSON.stringify(["org/repo"]));
       expect(vars.SLACK_CHANNEL).toBe("C12345");
 

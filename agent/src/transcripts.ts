@@ -9,7 +9,7 @@ export interface TranscriptManagerConfig {
   agentUuid: string;
   workerUrl: string;
   apiKey: string;
-  ticketUUID: string;
+  taskUUID: string;
 }
 
 export class TranscriptManager {
@@ -84,7 +84,7 @@ export class TranscriptManager {
               "X-Internal-Key": this.config.apiKey,
             },
             body: JSON.stringify({
-              ticketUUID: this.config.ticketUUID,
+              taskUUID: this.config.taskUUID,
               r2Key,
               transcript: transcriptContent,
             }),

@@ -24,7 +24,7 @@ describe("resolveAgentEnvVars", () => {
     expect(vars.ANTHROPIC_API_KEY).toBe("sk-ant-xyz");
     expect(vars.PRODUCT).toBe("health-tool");
     expect(vars.REPOS).toBe(JSON.stringify(["acme-org/sample-app"]));
-    expect(vars.TICKET_UUID).toBe("LIN-123");
+    expect(vars.TASK_UUID).toBe("LIN-123");
     expect(vars.SLACK_CHANNEL).toBe("#health-tool");
     expect(vars.SLACK_BOT_TOKEN).toBe("xoxb-slack");
     expect(vars.WORKER_URL).toBe("");

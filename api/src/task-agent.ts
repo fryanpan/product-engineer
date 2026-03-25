@@ -12,9 +12,9 @@ export function resolveAgentEnvVars(
   gatewayConfig?: CloudflareAIGateway | null,
 ): Record<string, string> {
   return resolveContainerEnvVars(config, env, gatewayConfig, {
-    TICKET_UUID: config.taskUUID,
-    TICKET_IDENTIFIER: config.taskId ?? "",
-    TICKET_TITLE: config.taskTitle ?? "",
+    TASK_UUID: config.taskUUID,
+    TASK_IDENTIFIER: config.taskId ?? "",
+    TASK_TITLE: config.taskTitle ?? "",
     SLACK_THREAD_TS: config.slackThreadTs || "",
   });
 }

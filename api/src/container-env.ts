@@ -24,7 +24,7 @@ export interface ContainerEnvConfig {
  * @param config  - Agent config (product, repos, secrets, etc.)
  * @param env     - Platform env bindings (secrets store values)
  * @param gatewayConfig - AI Gateway config (pass null to disable)
- * @param extraVars - Role-specific vars (e.g., TICKET_UUID, AGENT_ROLE)
+ * @param extraVars - Role-specific vars (e.g., TASK_UUID, AGENT_ROLE)
  */
 export function resolveContainerEnvVars(
   config: ContainerEnvConfig,
@@ -51,7 +51,7 @@ export function resolveContainerEnvVars(
   };
 
   // Resolve per-product secrets from env bindings (before extraVars so role-specific
-  // vars like TICKET_UUID can't be overridden by a secret with the same key)
+  // vars like TASK_UUID can't be overridden by a secret with the same key)
   for (const [logicalName, bindingName] of Object.entries(config.secrets)) {
     const value = env[bindingName];
     if (value) {
