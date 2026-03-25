@@ -63,10 +63,9 @@ tag = "v3"
 new_sqlite_classes = ["ProjectAgent"]
 
 [[migrations]]
-tag = "v5"
+tag = "v4"
 deleted_classes = ["Orchestrator", "TicketAgent", "ProjectAgent"]
-new_sqlite_classes = ["Conductor", "TaskAgent"]
-new_classes = ["ProjectLead"]
+new_sqlite_classes = ["Conductor", "TaskAgent", "ProjectLead"]
 
 # ── Staging environment ──────────────────────────────────────────────
 # Deploy with: wrangler deploy --env staging
