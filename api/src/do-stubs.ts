@@ -1,6 +1,6 @@
 import type { Bindings } from "./types";
 
-export function getOrchestrator(env: Bindings): DurableObjectStub {
-  const id = env.ORCHESTRATOR.idFromName("main");
-  return env.ORCHESTRATOR.get(id);
+export function getConductor(env: Bindings): DurableObjectStub {
+  const id = env.CONDUCTOR.idFromName("main");
+  return env.CONDUCTOR.get(id);
 }
