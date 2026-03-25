@@ -201,6 +201,8 @@ export function initSchema(sql: SqlExec): void {
   try { sql.exec("ALTER TABLE ticket_metrics RENAME TO task_metrics"); } catch { /* already renamed */ }
   try { sql.exec("ALTER TABLE tasks RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
   try { sql.exec("ALTER TABLE tasks RENAME COLUMN ticket_id TO task_id"); } catch { /* already renamed */ }
+  // Fresh Conductor DOs: identifier was added by addColumn but never renamed through the legacy chain
+  try { sql.exec("ALTER TABLE tasks RENAME COLUMN identifier TO task_id"); } catch { /* already renamed or doesn't exist */ }
   try { sql.exec("ALTER TABLE task_queue RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
   try { sql.exec("ALTER TABLE task_metrics RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
   try { sql.exec("ALTER TABLE merge_gate_retries RENAME COLUMN ticket_uuid TO task_uuid"); } catch { /* already renamed */ }
