@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock, spyOn } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
 import { handleSlackEvent, resolveProductFromChannel, type SlackHandlerDeps } from "./slack-handler";
 import type { TaskRecord } from "./types";
 
@@ -6,15 +6,9 @@ import type { TaskRecord } from "./types";
 // Module-level mocks — intercept imports the handler uses
 // ---------------------------------------------------------------------------
 
-// Mock normalizeSlackEvent to always pass (no injection)
-mock.module("./security/normalized-event", () => ({
-  normalizeSlackEvent: async () => ({ ok: true, event: {} }),
-}));
-
-// Mock addReaction to no-op (fire-and-forget)
-mock.module("./slack-utils", () => ({
-  addReaction: () => {},
-}));
+// Note: We do NOT mock ./security/normalized-event or ./slack-utils here because
+// bun's mock.module() is process-global and would contaminate other test files.
+// Instead, our test events use clean text that passes the real injection scanner.
 
 // Mock observability (status command)
 mock.module("./observability", () => ({
@@ -38,7 +32,7 @@ mock.module("./db", () => ({
 
 // Mock global fetch for postSlackMessage calls (Slack API, LLM, Linear)
 const originalFetch = globalThis.fetch;
-let fetchMock: ReturnType<typeof mock>;
+let fetchSpy: ReturnType<typeof spyOn>;
 
 // ---------------------------------------------------------------------------
 // Mock SQL — handles SELECT queries the handler runs directly on sql.exec
@@ -141,15 +135,15 @@ function createMockDeps(sqlOverride?: ReturnType<typeof createMockSql>): SlackHa
 beforeEach(() => {
   mockSettings = new Map();
   mockProducts = {};
-  // Mock fetch to handle Slack API / LLM calls
-  fetchMock = mock(() =>
+  // Mock fetch to handle Slack API / LLM calls — use spyOn so it auto-restores
+  fetchSpy = spyOn(globalThis, "fetch").mockImplementation(() =>
     Promise.resolve(new Response(JSON.stringify({ ok: true, ts: "1111.2222" }), { status: 200 })),
   );
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
 });
 
-// Restore fetch after all tests
-// (bun:test doesn't have afterAll in describe-less context but this is fine for test isolation)
+afterEach(() => {
+  fetchSpy.mockRestore();
+});
 
 describe("resolveProductFromChannel", () => {
   it("matches by slack_channel_id", () => {
@@ -358,11 +352,11 @@ describe("handleSlackEvent — product channel routing (no Linear)", () => {
     const deps = createMockDeps(sql);
 
     // Mock generateTaskSummary via fetch (LLM call)
-    globalThis.fetch = mock(() =>
+    fetchSpy.mockImplementation(() =>
       Promise.resolve(new Response(JSON.stringify({
         content: [{ type: "text", text: JSON.stringify({ title: "Fix nav bug", description: "Fix it", taskId: "fix-nav-bug" }) }],
       }), { status: 200 })),
-    ) as unknown as typeof fetch;
+    );
 
     const res = await handleSlackEvent({
       type: "message",
@@ -388,11 +382,11 @@ describe("handleSlackEvent — product channel routing (no Linear)", () => {
     const sql = createMockSql();
     const deps = createMockDeps(sql);
 
-    globalThis.fetch = mock(() =>
+    fetchSpy.mockImplementation(() =>
       Promise.resolve(new Response(JSON.stringify({
         content: [{ type: "text", text: JSON.stringify({ title: "Add dark mode", description: "Add it", taskId: "add-dark-mode" }) }],
       }), { status: 200 })),
-    ) as unknown as typeof fetch;
+    );
 
     const res = await handleSlackEvent({
       type: "app_mention",
@@ -415,11 +409,11 @@ describe("handleSlackEvent — product channel routing (no Linear)", () => {
     const sql = createMockSql();
     const deps = createMockDeps(sql);
 
-    globalThis.fetch = mock(() =>
+    fetchSpy.mockImplementation(() =>
       Promise.resolve(new Response(JSON.stringify({
         content: [{ type: "text", text: JSON.stringify({ title: "Test", description: "Test", taskId: "test" }) }],
       }), { status: 200 })),
-    ) as unknown as typeof fetch;
+    );
 
     await handleSlackEvent({
       type: "message",
@@ -466,10 +460,10 @@ describe("handleSlackEvent — unmapped channel", () => {
 
     // Track fetch calls to verify Slack postMessage
     const fetchCalls: string[] = [];
-    globalThis.fetch = mock((url: string) => {
-      fetchCalls.push(url);
+    fetchSpy.mockImplementation((url: string | URL | Request) => {
+      fetchCalls.push(typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url);
       return Promise.resolve(new Response(JSON.stringify({ ok: true, ts: "reply-ts" }), { status: 200 }));
-    }) as unknown as typeof fetch;
+    });
 
     const res = await handleSlackEvent({
       type: "app_mention",
