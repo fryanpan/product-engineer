@@ -287,6 +287,14 @@ export class TaskManager {
       }));
 
       if (res.ok) return;
+
+      // 202 Accepted means TaskAgent DO buffered the event — this is SUCCESS
+      // The event will be drained once the container becomes ready
+      if (res.status === 202) {
+        console.log(`[TaskManager] Event buffered by TaskAgent DO for ${taskUUID}`);
+        return;
+      }
+
       if (res.status !== 503) {
         throw new Error(`Event delivery failed: ${res.status}`);
       }

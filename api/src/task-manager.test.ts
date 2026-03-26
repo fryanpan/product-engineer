@@ -613,6 +613,20 @@ describe("TaskManager", () => {
         "Event delivery failed: 400"
       );
     });
+
+    it("accepts 202 (buffered) as success — TaskAgent DO buffered the event", async () => {
+      manager.createTask(defaultParams);
+      sql._tasks.get("PE-1")!.agent_active = 1;
+      sql._tasks.get("PE-1")!.status = "active";
+      mockNs.setResponse("PE-1", 202, JSON.stringify({ buffered: true }));
+
+      await manager.sendEvent("PE-1", { type: "test" });
+
+      const task = manager.getTask("PE-1")!;
+      // Should remain active — event was buffered successfully
+      expect(task.status).toBe("active");
+      expect(task.agent_active).toBe(1);
+    });
   });
 
   describe("recordHeartbeat", () => {

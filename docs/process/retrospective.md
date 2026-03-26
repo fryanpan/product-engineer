@@ -1,3 +1,39 @@
+## 2026-03-26 - Event Loss Bug Fix (BC-196, BC-195 Investigation)
+
+**Issue:** Multiple tasks (BC-196, BC-195) stuck in suspended state with only "Warmup" messages in transcripts. Initial task events never reached agent containers.
+
+**Root Cause:** TaskManager.sendEvent() was treating HTTP 202 (Accepted/Buffered) responses as failures. When TaskAgent DO buffered events due to container cold starts, sendEvent would retry 3x then mark agent_active=0 and silently discard the event.
+
+**What Worked:**
+- Transcript analysis immediately revealed "Warmup only" pattern
+- Event flow tracing from conductor → TaskManager → TaskAgent DO → container
+- Test-driven fix with coverage for 202 buffering case
+- Existing EventBuffer infrastructure in TaskAgent DO was correct
+
+**What Didn't:**
+- sendEvent retry logic didn't recognize 202 as a success case
+- Silent event loss - no error thrown, no logging about buffered events
+- No monitoring to detect "agent active but no messages after warmup"
+
+**Action Taken:**
+1. Modified TaskManager.sendEvent() to treat 202 responses as success (event buffered, will be drained)
+2. Added test coverage for 202 buffering case
+3. Added logging when events are buffered: "Event buffered by TaskAgent DO"
+
+**Learnings:**
+- HTTP status codes matter: 202 (Accepted) ≠ failure, it means async processing
+- Event delivery systems need explicit success criteria beyond just 200 OK
+- Container cold start timing (~12s+) can exceed retry windows
+- Silent failures in event delivery create invisible stuck states
+- Transcript patterns ("warmup only") are strong diagnostic signals
+
+**Preventive Measures:**
+- Consider adding observability for "agent alive but no task event" condition
+- Review other retry logic for proper handling of 202/buffering responses
+- Document the event buffering contract between TaskManager and TaskAgent DO
+
+---
+
 ## 2026-03-24 - README v3 terminology + thread reply fix (PR #112)
 
 ### Time Breakdown
