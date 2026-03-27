@@ -15,6 +15,7 @@
  *   Steps 1-3, plus:
  *   4. Agent posts to Slack (creates thread)
  *   5. Agent responds to thread reply
+ *   5b. Thread reply resume after task completion (transcript + session_id saved, agent respawns with context)
  *   6. ProjectAgent status query works
  *   C1. Conductor status query — routes + verifies Slack response with task info
  *   C2. Conductor task details — queries specific project status
@@ -822,6 +823,122 @@ async function step5_verifyAgentRespondsToReply(ctx: TestContext): Promise<void>
   logWarn("step5", "Agent did not respond to thread reply within 60s — thread routing may not be working");
 }
 
+// --- Step 5b: Verify thread reply resume after task completion ---
+// Tests the fix for thread reply context loss (PR #124):
+// 1. Wait for the task to reach a terminal/inactive state
+// 2. Verify transcript_r2_key and session_id are saved on the task record
+// 3. Send a follow-up thread reply
+// 4. Verify the agent respawns and responds with context
+
+async function step5b_verifyThreadReplyResume(ctx: TestContext): Promise<void> {
+  log("step5b", "Testing thread reply resume after task completion...");
+
+  if (!ctx.slackThreadTs) {
+    logWarn("step5b", "No Slack thread TS — cannot test thread reply resume. Skipping.");
+    return;
+  }
+
+  // 1. Wait for the task to become inactive (agent_active=0 or terminal status)
+  log("step5b", "Waiting for task to become inactive...");
+  const inactiveDeadline = Date.now() + AGENT_WORK_TIMEOUT_MS;
+  let taskRow: Record<string, unknown> | null = null;
+
+  while (Date.now() < inactiveDeadline) {
+    const tickets = await apiCall<{ tasks: Record<string, unknown>[] }>("/api/conductor/tickets");
+    const task = tickets.tasks.find(
+      (t) => t.slack_thread_ts === ctx.slackThreadTs,
+    );
+    if (task && (task.agent_active === 0 || ["merged", "closed", "deferred", "failed", "suspended"].includes(task.status as string))) {
+      taskRow = task;
+      logSuccess("step5b", `Task is inactive: status=${task.status} agent_active=${task.agent_active}`);
+      break;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  if (!taskRow) {
+    logWarn("step5b", "Task did not become inactive within timeout — skipping resume test");
+    return;
+  }
+
+  // 2. Verify transcript_r2_key and session_id are saved on the task record
+  const hasTranscript = !!taskRow.transcript_r2_key;
+  const hasSessionId = !!taskRow.session_id;
+
+  if (hasTranscript) {
+    logSuccess("step5b", `transcript_r2_key saved: ${(taskRow.transcript_r2_key as string).slice(0, 50)}...`);
+  } else {
+    logWarn("step5b", "transcript_r2_key is NULL on task record — resume may start fresh");
+  }
+
+  if (hasSessionId) {
+    logSuccess("step5b", `session_id saved: ${taskRow.session_id}`);
+  } else {
+    logWarn("step5b", "session_id is NULL on task record — resume will rely on transcript parsing");
+  }
+
+  // 3. Count current bot messages, then send a follow-up thread reply
+  const messagesBefore = await getSlackThreadMessages(STAGING_SLACK_CHANNEL, ctx.slackThreadTs);
+  const botMessageCountBefore = messagesBefore.filter((m) => m.bot_id).length;
+
+  const resumeReplyText = `What did you find? Can you give me a quick summary? (Resume test from E2E ${ctx.testId})`;
+
+  if (SLACK_APP_TOKEN) {
+    // Post via bot for visibility, then send event via internal endpoint
+    await postSlackMessage(STAGING_SLACK_CHANNEL, resumeReplyText, ctx.slackThreadTs);
+    await fetch(`${STAGING_URL}/api/internal/slack-event`, {
+      method: "POST",
+      headers: {
+        "X-Internal-Key": SLACK_APP_TOKEN,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "message",
+        text: resumeReplyText,
+        user: "U_E2E_RESUME_TEST",
+        channel: STAGING_SLACK_CHANNEL,
+        ts: `${Date.now() / 1000}`,
+        thread_ts: ctx.slackThreadTs,
+      }),
+    });
+    logSuccess("step5b", "Resume thread reply sent via internal endpoint");
+  } else if (SLACK_USER_TOKEN) {
+    await postSlackMessageWithToken(STAGING_SLACK_CHANNEL, resumeReplyText, SLACK_USER_TOKEN, ctx.slackThreadTs);
+    logSuccess("step5b", "Resume thread reply sent via user token");
+  } else {
+    await postSlackMessage(STAGING_SLACK_CHANNEL, resumeReplyText, ctx.slackThreadTs);
+    logSuccess("step5b", "Resume thread reply sent via bot (may not trigger agent)");
+  }
+
+  // 4. Wait for the agent to respawn and respond (longer timeout — cold start + resume)
+  const resumeDeadline = Date.now() + AGENT_START_TIMEOUT_MS;
+  while (Date.now() < resumeDeadline) {
+    const messagesAfter = await getSlackThreadMessages(STAGING_SLACK_CHANNEL, ctx.slackThreadTs);
+    const botMessageCountAfter = messagesAfter.filter((m) => m.bot_id).length;
+
+    if (botMessageCountAfter > botMessageCountBefore) {
+      const newMessages = messagesAfter
+        .filter((m) => m.bot_id)
+        .slice(botMessageCountBefore);
+      const hasContextualResponse = newMessages.some((m) =>
+        // The resumed agent should reference prior work, not start from scratch
+        !m.text.includes("I don't have") && !m.text.includes("Could you tell me"),
+      );
+
+      if (hasContextualResponse) {
+        logSuccess("step5b", `Agent resumed with context (${botMessageCountAfter - botMessageCountBefore} new message(s))`);
+      } else {
+        logWarn("step5b", "Agent responded but may lack context — check thread manually");
+      }
+      return;
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+
+  logWarn("step5b", "Agent did not respond to resume thread reply within timeout");
+}
+
 // --- Step 6: Verify ProjectAgent status ---
 
 async function step6_verifyProjectAgentStatus(): Promise<void> {
@@ -1405,6 +1522,7 @@ try {
     // --- Tier 3: Agent communication ---
     await step4_verifyAgentSlackMessages(ctx);
     await step5_verifyAgentRespondsToReply(ctx);
+    await step5b_verifyThreadReplyResume(ctx);
     await step6_verifyProjectAgentStatus();
 
     // --- Tier 3b: Conductor behavior ---
