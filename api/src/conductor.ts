@@ -858,8 +858,31 @@ export class Conductor extends Container<Bindings> {
     // Log payloads so they appear in wrangler tail
     console.log(`[Conductor] status update: task=${taskUUID} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
+    // Always save session_id and transcript_r2_key — these are needed for session
+    // resume on thread replies, even for tasks in terminal states. They must be
+    // persisted before the terminal guard check to avoid being silently dropped.
+    if (session_id || transcript_r2_key) {
+      const resumeUpdates: string[] = ["updated_at = datetime('now')"];
+      const resumeValues: (string | number | null)[] = [];
+      if (session_id) {
+        resumeUpdates.push("session_id = ?");
+        resumeValues.push(session_id);
+      }
+      if (transcript_r2_key) {
+        resumeUpdates.push("transcript_r2_key = ?");
+        resumeValues.push(transcript_r2_key);
+      }
+      resumeValues.push(taskUUID);
+      this.ctx.storage.sql.exec(
+        `UPDATE tasks SET ${resumeUpdates.join(", ")} WHERE task_uuid = ?`,
+        ...resumeValues,
+      );
+      console.log(`[Conductor] Saved resume context for ${taskUUID}: session_id=${session_id ? "set" : "unchanged"} transcript=${transcript_r2_key ? "set" : "unchanged"}`);
+    }
+
     // Reject heartbeats/status updates for tasks already in a terminal state.
     // This prevents agent containers from overwriting supervisor kill decisions.
+    // Note: session_id and transcript_r2_key are already saved above.
     if (this.taskManager.isTerminal(taskUUID)) {
       // Allow explicit agent_active=0 (dashboard kill) but block heartbeats
       if (agent_active === undefined || agent_active !== 0) {
@@ -954,14 +977,8 @@ export class Conductor extends Container<Bindings> {
       updates.push("slack_thread_ts = ?");
       values.push(slack_thread_ts);
     }
-    if (transcript_r2_key) {
-      updates.push("transcript_r2_key = ?");
-      values.push(transcript_r2_key);
-    }
-    if (session_id) {
-      updates.push("session_id = ?");
-      values.push(session_id);
-    }
+    // Note: session_id and transcript_r2_key are saved early (before terminal guard)
+    // to ensure they persist even when the status transition is rejected.
 
     values.push(taskUUID);
     this.ctx.storage.sql.exec(
