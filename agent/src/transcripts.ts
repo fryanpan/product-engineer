@@ -5,6 +5,8 @@
  * Extracted from server.ts to keep the main server focused on HTTP/session logic.
  */
 
+import { readFile, stat } from "node:fs/promises";
+
 export interface TranscriptManagerConfig {
   agentUuid: string;
   workerUrl: string;
@@ -63,8 +65,10 @@ export class TranscriptManager {
 
       for (const path of files) {
         try {
-          const file = Bun.file(path);
-          const currentSize = file.size;
+          // Use node:fs instead of Bun.file() — Bun.file().text() uses
+          // globalThis.fetch internally, which breaks if fetch is mocked in tests.
+          const transcriptContent = await readFile(path, "utf-8");
+          const currentSize = transcriptContent.length;
           const prevSize = this.uploadedSizes.get(path) ?? 0;
 
           // Skip if unchanged (unless forced, e.g., session end / shutdown)
@@ -74,7 +78,6 @@ export class TranscriptManager {
           const r2Key = `${this.config.agentUuid}-${basename}`;
 
           console.log(`[Agent] Uploading transcript ${basename} (${currentSize} bytes, was ${prevSize})...`);
-          const transcriptContent = await file.text();
           this.uploadedSizes.set(path, currentSize);
 
           const uploadRes = await fetch(`${this.config.workerUrl}/api/internal/upload-transcript`, {

@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, mock, afterEach, spyOn } from "bun:test";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { TranscriptManager, type TranscriptManagerConfig } from "./transcripts";
 
 const defaultConfig: TranscriptManagerConfig = {
@@ -103,152 +104,139 @@ describe("TranscriptManager", () => {
   });
 
   describe("upload with mocked findAllTranscripts", () => {
+    // IMPORTANT: Bun.file().text() uses globalThis.fetch internally on CI.
+    // We CANNOT mock globalThis.fetch — it breaks file reading. Instead, use
+    // a real local HTTP server that captures upload requests.
+
+    let testServer: ReturnType<typeof Bun.serve>;
+    let serverUrl: string;
+    let uploadRequests: Array<{ body: string; headers: Record<string, string> }>;
+    let serverStatus: number;
+
+    beforeEach(() => {
+      uploadRequests = [];
+      serverStatus = 200;
+      testServer = Bun.serve({
+        port: 0,
+        fetch: async (req) => {
+          if (req.url.includes("upload-transcript")) {
+            const body = await req.text();
+            const headers: Record<string, string> = {};
+            req.headers.forEach((v, k) => { headers[k] = v; });
+            uploadRequests.push({ body, headers });
+            return new Response("ok", { status: serverStatus });
+          }
+          return new Response("not found", { status: 404 });
+        },
+      });
+      serverUrl = `http://localhost:${testServer.port}`;
+    });
+
+    afterEach(() => {
+      testServer.stop(true);
+    });
+
     test("skips files with unchanged size", async () => {
-      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("ok", { status: 200 })
-      );
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
-
-      // Create a temp file to test with
-      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
-      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      const tmpDir = `/tmp/.claude-test-transcripts-${Date.now()}`;
       const tmpFile = `${tmpDir}/test-session.jsonl`;
-      await Bun.write(tmpFile, '{"type":"test"}\n');
-
-      // Mock findAllTranscripts to return our temp file
-      const origFind = manager.findAllTranscripts.bind(manager);
-      manager.findAllTranscripts = async () => [tmpFile];
 
       try {
-        // First upload — should upload
-        await manager.upload();
-        const uploadCalls = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        );
-        expect(uploadCalls.length).toBe(1);
-        const firstCall = uploadCalls[0];
-        expect(firstCall[0]).toBe("https://worker.example.com/api/internal/upload-transcript");
-        const body = JSON.parse((firstCall[1] as RequestInit).body as string);
-        expect(body.taskUUID).toBe("ticket-uuid-5678");
-        expect(body.r2Key).toBe(`test-uuid-1234-test-session.jsonl`);
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"test"}\n');
 
-        // Second upload — same size, should skip
-        // Filter by URL to avoid false positives from fetch spy contamination across test files
-        const callsBefore = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        ).length;
-        await manager.upload();
-        const callsAfter = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        ).length;
-        expect(callsAfter).toBe(callsBefore);
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
+
+        // First upload — should upload
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
+        const body = JSON.parse(uploadRequests[0].body);
+        expect(body.taskUUID).toBe("ticket-uuid-5678");
+        expect(body.r2Key).toBe("test-uuid-1234-test-session.jsonl");
+
+        // Second upload — same content, should skip
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
 
         // Third upload with force — should upload despite same size
-        const callsBeforeForce = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        ).length;
-        await manager.upload(true);
-        const callsAfterForce = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        ).length;
-        expect(callsAfterForce).toBe(callsBeforeForce + 1);
+        await localManager.upload(true);
+        expect(uploadRequests.length).toBe(2);
       } finally {
-        fetchSpy.mockRestore();
         logSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
     test("re-uploads when file size changes", async () => {
-      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("ok", { status: 200 })
-      );
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
-
-      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
-      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      const tmpDir = `/tmp/.claude-test-transcripts-reupload-${Date.now()}`;
       const tmpFile = `${tmpDir}/growing.jsonl`;
-      await Bun.write(tmpFile, '{"type":"first"}\n');
-
-      manager.findAllTranscripts = async () => [tmpFile];
 
       try {
-        // First upload
-        await manager.upload();
-        const firstCalls = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        );
-        expect(firstCalls.length).toBe(1);
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"first"}\n');
 
-        // Append data — size changes
-        await Bun.write(tmpFile, '{"type":"first"}\n{"type":"second"}\n');
-        await manager.upload();
-        const allCalls = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        );
-        expect(allCalls.length).toBe(2);
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
+
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
+
+        // Append data — content length changes
+        writeFileSync(tmpFile, '{"type":"first"}\n{"type":"second"}\n');
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(2);
       } finally {
-        fetchSpy.mockRestore();
         logSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
     test("handles upload failure gracefully", async () => {
-      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("Internal Server Error", { status: 500 })
-      );
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
       const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-
-      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
-      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      const tmpDir = `/tmp/.claude-test-transcripts-fail-${Date.now()}`;
       const tmpFile = `${tmpDir}/fail.jsonl`;
-      await Bun.write(tmpFile, '{"type":"test"}\n');
-
-      manager.findAllTranscripts = async () => [tmpFile];
 
       try {
-        // Should not throw
-        await manager.upload();
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"test"}\n');
+
+        serverStatus = 500;
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
+
+        await localManager.upload();
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("Transcript upload failed for fail.jsonl: 500"),
         );
       } finally {
-        fetchSpy.mockRestore();
         logSpy.mockRestore();
         errorSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
     test("sends correct headers including X-Internal-Key", async () => {
-      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("ok", { status: 200 })
-      );
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
-
-      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
-      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      const tmpDir = `/tmp/.claude-test-transcripts-headers-${Date.now()}`;
       const tmpFile = `${tmpDir}/headers-test.jsonl`;
-      await Bun.write(tmpFile, '{"type":"test"}\n');
-
-      manager.findAllTranscripts = async () => [tmpFile];
 
       try {
-        await manager.upload();
-        const uploadCall = fetchSpy.mock.calls.find(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
-        );
-        expect(uploadCall).toBeDefined();
-        const callOpts = uploadCall![1] as RequestInit;
-        expect(callOpts.method).toBe("POST");
-        expect((callOpts.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
-        expect((callOpts.headers as Record<string, string>)["X-Internal-Key"]).toBe("test-api-key");
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"test"}\n');
+
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
+
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
+        expect(uploadRequests[0].headers["content-type"]).toBe("application/json");
+        expect(uploadRequests[0].headers["x-internal-key"]).toBe("test-api-key");
       } finally {
-        fetchSpy.mockRestore();
         logSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });
