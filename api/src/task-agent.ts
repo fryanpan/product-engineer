@@ -143,7 +143,11 @@ export class TaskAgent extends Container<Bindings> {
         } else {
           // Container is healthy — replay any buffered events that were stuck
           // (e.g., events that arrived during cold start and were buffered as 202)
-          await this.replayBufferedEvents();
+          try {
+            await this.replayBufferedEvents();
+          } catch (err) {
+            console.warn(`[TaskAgent] Buffer replay failed for ${config.taskUUID}:`, err);
+          }
         }
       } catch {
         console.log(`[TaskAgent] Container not healthy for ${config.taskUUID}, will auto-resume on restart`);

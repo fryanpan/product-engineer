@@ -604,7 +604,7 @@ describe("TaskManager", () => {
       expect(task.agent_active).toBe(0);
     });
 
-    it("throws on non-503 error response", async () => {
+    it("throws immediately on 400 (4xx) without retry", async () => {
       manager.createTask(defaultParams);
       sql._tasks.get("PE-1")!.agent_active = 1;
       mockNs.setResponse("PE-1", 400, "bad request");
