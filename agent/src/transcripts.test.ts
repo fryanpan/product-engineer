@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, mock, afterEach, spyOn } from "bun:test";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { TranscriptManager, type TranscriptManagerConfig } from "./transcripts";
 
 const defaultConfig: TranscriptManagerConfig = {
@@ -141,8 +142,8 @@ describe("TranscriptManager", () => {
       const tmpFile = `${tmpDir}/test-session.jsonl`;
 
       try {
-        await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
-        await Bun.write(tmpFile, '{"type":"test"}\n');
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"test"}\n');
 
         const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
         localManager.findAllTranscripts = async () => [tmpFile];
@@ -163,7 +164,7 @@ describe("TranscriptManager", () => {
         expect(uploadRequests.length).toBe(2);
       } finally {
         logSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
@@ -173,8 +174,8 @@ describe("TranscriptManager", () => {
       const tmpFile = `${tmpDir}/growing.jsonl`;
 
       try {
-        await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
-        await Bun.write(tmpFile, '{"type":"first"}\n');
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"first"}\n');
 
         const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
         localManager.findAllTranscripts = async () => [tmpFile];
@@ -183,12 +184,12 @@ describe("TranscriptManager", () => {
         expect(uploadRequests.length).toBe(1);
 
         // Append data — content length changes
-        await Bun.write(tmpFile, '{"type":"first"}\n{"type":"second"}\n');
+        writeFileSync(tmpFile, '{"type":"first"}\n{"type":"second"}\n');
         await localManager.upload();
         expect(uploadRequests.length).toBe(2);
       } finally {
         logSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
@@ -199,8 +200,8 @@ describe("TranscriptManager", () => {
       const tmpFile = `${tmpDir}/fail.jsonl`;
 
       try {
-        await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
-        await Bun.write(tmpFile, '{"type":"test"}\n');
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"test"}\n');
 
         serverStatus = 500;
         const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
@@ -213,7 +214,7 @@ describe("TranscriptManager", () => {
       } finally {
         logSpy.mockRestore();
         errorSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
@@ -223,8 +224,8 @@ describe("TranscriptManager", () => {
       const tmpFile = `${tmpDir}/headers-test.jsonl`;
 
       try {
-        await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
-        await Bun.write(tmpFile, '{"type":"test"}\n');
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(tmpFile, '{"type":"test"}\n');
 
         const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
         localManager.findAllTranscripts = async () => [tmpFile];
@@ -235,7 +236,7 @@ describe("TranscriptManager", () => {
         expect(uploadRequests[0].headers["x-internal-key"]).toBe("test-api-key");
       } finally {
         logSpy.mockRestore();
-        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+        rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });
