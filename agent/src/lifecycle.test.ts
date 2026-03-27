@@ -54,12 +54,13 @@ function makeProjectLeadRole(): RoleConfig {
   };
 }
 
-function makeTranscriptMgr(): TranscriptManager {
+function makeTranscriptMgr(associatedTaskUUID?: string): TranscriptManager {
   return {
     upload: mock(() => Promise.resolve()),
     getTranscriptDir: () => "/tmp/transcripts",
     findAllTranscripts: mock(() => Promise.resolve([])),
     getUploadedSizes: () => new Map(),
+    getAssociatedTaskUUID: () => associatedTaskUUID,
   } as unknown as TranscriptManager;
 }
 
@@ -309,6 +310,35 @@ describe("AgentLifecycle", () => {
       // Session was reset, onExit NOT called
       expect(lifecycle.state.sessionStatus as string).toBe("idle");
       expect(lifecycle.state.sessionActive).toBe(false);
+      expect(callbacks.onExit).not.toHaveBeenCalled();
+    });
+
+    test("project lead: reports session_id to both container and associated task", async () => {
+      const transcriptMgr = makeTranscriptMgr("conductor-task-12345");
+      const { lifecycle, callbacks } = createLifecycle({
+        roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
+      });
+
+      lifecycle.state.sessionActive = true;
+      lifecycle.state.sessionStatus = "running";
+      lifecycle.state.currentSessionId = "sess-xyz-789";
+
+      await lifecycle.handleSessionEnd();
+
+      // session_id POSTed to BOTH container UUID and associated child task UUID
+      const statusCalls = fetchCalls.filter((c) => c.url.includes("/api/internal/status"));
+      expect(statusCalls.length).toBe(2);
+
+      const uuids = statusCalls.map((c) => JSON.parse(c.init.body as string).taskUUID);
+      expect(uuids).toContain("test-uuid"); // container UUID
+      expect(uuids).toContain("conductor-task-12345"); // associated child task
+
+      // Both have the same session_id
+      for (const call of statusCalls) {
+        expect(JSON.parse(call.init.body as string).session_id).toBe("sess-xyz-789");
+      }
+
       expect(callbacks.onExit).not.toHaveBeenCalled();
     });
 

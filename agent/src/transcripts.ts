@@ -176,6 +176,11 @@ export class TranscriptManager {
     this.config.associatedTaskUUID = uuid;
   }
 
+  /** Get the associated task UUID, if set. */
+  getAssociatedTaskUUID(): string | undefined {
+    return this.config.associatedTaskUUID;
+  }
+
   /** Returns the current uploaded sizes map (for testing/debugging). */
   getUploadedSizes(): Map<string, number> {
     return this.uploadedSizes;

@@ -214,22 +214,31 @@ export class AgentLifecycle {
         console.error("[Agent] Failed to upload transcript during persistent session end:", err);
       }
 
-      // 2. Save session_id to orchestrator so it can resume this session later
+      // 2. Save session_id to orchestrator so it can resume this session later.
+      //    For project leads, also save to the associated child task (the one the
+      //    user actually replies to in the thread).
       if (this.state.currentSessionId) {
-        try {
-          await fetch(`${this.config.workerUrl}/api/internal/status`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Internal-Key": this.config.apiKey,
-            },
-            body: JSON.stringify({
-              taskUUID: this.config.taskUUID,
-              session_id: this.state.currentSessionId,
-            }),
-          });
-        } catch (err) {
-          console.error("[Agent] Failed to report session_id during persistent session end:", err);
+        const taskUUIDs = [this.config.taskUUID];
+        const associatedUUID = this.transcriptMgr.getAssociatedTaskUUID();
+        if (associatedUUID && associatedUUID !== this.config.taskUUID) {
+          taskUUIDs.push(associatedUUID);
+        }
+        for (const uuid of taskUUIDs) {
+          try {
+            await fetch(`${this.config.workerUrl}/api/internal/status`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Internal-Key": this.config.apiKey,
+              },
+              body: JSON.stringify({
+                taskUUID: uuid,
+                session_id: this.state.currentSessionId,
+              }),
+            });
+          } catch (err) {
+            console.error(`[Agent] Failed to report session_id for ${uuid}:`, err);
+          }
         }
       }
 

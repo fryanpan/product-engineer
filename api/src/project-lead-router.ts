@@ -193,15 +193,16 @@ export async function handleProjectLeadRoute(
       // Build spawn config
       const gatewayConfig = getGatewayConfig(sql);
 
+      const effectiveMode = body.mode || productConfig.mode;
       const spawnConfig: SpawnConfig = {
         product: body.product,
-        repos: productConfig.repos,
+        repos: effectiveMode === "research" ? [] : productConfig.repos,
         slackChannel: body.slackChannel || productConfig.slack_channel_id || productConfig.slack_channel,
         slackThreadTs: body.slackThreadTs,
         secrets: productConfig.secrets,
         gatewayConfig,
         model: body.model || "sonnet",
-        mode: body.mode || productConfig.mode,
+        mode: effectiveMode,
         slackPersona: productConfig.slack_persona,
       };
 
