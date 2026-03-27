@@ -122,13 +122,13 @@ describe("TranscriptManager", () => {
         manager.findAllTranscripts = async () => [tmpFile];
 
         // Mock fetch only for upload-transcript calls, pass through others
-        const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input: any) => {
           const url = typeof input === "string" ? input : (input as Request).url;
           if (url.includes("upload-transcript")) {
             return new Response("ok", { status: 200 });
           }
           return new Response("not found", { status: 404 });
-        });
+        }) as typeof fetch);
 
         // First upload — should upload (content length > 0, prev size = 0)
         await manager.upload();
