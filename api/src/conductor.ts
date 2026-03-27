@@ -612,7 +612,7 @@ export class Conductor extends Container<Bindings> {
     for (const agent of ghostAgents) {
       console.log(`[Supervisor] Ghost agent: ${agent.task_uuid} (created: ${agent.created_at}, no heartbeat ever received)`);
       this.ctx.storage.sql.exec(
-        "UPDATE tasks SET agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
+        "UPDATE tasks SET agent_active = 0, agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
         agent.task_uuid,
       );
     }

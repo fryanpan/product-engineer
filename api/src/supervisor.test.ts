@@ -254,7 +254,7 @@ function runSupervisorTick(sql: ReturnType<typeof createMockSql>): {
 
   for (const agent of ghost) {
     sql.exec(
-      "UPDATE tasks SET agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
+      "UPDATE tasks SET agent_active = 0, agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
       agent.task_uuid,
     );
   }
@@ -557,6 +557,7 @@ describe("Supervisor tick: ghost agent detection", () => {
 
     expect(ghost.length).toBe(1);
     expect(ghost[0].task_uuid).toBe("PE-GHOST");
+    expect(sql._tasks.get("PE-GHOST")!.agent_active).toBe(0); // marked inactive — enables thread reply recovery
     expect(sql._tasks.get("PE-GHOST")!.needs_attention).toBe(1);
     expect(sql._tasks.get("PE-GHOST")!.needs_attention_reason).toBe(
       "ghost agent: started but never received task event",
