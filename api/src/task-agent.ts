@@ -136,17 +136,21 @@ export class TaskAgent extends Container<Bindings> {
       // Check container health — mark terminal if session completed/errored
       try {
         const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
-        const status = await res.json<{ sessionStatus: string }>();
-        if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
-          console.log(`[TaskAgent] Session ${status.sessionStatus} for ${config.taskUUID}, marking terminal`);
-          this.markTerminal();
+        if (!res.ok) {
+          console.log(`[TaskAgent] Container status check returned ${res.status} for ${config.taskUUID}`);
         } else {
-          // Container is healthy — replay any buffered events that were stuck
-          // (e.g., events that arrived during cold start and were buffered as 202)
-          try {
-            await this.replayBufferedEvents();
-          } catch (err) {
-            console.warn(`[TaskAgent] Buffer replay failed for ${config.taskUUID}:`, err);
+          const status = await res.json<{ sessionStatus: string }>();
+          if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
+            console.log(`[TaskAgent] Session ${status.sessionStatus} for ${config.taskUUID}, marking terminal`);
+            this.markTerminal();
+          } else {
+            // Container is healthy — replay any buffered events that were stuck
+            // (e.g., events that arrived during cold start and were buffered as 202)
+            try {
+              await this.replayBufferedEvents();
+            } catch (err) {
+              console.warn(`[TaskAgent] Buffer replay failed for ${config.taskUUID}:`, err);
+            }
           }
         }
       } catch {

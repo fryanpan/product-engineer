@@ -88,7 +88,9 @@ export class EventBuffer {
         const res = await fetchFn(row.event_json);
         if (res.ok) {
           delivered.push(row.id);
-        } else if (res.status === 503) {
+        } else {
+          // Stop on any non-ok response to preserve event ordering.
+          // Earlier events must succeed before later ones are attempted.
           break;
         }
       } catch {

@@ -118,7 +118,7 @@ describe("EventBuffer", () => {
     expect(sql.tables.event_buffer).toHaveLength(0);
   });
 
-  test("replay() stops on 503", async () => {
+  test("replay() stops on any non-ok response to preserve ordering", async () => {
     const sql = createMockSql();
     const buf = new EventBuffer(sql, "Test");
     buf.buffer({ type: "event1" });
@@ -134,6 +134,21 @@ describe("EventBuffer", () => {
     expect(count).toBe(1);
     // Only first event removed, second stays
     expect(sql.tables.event_buffer).toHaveLength(1);
+  });
+
+  test("replay() stops on 500 to prevent out-of-order delivery", async () => {
+    const sql = createMockSql();
+    const buf = new EventBuffer(sql, "Test");
+    buf.buffer({ type: "event1" });
+    buf.buffer({ type: "event2" });
+
+    const count = await buf.replay(async () => {
+      return new Response("error", { status: 500 });
+    });
+
+    expect(count).toBe(0);
+    // Both events remain — first must succeed before second is attempted
+    expect(sql.tables.event_buffer).toHaveLength(2);
   });
 
   test("replay() returns 0 when buffer is empty", async () => {

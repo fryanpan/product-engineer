@@ -122,8 +122,11 @@ describe("TranscriptManager", () => {
       try {
         // First upload — should upload
         await manager.upload();
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
-        const firstCall = fetchSpy.mock.calls[0];
+        const uploadCalls = fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(uploadCalls.length).toBe(1);
+        const firstCall = uploadCalls[0];
         expect(firstCall[0]).toBe("https://worker.example.com/api/internal/upload-transcript");
         const body = JSON.parse((firstCall[1] as RequestInit).body as string);
         expect(body.taskUUID).toBe("ticket-uuid-5678");
@@ -172,13 +175,18 @@ describe("TranscriptManager", () => {
       try {
         // First upload
         await manager.upload();
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const firstCalls = fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(firstCalls.length).toBe(1);
 
         // Append data — size changes
         await Bun.write(tmpFile, '{"type":"first"}\n{"type":"second"}\n');
-        fetchSpy.mockClear();
         await manager.upload();
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const allCalls = fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(allCalls.length).toBe(2);
       } finally {
         fetchSpy.mockRestore();
         logSpy.mockRestore();
@@ -229,7 +237,11 @@ describe("TranscriptManager", () => {
 
       try {
         await manager.upload();
-        const callOpts = fetchSpy.mock.calls[0][1] as RequestInit;
+        const uploadCall = fetchSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(uploadCall).toBeDefined();
+        const callOpts = uploadCall![1] as RequestInit;
         expect(callOpts.method).toBe("POST");
         expect((callOpts.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
         expect((callOpts.headers as Record<string, string>)["X-Internal-Key"]).toBe("test-api-key");

@@ -289,7 +289,7 @@ export class TaskManager {
       if (res.ok) return;
 
       // 4xx = client error, won't self-resolve — fail immediately
-      if (res.status < 500) {
+      if (res.status >= 400 && res.status < 500) {
         throw new Error(`Event delivery failed: ${res.status}`);
       }
 
