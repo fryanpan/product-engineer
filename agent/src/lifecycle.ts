@@ -214,7 +214,7 @@ export class AgentLifecycle {
         console.error("[Agent] Failed to upload transcript during persistent session end:", err);
       }
 
-      // 2. Save session_id to orchestrator so it can resume this session later.
+      // 2. Save session_id to conductor so it can resume this session later.
       //    For project leads, also save to the associated child task (the one the
       //    user actually replies to in the thread).
       if (this.state.currentSessionId) {
