@@ -103,53 +103,64 @@ describe("TranscriptManager", () => {
   });
 
   describe("upload with mocked findAllTranscripts", () => {
+    // IMPORTANT: Bun.file().text() uses globalThis.fetch internally on CI.
+    // We CANNOT mock globalThis.fetch — it breaks file reading. Instead, use
+    // a real local HTTP server that captures upload requests.
+
+    let testServer: ReturnType<typeof Bun.serve>;
+    let serverUrl: string;
+    let uploadRequests: Array<{ body: string; headers: Record<string, string> }>;
+    let serverStatus: number;
+
+    beforeEach(() => {
+      uploadRequests = [];
+      serverStatus = 200;
+      testServer = Bun.serve({
+        port: 0,
+        fetch: async (req) => {
+          if (req.url.includes("upload-transcript")) {
+            const body = await req.text();
+            const headers: Record<string, string> = {};
+            req.headers.forEach((v, k) => { headers[k] = v; });
+            uploadRequests.push({ body, headers });
+            return new Response("ok", { status: serverStatus });
+          }
+          return new Response("not found", { status: 404 });
+        },
+      });
+      serverUrl = `http://localhost:${testServer.port}`;
+    });
+
+    afterEach(() => {
+      testServer.stop(true);
+    });
+
     test("skips files with unchanged size", async () => {
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
-
-      // Use /tmp for temp files
       const tmpDir = `/tmp/.claude-test-transcripts-${Date.now()}`;
       const tmpFile = `${tmpDir}/test-session.jsonl`;
-      const fileContent = '{"type":"test"}\n';
 
       try {
         await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
-        await Bun.write(tmpFile, fileContent);
+        await Bun.write(tmpFile, '{"type":"test"}\n');
 
-        manager.findAllTranscripts = async () => [tmpFile];
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
 
-        // IMPORTANT: Bun.file().text() uses globalThis.fetch internally on some
-        // platforms. Mock fetch AFTER file write and use mockImplementation that
-        // passes through file:// URLs so Bun.file().text() still works.
-        const originalFetch = globalThis.fetch;
-        const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
-        const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input: any, init?: any) => {
-          const url = typeof input === "string" ? input : (input as Request).url;
-          if (url.includes("upload-transcript")) {
-            fetchCalls.push({ url, init });
-            return new Response("ok", { status: 200 });
-          }
-          // Pass through non-upload calls (including Bun internal file reads)
-          return originalFetch(input, init);
-        }) as typeof fetch);
-
-        // First upload — should upload (content length > 0, prev size = 0)
-        await manager.upload();
-        expect(fetchCalls.length).toBe(1);
-        expect(fetchCalls[0].url).toBe("https://worker.example.com/api/internal/upload-transcript");
-        const body = JSON.parse(fetchCalls[0].init?.body as string);
+        // First upload — should upload
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
+        const body = JSON.parse(uploadRequests[0].body);
         expect(body.taskUUID).toBe("ticket-uuid-5678");
-        expect(body.r2Key).toBe(`test-uuid-1234-test-session.jsonl`);
+        expect(body.r2Key).toBe("test-uuid-1234-test-session.jsonl");
 
         // Second upload — same content, should skip
-        const countBefore = fetchCalls.length;
-        await manager.upload();
-        expect(fetchCalls.length).toBe(countBefore);
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
 
         // Third upload with force — should upload despite same size
-        await manager.upload(true);
-        expect(fetchCalls.length).toBe(countBefore + 1);
-
-        fetchSpy.mockRestore();
+        await localManager.upload(true);
+        expect(uploadRequests.length).toBe(2);
       } finally {
         logSpy.mockRestore();
         await Bun.spawn(["rm", "-rf", tmpDir]).exited;
@@ -158,7 +169,6 @@ describe("TranscriptManager", () => {
 
     test("re-uploads when file size changes", async () => {
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
-
       const tmpDir = `/tmp/.claude-test-transcripts-reupload-${Date.now()}`;
       const tmpFile = `${tmpDir}/growing.jsonl`;
 
@@ -166,39 +176,16 @@ describe("TranscriptManager", () => {
         await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
         await Bun.write(tmpFile, '{"type":"first"}\n');
 
-        manager.findAllTranscripts = async () => [tmpFile];
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
 
-        const originalFetch = globalThis.fetch;
-        const uploadCalls: string[] = [];
-        const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input: any, init?: any) => {
-          const url = typeof input === "string" ? input : (input as Request).url;
-          if (url.includes("upload-transcript")) {
-            uploadCalls.push(url);
-            return new Response("ok", { status: 200 });
-          }
-          return originalFetch(input, init);
-        }) as typeof fetch);
-
-        // First upload
-        await manager.upload();
-        expect(uploadCalls.length).toBe(1);
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
 
         // Append data — content length changes
-        fetchSpy.mockRestore();
         await Bun.write(tmpFile, '{"type":"first"}\n{"type":"second"}\n');
-        const fetchSpy2 = spyOn(globalThis, "fetch").mockImplementation((async (input: any, init?: any) => {
-          const url = typeof input === "string" ? input : (input as Request).url;
-          if (url.includes("upload-transcript")) {
-            uploadCalls.push(url);
-            return new Response("ok", { status: 200 });
-          }
-          return originalFetch(input, init);
-        }) as typeof fetch);
-
-        await manager.upload();
-        expect(uploadCalls.length).toBe(2);
-
-        fetchSpy2.mockRestore();
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(2);
       } finally {
         logSpy.mockRestore();
         await Bun.spawn(["rm", "-rf", tmpDir]).exited;
@@ -208,7 +195,6 @@ describe("TranscriptManager", () => {
     test("handles upload failure gracefully", async () => {
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
       const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-
       const tmpDir = `/tmp/.claude-test-transcripts-fail-${Date.now()}`;
       const tmpFile = `${tmpDir}/fail.jsonl`;
 
@@ -216,23 +202,14 @@ describe("TranscriptManager", () => {
         await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
         await Bun.write(tmpFile, '{"type":"test"}\n');
 
-        manager.findAllTranscripts = async () => [tmpFile];
+        serverStatus = 500;
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
 
-        const originalFetch = globalThis.fetch;
-        const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input: any, init?: any) => {
-          const url = typeof input === "string" ? input : (input as Request).url;
-          if (url.includes("upload-transcript")) {
-            return new Response("Internal Server Error", { status: 500 });
-          }
-          return originalFetch(input, init);
-        }) as typeof fetch);
-
-        await manager.upload();
+        await localManager.upload();
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("Transcript upload failed for fail.jsonl: 500"),
         );
-
-        fetchSpy.mockRestore();
       } finally {
         logSpy.mockRestore();
         errorSpy.mockRestore();
@@ -242,7 +219,6 @@ describe("TranscriptManager", () => {
 
     test("sends correct headers including X-Internal-Key", async () => {
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
-
       const tmpDir = `/tmp/.claude-test-transcripts-headers-${Date.now()}`;
       const tmpFile = `${tmpDir}/headers-test.jsonl`;
 
@@ -250,26 +226,13 @@ describe("TranscriptManager", () => {
         await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
         await Bun.write(tmpFile, '{"type":"test"}\n');
 
-        manager.findAllTranscripts = async () => [tmpFile];
+        const localManager = new TranscriptManager({ ...defaultConfig, workerUrl: serverUrl });
+        localManager.findAllTranscripts = async () => [tmpFile];
 
-        const originalFetch = globalThis.fetch;
-        let capturedInit: RequestInit | undefined;
-        const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (input: any, init?: any) => {
-          const url = typeof input === "string" ? input : (input as Request).url;
-          if (url.includes("upload-transcript")) {
-            capturedInit = init;
-            return new Response("ok", { status: 200 });
-          }
-          return originalFetch(input, init);
-        }) as typeof fetch);
-
-        await manager.upload();
-        expect(capturedInit).toBeDefined();
-        expect(capturedInit!.method).toBe("POST");
-        expect((capturedInit!.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
-        expect((capturedInit!.headers as Record<string, string>)["X-Internal-Key"]).toBe("test-api-key");
-
-        fetchSpy.mockRestore();
+        await localManager.upload();
+        expect(uploadRequests.length).toBe(1);
+        expect(uploadRequests[0].headers["content-type"]).toBe("application/json");
+        expect(uploadRequests[0].headers["x-internal-key"]).toBe("test-api-key");
       } finally {
         logSpy.mockRestore();
         await Bun.spawn(["rm", "-rf", tmpDir]).exited;
