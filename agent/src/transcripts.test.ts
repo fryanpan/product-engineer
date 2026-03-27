@@ -218,6 +218,109 @@ describe("TranscriptManager", () => {
       }
     });
 
+    test("includes associatedTaskUUID in upload body when set", async () => {
+      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("ok", { status: 200 })
+      );
+      const logSpy = spyOn(console, "log").mockImplementation(() => {});
+
+      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
+      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      const tmpFile = `${tmpDir}/assoc-test.jsonl`;
+      await Bun.write(tmpFile, '{"type":"test"}\n');
+
+      const mgr = new TranscriptManager({
+        ...defaultConfig,
+        associatedTaskUUID: "child-task-uuid-9999",
+      });
+      mgr.findAllTranscripts = async () => [tmpFile];
+
+      try {
+        await mgr.upload();
+        const uploadCall = fetchSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(uploadCall).toBeDefined();
+        const body = JSON.parse((uploadCall![1] as RequestInit).body as string);
+        expect(body.associatedTaskUUID).toBe("child-task-uuid-9999");
+        expect(body.taskUUID).toBe("ticket-uuid-5678");
+      } finally {
+        fetchSpy.mockRestore();
+        logSpy.mockRestore();
+        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+      }
+    });
+
+    test("does not include associatedTaskUUID when not set", async () => {
+      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("ok", { status: 200 })
+      );
+      const logSpy = spyOn(console, "log").mockImplementation(() => {});
+
+      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
+      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      const tmpFile = `${tmpDir}/no-assoc-test.jsonl`;
+      await Bun.write(tmpFile, '{"type":"test"}\n');
+
+      manager.findAllTranscripts = async () => [tmpFile];
+
+      try {
+        await manager.upload();
+        const uploadCall = fetchSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        expect(uploadCall).toBeDefined();
+        const body = JSON.parse((uploadCall![1] as RequestInit).body as string);
+        expect(body.associatedTaskUUID).toBeUndefined();
+      } finally {
+        fetchSpy.mockRestore();
+        logSpy.mockRestore();
+        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+      }
+    });
+
+    test("setAssociatedTaskUUID updates the config dynamically", async () => {
+      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("ok", { status: 200 })
+      );
+      const logSpy = spyOn(console, "log").mockImplementation(() => {});
+
+      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
+      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      const tmpFile = `${tmpDir}/dynamic-assoc-test.jsonl`;
+      await Bun.write(tmpFile, '{"type":"test"}\n');
+
+      manager.findAllTranscripts = async () => [tmpFile];
+
+      try {
+        // Upload without associatedTaskUUID
+        await manager.upload();
+        let uploadCall = fetchSpy.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        let body = JSON.parse((uploadCall![1] as RequestInit).body as string);
+        expect(body.associatedTaskUUID).toBeUndefined();
+
+        // Set associatedTaskUUID dynamically
+        manager.setAssociatedTaskUUID("dynamic-child-uuid");
+
+        // Append data so size changes and upload triggers
+        await Bun.write(tmpFile, '{"type":"test"}\n{"type":"second"}\n');
+
+        await manager.upload();
+        const allUploadCalls = fetchSpy.mock.calls.filter(
+          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+        );
+        const lastCall = allUploadCalls[allUploadCalls.length - 1];
+        body = JSON.parse((lastCall[1] as RequestInit).body as string);
+        expect(body.associatedTaskUUID).toBe("dynamic-child-uuid");
+      } finally {
+        fetchSpy.mockRestore();
+        logSpy.mockRestore();
+        await Bun.spawn(["rm", "-rf", tmpDir]).exited;
+      }
+    });
+
     test("sends correct headers including X-Internal-Key", async () => {
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
       const tmpDir = `/tmp/.claude-test-transcripts-headers-${Date.now()}`;
