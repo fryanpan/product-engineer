@@ -276,9 +276,71 @@ describe("AgentLifecycle", () => {
       expect(callbacks.onExit).toHaveBeenCalledWith(0);
     });
 
+    test("project lead: uploads transcript and reports session_id before resetting", async () => {
+      const transcriptMgr = makeTranscriptMgr();
+      const { lifecycle, tokenTracker, callbacks, config } = createLifecycle({
+        roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
+      });
+
+      lifecycle.state.sessionActive = true;
+      lifecycle.state.sessionStatus = "running";
+      lifecycle.state.sessionMessageCount = 5;
+      lifecycle.state.currentSessionId = "sess-abc-123";
+
+      await lifecycle.handleSessionEnd();
+
+      // Transcript uploaded with force=true
+      expect(transcriptMgr.upload).toHaveBeenCalledWith(true);
+
+      // session_id POSTed to orchestrator
+      const statusCalls = fetchCalls.filter((c) => c.url.includes("/api/internal/status"));
+      expect(statusCalls.length).toBe(1);
+      const statusBody = JSON.parse(statusCalls[0].init.body as string);
+      expect(statusBody.taskUUID).toBe("test-uuid");
+      expect(statusBody.session_id).toBe("sess-abc-123");
+      expect(statusCalls[0].init.method).toBe("POST");
+      const statusHeaders = statusCalls[0].init.headers as Record<string, string>;
+      expect(statusHeaders["X-Internal-Key"]).toBe("test-api-key");
+
+      // Token report still called
+      expect(tokenTracker.report).toHaveBeenCalledTimes(1);
+
+      // Session was reset, onExit NOT called
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
+      expect(lifecycle.state.sessionActive).toBe(false);
+      expect(callbacks.onExit).not.toHaveBeenCalled();
+    });
+
+    test("project lead: skips session_id POST when currentSessionId is empty", async () => {
+      const transcriptMgr = makeTranscriptMgr();
+      const { lifecycle, callbacks } = createLifecycle({
+        roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
+      });
+
+      lifecycle.state.sessionActive = true;
+      lifecycle.state.sessionStatus = "running";
+      lifecycle.state.currentSessionId = ""; // empty — no session_id to report
+
+      await lifecycle.handleSessionEnd();
+
+      // Transcript still uploaded
+      expect(transcriptMgr.upload).toHaveBeenCalledWith(true);
+
+      // No status call made (no session_id to report)
+      const statusCalls = fetchCalls.filter((c) => c.url.includes("/api/internal/status"));
+      expect(statusCalls.length).toBe(0);
+
+      // onExit NOT called
+      expect(callbacks.onExit).not.toHaveBeenCalled();
+    });
+
     test("project lead: resets session state instead of exiting", async () => {
+      const transcriptMgr = makeTranscriptMgr();
       const { lifecycle, tokenTracker, callbacks } = createLifecycle({
         roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
       });
 
       lifecycle.state.sessionActive = true;

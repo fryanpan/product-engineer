@@ -203,8 +203,37 @@ export class AgentLifecycle {
     this.phoneHome(`session_completed msgs=${this.state.sessionMessageCount}`);
 
     if (this.roleConfig.persistAfterSession) {
-      // Project lead/research session completed — report tokens here since
-      // autoSuspend won't be called (persistent agents stay alive).
+      // Project lead/research session completed — upload transcript, report
+      // session_id, then report tokens. autoSuspend won't be called since
+      // persistent agents stay alive.
+
+      // 1. Upload transcript before anything else
+      try {
+        await this.transcriptMgr.upload(true);
+      } catch (err) {
+        console.error("[Agent] Failed to upload transcript during persistent session end:", err);
+      }
+
+      // 2. Save session_id to orchestrator so it can resume this session later
+      if (this.state.currentSessionId) {
+        try {
+          await fetch(`${this.config.workerUrl}/api/internal/status`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Internal-Key": this.config.apiKey,
+            },
+            body: JSON.stringify({
+              taskUUID: this.config.taskUUID,
+              session_id: this.state.currentSessionId,
+            }),
+          });
+        } catch (err) {
+          console.error("[Agent] Failed to report session_id during persistent session end:", err);
+        }
+      }
+
+      // 3. Report token usage
       await this.tokenTracker.report({
         taskUUID: this.config.taskUUID,
         workerUrl: this.config.workerUrl,
