@@ -287,12 +287,14 @@ export class TaskManager {
       }));
 
       if (res.ok) return;
-      if (res.status !== 503) {
+
+      // 4xx = client error, won't self-resolve — fail immediately
+      if (res.status >= 400 && res.status < 500) {
         throw new Error(`Event delivery failed: ${res.status}`);
       }
 
-      // Container not ready, backoff and retry
-      console.warn(`[TaskManager] Agent not ready for ${taskUUID}, retry ${attempt + 1}/3`);
+      // 5xx = server error (503 cold start, 500 workspace setup, 502 gateway) — retry
+      console.warn(`[TaskManager] Agent error ${res.status} for ${taskUUID}, retry ${attempt + 1}/3`);
       await new Promise(r => setTimeout(r, this.retryDelayMs * (attempt + 1)));
     }
 

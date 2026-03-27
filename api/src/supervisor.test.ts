@@ -66,6 +66,26 @@ function createMockSql() {
         return { toArray: () => (row ? [{ ...row }] : []) };
       }
 
+      // SELECT ghost agents (no heartbeat, old created_at, spawning/active)
+      if (trimmed.includes("agent_active = 1") && trimmed.includes("last_heartbeat IS NULL") && trimmed.includes("created_at <")) {
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const ghost = [...tasks.values()].filter(
+          (t) =>
+            t.agent_active === 1 &&
+            t.last_heartbeat === null &&
+            (t.status === "spawning" || t.status === "active") &&
+            new Date(t.created_at as string) < fiveMinAgo,
+        );
+        return {
+          toArray: () =>
+            ghost.map((t) => ({
+              task_uuid: t.task_uuid,
+              product: t.product,
+              created_at: t.created_at,
+            })),
+        };
+      }
+
       // SELECT stale agents (supervisor tick query)
       if (trimmed.includes("agent_active = 1") && trimmed.includes("last_heartbeat IS NOT NULL") && trimmed.includes("-5 minutes")) {
         // For testing, we compare last_heartbeat against 5 minutes ago
@@ -119,6 +139,10 @@ function createMockSql() {
             // Literal string value in SET clause (e.g., agent_message = 'some text')
             const literalMatch = part.match(/(\w+)\s*=\s*'([^']*)'/);
             if (literalMatch) row[literalMatch[1]] = literalMatch[2];
+          } else if (part.match(/(\w+)\s*=\s*(\d+)/)) {
+            // Literal numeric value (e.g., needs_attention = 1)
+            const numMatch = part.match(/(\w+)\s*=\s*(\d+)/);
+            if (numMatch) row[numMatch[1]] = parseInt(numMatch[2], 10);
           }
         }
         row.updated_at = new Date().toISOString();
@@ -197,8 +221,11 @@ function handleHeartbeat(
 }
 
 /** Mimics runSupervisorTick logic from conductor.ts */
-function runSupervisorTick(sql: ReturnType<typeof createMockSql>): Array<{ task_uuid: string; product: string; last_heartbeat: string }> {
-  const result = sql.exec(`
+function runSupervisorTick(sql: ReturnType<typeof createMockSql>): {
+  stale: Array<{ task_uuid: string; product: string; last_heartbeat: string }>;
+  ghost: Array<{ task_uuid: string; product: string; created_at: string }>;
+} {
+  const stale = sql.exec(`
     SELECT task_uuid, product, last_heartbeat
     FROM tasks
     WHERE agent_active = 1
@@ -206,14 +233,33 @@ function runSupervisorTick(sql: ReturnType<typeof createMockSql>): Array<{ task_
       AND last_heartbeat < datetime('now', '-5 minutes')
   `).toArray() as Array<{ task_uuid: string; product: string; last_heartbeat: string }>;
 
-  for (const agent of result) {
+  for (const agent of stale) {
     sql.exec(
       "UPDATE tasks SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE task_uuid = ?",
       agent.task_uuid,
     );
   }
 
-  return result;
+  // Detect "ghost" agents — agent_active=1 but never received a heartbeat
+  // and created > 5 minutes ago. This catches containers that started but
+  // never received their task event (event lost during delivery).
+  const ghost = sql.exec(`
+    SELECT task_uuid, product, created_at
+    FROM tasks
+    WHERE agent_active = 1
+      AND last_heartbeat IS NULL
+      AND status IN ('spawning', 'active')
+      AND created_at < datetime('now', '-5 minutes')
+  `).toArray() as Array<{ task_uuid: string; product: string; created_at: string }>;
+
+  for (const agent of ghost) {
+    sql.exec(
+      "UPDATE tasks SET agent_active = 0, agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
+      agent.task_uuid,
+    );
+  }
+
+  return { stale, ghost };
 }
 
 /** Mimics handleStatusUpdate status validation logic from conductor.ts */
@@ -433,7 +479,7 @@ describe("Supervisor tick: stale agent detection", () => {
       last_heartbeat: tenMinAgo,
     });
 
-    const stale = runSupervisorTick(sql);
+    const { stale } = runSupervisorTick(sql);
 
     expect(stale.length).toBe(1);
     expect(stale[0].task_uuid).toBe("PE-1");
@@ -451,7 +497,7 @@ describe("Supervisor tick: stale agent detection", () => {
       last_heartbeat: oneMinAgo,
     });
 
-    const stale = runSupervisorTick(sql);
+    const { stale } = runSupervisorTick(sql);
 
     expect(stale.length).toBe(0);
     expect(sql._tasks.get("PE-2")!.agent_message).toBeNull();
@@ -465,19 +511,20 @@ describe("Supervisor tick: stale agent detection", () => {
       last_heartbeat: tenMinAgo,
     });
 
-    const stale = runSupervisorTick(sql);
+    const { stale } = runSupervisorTick(sql);
     expect(stale.length).toBe(0);
   });
 
-  it("does not flag agents with no heartbeat (null)", () => {
+  it("does not flag recently-spawned agents with no heartbeat", () => {
     insertTask(sql, "PE-4", {
       status: "spawning",
       agent_active: 1,
       last_heartbeat: null,
     });
 
-    const stale = runSupervisorTick(sql);
+    const { stale, ghost } = runSupervisorTick(sql);
     expect(stale.length).toBe(0);
+    expect(ghost.length).toBe(0); // created_at is recent, not > 5min
   });
 
   it("detects multiple stale agents", () => {
@@ -485,8 +532,93 @@ describe("Supervisor tick: stale agent detection", () => {
     insertTask(sql, "PE-A", { status: "active", agent_active: 1, last_heartbeat: tenMinAgo });
     insertTask(sql, "PE-B", { status: "active", agent_active: 1, last_heartbeat: tenMinAgo });
 
-    const stale = runSupervisorTick(sql);
+    const { stale } = runSupervisorTick(sql);
     expect(stale.length).toBe(2);
+  });
+});
+
+describe("Supervisor tick: ghost agent detection", () => {
+  let sql: ReturnType<typeof createMockSql>;
+
+  beforeEach(() => {
+    sql = createMockSql();
+  });
+
+  it("detects ghost agents — active but no heartbeat after 5 minutes", () => {
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    insertTask(sql, "PE-GHOST", {
+      status: "active",
+      agent_active: 1,
+      last_heartbeat: null,
+      created_at: tenMinAgo,
+    });
+
+    const { ghost } = runSupervisorTick(sql);
+
+    expect(ghost.length).toBe(1);
+    expect(ghost[0].task_uuid).toBe("PE-GHOST");
+    expect(sql._tasks.get("PE-GHOST")!.agent_active).toBe(0); // marked inactive — enables thread reply recovery
+    expect(sql._tasks.get("PE-GHOST")!.needs_attention).toBe(1);
+    expect(sql._tasks.get("PE-GHOST")!.needs_attention_reason).toBe(
+      "ghost agent: started but never received task event",
+    );
+    expect(sql._tasks.get("PE-GHOST")!.agent_message).toBe(
+      "no heartbeat since spawn — event may have been lost",
+    );
+  });
+
+  it("detects ghost agents in spawning state", () => {
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    insertTask(sql, "PE-SPAWN", {
+      status: "spawning",
+      agent_active: 1,
+      last_heartbeat: null,
+      created_at: tenMinAgo,
+    });
+
+    const { ghost } = runSupervisorTick(sql);
+
+    expect(ghost.length).toBe(1);
+    expect(ghost[0].task_uuid).toBe("PE-SPAWN");
+  });
+
+  it("does not flag ghost agents that are recently created (<5 min)", () => {
+    // Default created_at is "now" — should not be flagged
+    insertTask(sql, "PE-NEW", {
+      status: "active",
+      agent_active: 1,
+      last_heartbeat: null,
+    });
+
+    const { ghost } = runSupervisorTick(sql);
+    expect(ghost.length).toBe(0);
+  });
+
+  it("does not flag tasks with heartbeats as ghosts", () => {
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    insertTask(sql, "PE-ALIVE", {
+      status: "active",
+      agent_active: 1,
+      last_heartbeat: tenMinAgo, // has heartbeat — NOT a ghost (detected as stale instead)
+      created_at: tenMinAgo,
+    });
+
+    const { ghost, stale } = runSupervisorTick(sql);
+    expect(ghost.length).toBe(0);
+    expect(stale.length).toBe(1); // caught by stale detection instead
+  });
+
+  it("does not flag terminal tasks as ghosts", () => {
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    insertTask(sql, "PE-DONE", {
+      status: "merged",
+      agent_active: 1, // unusual but possible
+      last_heartbeat: null,
+      created_at: tenMinAgo,
+    });
+
+    const { ghost } = runSupervisorTick(sql);
+    expect(ghost.length).toBe(0); // merged is not in ['spawning', 'active']
   });
 });
 

@@ -604,7 +604,7 @@ describe("TaskManager", () => {
       expect(task.agent_active).toBe(0);
     });
 
-    it("throws on non-503 error response", async () => {
+    it("throws immediately on 400 (4xx) without retry", async () => {
       manager.createTask(defaultParams);
       sql._tasks.get("PE-1")!.agent_active = 1;
       mockNs.setResponse("PE-1", 400, "bad request");
@@ -612,6 +612,54 @@ describe("TaskManager", () => {
       await expect(manager.sendEvent("PE-1", {})).rejects.toThrow(
         "Event delivery failed: 400"
       );
+    });
+
+    it("retries 500 errors (not just 503) and marks inactive after exhaustion", async () => {
+      manager.createTask(defaultParams);
+      sql._tasks.get("PE-1")!.agent_active = 1;
+      sql._tasks.get("PE-1")!.status = "active";
+      mockNs.setResponse("PE-1", 500, "internal server error");
+
+      await manager.sendEvent("PE-1", { type: "test" });
+
+      const task = manager.getTask("PE-1")!;
+      // Should retry and eventually mark inactive (same as 503 behavior)
+      expect(task.status).toBe("active");
+      expect(task.agent_active).toBe(0);
+
+      // Should have made 3 attempts (retried, not thrown immediately)
+      const calls = mockNs._agents.get("PE-1")!.fetchCalls;
+      expect(calls.length).toBe(3);
+    });
+
+    it("retries 502 errors and marks inactive after exhaustion", async () => {
+      manager.createTask(defaultParams);
+      sql._tasks.get("PE-1")!.agent_active = 1;
+      sql._tasks.get("PE-1")!.status = "active";
+      mockNs.setResponse("PE-1", 502, "bad gateway");
+
+      await manager.sendEvent("PE-1", { type: "test" });
+
+      const task = manager.getTask("PE-1")!;
+      expect(task.status).toBe("active");
+      expect(task.agent_active).toBe(0);
+
+      const calls = mockNs._agents.get("PE-1")!.fetchCalls;
+      expect(calls.length).toBe(3);
+    });
+
+    it("throws immediately on 4xx errors without retry", async () => {
+      manager.createTask(defaultParams);
+      sql._tasks.get("PE-1")!.agent_active = 1;
+      mockNs.setResponse("PE-1", 422, "unprocessable");
+
+      await expect(manager.sendEvent("PE-1", {})).rejects.toThrow(
+        "Event delivery failed: 422"
+      );
+
+      // Should NOT have retried — only 1 attempt
+      const calls = mockNs._agents.get("PE-1")!.fetchCalls;
+      expect(calls.length).toBe(1);
     });
   });
 

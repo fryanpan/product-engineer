@@ -205,6 +205,20 @@ private async routeToAgent(event: TaskEvent) {
 
 **Result:** Once a task is done, webhook events (PR merged, Linear status changes) don't restart the agent.
 
+### Event Delivery Reliability
+
+**Problem:** Events sent via `TaskManager.sendEvent()` could be silently lost. Container cold starts or workspace setup failures returned 500/502 errors that were not retried (only 503 was retried). Lost events left agents in a "started but no work" state.
+
+**Solution — three layers of reliability:**
+
+1. **Retry all 5xx errors** (`task-manager.ts`): `sendEvent()` now retries any server error (500, 502, 503) with backoff. Only 4xx client errors throw immediately. This covers transient container failures during workspace setup or cold start.
+
+2. **Alarm-based event buffer replay** (`task-agent.ts`): When the TaskAgent DO buffers events (container returns 503 → DO returns 202), the alarm handler now replays them. On each alarm tick, if the container is healthy and buffered events exist, they're pushed via `eventBuffer.replay()`. This prevents events from getting stuck in the DO buffer indefinitely.
+
+3. **Ghost agent detection** (`conductor.ts`): The supervisor flags tasks where `agent_active=1` but no heartbeat has ever been received and the task was created >5 minutes ago. These "ghost agents" have containers that started but never received their task event. Sets `needs_attention=1` for dashboard visibility.
+
+**Result:** Event delivery survives transient 5xx errors, buffered events self-heal via alarm, and stuck agents are flagged for human attention.
+
 ### Linear Webhook Protection
 
 **Problem:** Moving a Linear ticket to "Done" or "Canceled" should not spawn an agent.

@@ -88,6 +88,23 @@ export class TaskAgent extends Container<Bindings> {
     console.log("[TaskAgent] Terminal flag cleared — task reopened");
   }
 
+  /** Replay buffered events to the container. Called from alarm when container is healthy. */
+  private async replayBufferedEvents(): Promise<void> {
+    const count = await this.eventBuffer.replay(async (eventJson: string) => {
+      return this.containerFetch("http://localhost/event", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Key": (this.env.API_KEY as string) || "",
+        },
+        body: eventJson,
+      }, this.defaultPort);
+    });
+    if (count > 0) {
+      console.log(`[TaskAgent] Replayed ${count} buffered events on alarm`);
+    }
+  }
+
   override async alarm(alarmProps: { isRetry: boolean; retryCount: number }) {
     // Don't restart containers for completed tasks
     if (this.isTerminal()) {
@@ -119,10 +136,22 @@ export class TaskAgent extends Container<Bindings> {
       // Check container health — mark terminal if session completed/errored
       try {
         const res = await this.containerFetch("http://localhost/status", { method: "GET" }, this.defaultPort);
-        const status = await res.json<{ sessionStatus: string }>();
-        if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
-          console.log(`[TaskAgent] Session ${status.sessionStatus} for ${config.taskUUID}, marking terminal`);
-          this.markTerminal();
+        if (!res.ok) {
+          console.log(`[TaskAgent] Container status check returned ${res.status} for ${config.taskUUID}`);
+        } else {
+          const status = await res.json<{ sessionStatus: string }>();
+          if (status.sessionStatus === "completed" || status.sessionStatus === "error") {
+            console.log(`[TaskAgent] Session ${status.sessionStatus} for ${config.taskUUID}, marking terminal`);
+            this.markTerminal();
+          } else {
+            // Container is healthy — replay any buffered events that were stuck
+            // (e.g., events that arrived during cold start and were buffered as 202)
+            try {
+              await this.replayBufferedEvents();
+            } catch (err) {
+              console.warn(`[TaskAgent] Buffer replay failed for ${config.taskUUID}:`, err);
+            }
+          }
         }
       } catch {
         console.log(`[TaskAgent] Container not healthy for ${config.taskUUID}, will auto-resume on restart`);

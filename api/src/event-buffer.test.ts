@@ -118,7 +118,7 @@ describe("EventBuffer", () => {
     expect(sql.tables.event_buffer).toHaveLength(0);
   });
 
-  test("replay() stops on 503", async () => {
+  test("replay() stops on any non-ok response to preserve ordering", async () => {
     const sql = createMockSql();
     const buf = new EventBuffer(sql, "Test");
     buf.buffer({ type: "event1" });
@@ -136,10 +136,59 @@ describe("EventBuffer", () => {
     expect(sql.tables.event_buffer).toHaveLength(1);
   });
 
+  test("replay() stops on 500 to prevent out-of-order delivery", async () => {
+    const sql = createMockSql();
+    const buf = new EventBuffer(sql, "Test");
+    buf.buffer({ type: "event1" });
+    buf.buffer({ type: "event2" });
+
+    const count = await buf.replay(async () => {
+      return new Response("error", { status: 500 });
+    });
+
+    expect(count).toBe(0);
+    // Both events remain — first must succeed before second is attempted
+    expect(sql.tables.event_buffer).toHaveLength(2);
+  });
+
   test("replay() returns 0 when buffer is empty", async () => {
     const sql = createMockSql();
     const buf = new EventBuffer(sql, "Test");
     const count = await buf.replay(async () => new Response("ok"));
     expect(count).toBe(0);
+  });
+
+  test("replay() stops on fetch error (container unreachable)", async () => {
+    const sql = createMockSql();
+    const buf = new EventBuffer(sql, "Test");
+    buf.buffer({ type: "event1" });
+    buf.buffer({ type: "event2" });
+
+    const count = await buf.replay(async () => {
+      throw new Error("container unreachable");
+    });
+
+    expect(count).toBe(0);
+    // Both events should remain in buffer for next retry
+    expect(sql.tables.event_buffer).toHaveLength(2);
+  });
+
+  test("replay() delivers multiple events then stops on error — partial drain", async () => {
+    const sql = createMockSql();
+    const buf = new EventBuffer(sql, "Test");
+    buf.buffer({ type: "event1" });
+    buf.buffer({ type: "event2" });
+    buf.buffer({ type: "event3" });
+
+    let callCount = 0;
+    const count = await buf.replay(async () => {
+      callCount++;
+      if (callCount <= 2) return new Response("ok", { status: 200 });
+      throw new Error("timeout");
+    });
+
+    expect(count).toBe(2);
+    // First 2 delivered, 3rd remains
+    expect(sql.tables.event_buffer).toHaveLength(1);
   });
 });
