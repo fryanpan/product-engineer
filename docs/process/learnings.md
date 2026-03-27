@@ -114,6 +114,16 @@ Technical discoveries that should persist across sessions.
 - The mock SQL helper used in conductor tests only captures parameterized values (`?` placeholders) in SET clauses. Literal string values in SQL (e.g., `SET status = 'active'`) are invisible to the mock and won't update the in-memory store.
 - Always use parameterized SQL (`SET status = ?` with a param) rather than literals when writing code that will be tested with the mock.
 
+## Bun Test Mock Isolation
+- `mock.module()` in bun:test is **process-global** and persists across all test files in the same run. If `foo.test.ts` calls `mock.module("./bar")`, then `baz.test.ts` importing `./bar` gets the mock, not the real module. Never use `mock.module()` for modules that other test files also test.
+- `globalThis.fetch` replacement (`globalThis.fetch = mock(...)`) leaks across test files unless explicitly restored. Use `spyOn(globalThis, "fetch")` with `mockRestore()` in `afterEach` instead.
+- When asserting fetch call counts, filter `mock.calls` by URL rather than using `toHaveBeenCalledTimes(0)` — other test files may leave the spy in an impure state.
+
+## Clean-Slate DO Migrations
+- `deleted_classes` + `new_sqlite_classes` in wrangler.toml creates fresh DOs with empty SQLite. All settings, product configs, and task history are lost.
+- The `CREATE TABLE IF NOT EXISTS` statement must include ALL columns (not just the original ones). Legacy `addColumn` + `ALTER TABLE RENAME COLUMN` migrations fail silently on fresh DOs because the intermediate column names (e.g., `identifier`) never existed.
+- After a clean-slate deploy: re-seed products via admin API, re-configure settings (linear_team_id, linear_app_token, conductor_channel, cloudflare_ai_gateway), verify with smoke test.
+
 ## GitHub Webhooks
 - GitHub PR webhooks have `action: "closed"` with a `merged: true|false` flag. Always handle BOTH cases:
   - `action === "closed" && merged === true` → PR was merged (route as `pr_merged` event)

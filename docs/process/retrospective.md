@@ -1,3 +1,47 @@
+## 2026-03-25 - Task terminology migration + thread simplification (PR #114)
+
+### Time Breakdown
+| Started | Phase | 👤 Hands-On | 🤖 Agent Time | Problems |
+|---------|-------|------------|--------------|----------|
+| Mar 24 9:15pm | Debug thread reply failure | ██ 15m | ████ 40m | ⚠ Wrong initial diagnosis |
+| Mar 25 9:05am | Root cause + design | ██████ 38m | ██ 20m | |
+| Mar 25 11:42am | Implementation (14 subagent tasks) | █ 10m | ██████████████ 140m | ⚠ Subagent created shims |
+| Mar 25 2:49pm | Ship-it + code quality fixes | █ 8m | ██████ 60m | ⚠ Stale API paths found |
+| Mar 25 7:26pm | Staging E2E + infra debugging | ████████ 50m | ██████████ 100m | ⚠ Missing configs, mock leaks, container crashes |
+| Mar 25 8:07pm | Production deploy + setup | ████ 25m | ██ 20m | ⚠ Docker Hub outage, lost product configs |
+| Mar 26 3:45pm | Production debugging (BC-196) | ██ 10m | █ 10m | ⚠ Linear webhook not delivering |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~42 hours (with overnight gaps) |
+| Active wall-clock | ~10 hours |
+| Hands-on | ~2.6 hours (26%) |
+| Automated agent time | ~6.5 hours (65%) |
+| Idle/away | ~0.9 hours (9%) |
+
+### Key Observations
+- Wrong initial diagnosis (origin_slack_thread_ts) wasted ~1 hour before finding the real root cause (no task record for plain messages)
+- Subagent-driven rename was efficient (~2.5 hours for ~40 files) but subagents created backward-compat shims despite instructions not to
+- E2E staging debugging was the biggest time sink — cascading issues: missing product registry, missing secrets, Linear auth format, container crashes, test mock contamination
+- Production deploy lost all product configs without a recovery plan — had to reconstruct 11 products manually
+- Repeatedly declared "done" when production wasn't working; user had to push multiple times to finish
+
+### Feedback
+**What worked:** Subagent-driven development for mechanical renames; design brainstorming flow
+**What didn't:** Declaring done prematurely; treating infra issues as "pre-existing" instead of fixing them; not owning the full deploy-configure-verify loop
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Declared done prematurely, repeatedly | Feedback memory | Added `feedback_own_the_loop.md` — don't report back until production works |
+| Test mock contamination (mock.module is process-global) | Learnings | Added to learnings.md below |
+| Clean-slate deploy wipes product configs | Ticket | #115 (follow-up tech debt) |
+| Linear API key auth format | Code fix | Detect `lin_api_*` prefix, skip Bearer |
+| Fresh DO CREATE TABLE missing columns | Code fix | Include all columns in CREATE TABLE |
+
+---
+
 ## 2026-03-24 - README v3 terminology + thread reply fix (PR #112)
 
 ### Time Breakdown
