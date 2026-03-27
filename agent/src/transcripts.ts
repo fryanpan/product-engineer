@@ -64,7 +64,10 @@ export class TranscriptManager {
       for (const path of files) {
         try {
           const file = Bun.file(path);
-          const currentSize = file.size;
+          // Read content first — file.text() is reliable, file.size can return
+          // undefined/NaN on some platforms (observed on GitHub Actions CI).
+          const transcriptContent = await file.text();
+          const currentSize = transcriptContent.length;
           const prevSize = this.uploadedSizes.get(path) ?? 0;
 
           // Skip if unchanged (unless forced, e.g., session end / shutdown)
@@ -74,7 +77,6 @@ export class TranscriptManager {
           const r2Key = `${this.config.agentUuid}-${basename}`;
 
           console.log(`[Agent] Uploading transcript ${basename} (${currentSize} bytes, was ${prevSize})...`);
-          const transcriptContent = await file.text();
           this.uploadedSizes.set(path, currentSize);
 
           const uploadRes = await fetch(`${this.config.workerUrl}/api/internal/upload-transcript`, {

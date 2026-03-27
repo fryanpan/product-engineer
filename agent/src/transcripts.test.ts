@@ -118,7 +118,7 @@ describe("TranscriptManager", () => {
       manager.findAllTranscripts = async () => [tmpFile];
 
       try {
-        // First upload — should upload (file size differs from 0)
+        // First upload — should upload
         await manager.upload();
         const firstUploadCalls = fetchSpy.mock.calls.filter(
           (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
@@ -129,13 +129,7 @@ describe("TranscriptManager", () => {
         expect(body.taskUUID).toBe("ticket-uuid-5678");
         expect(body.r2Key).toBe(`test-uuid-1234-test-session.jsonl`);
 
-        // Pre-set the uploaded size to match what Bun.file().size will return.
-        // Bun.file().size can be unreliable on CI (undefined, NaN, or delayed stat),
-        // so read the actual value and set it explicitly to guarantee the skip path.
-        const sizeForSkip = Bun.file(tmpFile).size;
-        manager.getUploadedSizes().set(tmpFile, sizeForSkip);
-
-        // Second upload — same size, should skip
+        // Second upload — same content, should skip
         const callsBefore = fetchSpy.mock.calls.filter(
           (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
         ).length;
