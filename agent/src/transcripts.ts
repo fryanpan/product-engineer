@@ -5,6 +5,8 @@
  * Extracted from server.ts to keep the main server focused on HTTP/session logic.
  */
 
+import { readFile, stat } from "node:fs/promises";
+
 export interface TranscriptManagerConfig {
   agentUuid: string;
   workerUrl: string;
@@ -63,10 +65,9 @@ export class TranscriptManager {
 
       for (const path of files) {
         try {
-          const file = Bun.file(path);
-          // Read content first — file.text() is reliable, file.size can return
-          // undefined/NaN on some platforms (observed on GitHub Actions CI).
-          const transcriptContent = await file.text();
+          // Use node:fs instead of Bun.file() — Bun.file().text() uses
+          // globalThis.fetch internally, which breaks if fetch is mocked in tests.
+          const transcriptContent = await readFile(path, "utf-8");
           const currentSize = transcriptContent.length;
           const prevSize = this.uploadedSizes.get(path) ?? 0;
 
