@@ -592,6 +592,30 @@ export class Conductor extends Container<Bindings> {
         agent.task_uuid,
       );
     }
+
+    // Detect "ghost" agents — agent_active=1 but never received a heartbeat
+    // and created > 5 minutes ago. This catches containers that started but
+    // never received their task event (event lost during delivery).
+    const ghostAgents = this.ctx.storage.sql.exec(`
+      SELECT task_uuid, product, created_at
+      FROM tasks
+      WHERE agent_active = 1
+        AND last_heartbeat IS NULL
+        AND status IN ('spawning', 'active')
+        AND created_at < datetime('now', '-5 minutes')
+    `).toArray() as Array<{
+      task_uuid: string;
+      product: string;
+      created_at: string;
+    }>;
+
+    for (const agent of ghostAgents) {
+      console.log(`[Supervisor] Ghost agent: ${agent.task_uuid} (created: ${agent.created_at}, no heartbeat ever received)`);
+      this.ctx.storage.sql.exec(
+        "UPDATE tasks SET agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
+        agent.task_uuid,
+      );
+    }
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
