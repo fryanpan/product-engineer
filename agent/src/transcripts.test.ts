@@ -104,49 +104,79 @@ describe("TranscriptManager", () => {
 
   describe("upload with mocked findAllTranscripts", () => {
     test("skips files with unchanged size", async () => {
-      const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response("ok", { status: 200 })
-      );
       const logSpy = spyOn(console, "log").mockImplementation(() => {});
 
-      // Create a temp file to test with
-      const tmpDir = `${process.env.HOME || "/tmp"}/.claude-test-transcripts-${Date.now()}`;
-      await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+      // Use /tmp for temp files — HOME-based dirs are unreliable on CI
+      const tmpDir = `/tmp/.claude-test-transcripts-${Date.now()}`;
       const tmpFile = `${tmpDir}/test-session.jsonl`;
-      await Bun.write(tmpFile, '{"type":"test"}\n');
-
-      manager.findAllTranscripts = async () => [tmpFile];
+      const fileContent = '{"type":"test"}\n';
 
       try {
-        // First upload — should upload
+        await Bun.spawn(["mkdir", "-p", tmpDir]).exited;
+        await Bun.write(tmpFile, fileContent);
+
+        // Verify file is readable before testing upload
+        const readBack = await Bun.file(tmpFile).text();
+        expect(readBack).toBe(fileContent);
+
+        manager.findAllTranscripts = async () => [tmpFile];
+
+        // Mock fetch only for upload-transcript calls, pass through others
+        const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+          const url = typeof input === "string" ? input : (input as Request).url;
+          if (url.includes("upload-transcript")) {
+            return new Response("ok", { status: 200 });
+          }
+          return new Response("not found", { status: 404 });
+        });
+
+        // First upload — should upload (content length > 0, prev size = 0)
         await manager.upload();
         const firstUploadCalls = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+          (c) => {
+            const url = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+            return url.includes("upload-transcript");
+          },
         );
         expect(firstUploadCalls.length).toBe(1);
-        expect(firstUploadCalls[0][0]).toBe("https://worker.example.com/api/internal/upload-transcript");
+
+        const url = typeof firstUploadCalls[0][0] === "string"
+          ? firstUploadCalls[0][0]
+          : (firstUploadCalls[0][0] as Request).url;
+        expect(url).toBe("https://worker.example.com/api/internal/upload-transcript");
+
         const body = JSON.parse((firstUploadCalls[0][1] as RequestInit).body as string);
         expect(body.taskUUID).toBe("ticket-uuid-5678");
         expect(body.r2Key).toBe(`test-uuid-1234-test-session.jsonl`);
 
         // Second upload — same content, should skip
         const callsBefore = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+          (c) => {
+            const u = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+            return u.includes("upload-transcript");
+          },
         ).length;
         await manager.upload();
         const callsAfter = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+          (c) => {
+            const u = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+            return u.includes("upload-transcript");
+          },
         ).length;
         expect(callsAfter).toBe(callsBefore);
 
         // Third upload with force — should upload despite same size
         await manager.upload(true);
         const callsAfterForce = fetchSpy.mock.calls.filter(
-          (c) => typeof c[0] === "string" && c[0].includes("upload-transcript"),
+          (c) => {
+            const u = typeof c[0] === "string" ? c[0] : (c[0] as Request).url;
+            return u.includes("upload-transcript");
+          },
         ).length;
         expect(callsAfterForce).toBe(callsAfter + 1);
-      } finally {
+
         fetchSpy.mockRestore();
+      } finally {
         logSpy.mockRestore();
         await Bun.spawn(["rm", "-rf", tmpDir]).exited;
       }
