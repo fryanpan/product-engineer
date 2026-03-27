@@ -410,8 +410,9 @@ export function createTools(config: AgentConfig) {
       product: z.string().describe("Product slug (e.g., 'staging-test-app')"),
       description: z.string().describe("Task description — what should be done"),
       taskUUID: z.string().optional().describe("Existing task UUID to spawn an agent for (from event payload). Omit to create a new task."),
+      mode: z.enum(["coding", "research"]).optional().describe("Agent mode: 'coding' for implementation tasks (default), 'research' for non-coding research/planning tasks"),
     },
-    async ({ product, description, taskUUID: existingUUID }) => {
+    async ({ product, description, taskUUID: existingUUID, mode }) => {
       try {
         const taskUUID = existingUUID || `conductor-task-${Date.now()}`;
         const res = await fetch(`${config.workerUrl}/api/project-lead/spawn-task`, {
@@ -425,7 +426,7 @@ export function createTools(config: AgentConfig) {
             taskUUID,
             taskTitle: description.slice(0, 80),
             taskDescription: description,
-            mode: "coding",
+            mode: mode || "coding",
           }),
         });
         if (!res.ok) {
