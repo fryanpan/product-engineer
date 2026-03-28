@@ -638,6 +638,33 @@ describe("linear webhook handler", () => {
     expect(comments[1].user).toBe("Unknown");
   });
 
+  it("does not crash when a product has no triggers field", async () => {
+    const app = makeApp();
+    const env = makeEnv();
+    // This should not throw even though "no-triggers-app" has no triggers field
+    const res = await postWebhook(app, {
+      action: "create",
+      type: "Issue",
+      data: {
+        id: "issue-no-triggers",
+        identifier: "HT-60",
+        title: "Issue targeting Test App with a triggerless product in registry",
+        description: "Should still match test-app despite no-triggers-app existing",
+        priority: 1,
+        teamId: TEST_REGISTRY.linear_team_id,
+        labelIds: [],
+        project: { id: "p1", name: "Test App" },
+        assignee: { id: "app-user-001", name: "Test Agent" },
+      },
+    }, env);
+
+    expect(res.status).toBe(200);
+    const json = await res.json() as Record<string, unknown>;
+    expect(json.ok).toBe(true);
+    expect(json.product).toBe("test-app");
+    expect(sentEvents).toHaveLength(1);
+  });
+
   it("ignores issues from unknown Linear projects", async () => {
     const app = makeApp();
     const env = makeEnv();

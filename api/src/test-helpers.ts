@@ -90,5 +90,15 @@ export const TEST_REGISTRY: MockRegistryData = {
         ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
       },
     },
+    "no-triggers-app": {
+      repos: ["test-org/no-triggers"],
+      slack_channel: "#no-triggers",
+      slack_channel_id: "C000000APP3",
+      secrets: {
+        GITHUB_TOKEN: "TEST_GITHUB_TOKEN",
+        SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN",
+        ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+      },
+    },
   },
 };

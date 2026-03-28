@@ -51,6 +51,7 @@ const LINEAR_API_KEY = process.env.LINEAR_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
 const SLACK_USER_TOKEN = process.env.SLACK_USER_TOKEN;
 const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN;
+const LINEAR_WEBHOOK_SECRET = process.env.LINEAR_WEBHOOK_SECRET;
 
 // Test timeout settings
 const POLL_INTERVAL_MS = 5_000;
@@ -477,6 +478,140 @@ async function step1c_verifyLinearInjectionDetection(): Promise<void> {
   } catch (err) {
     logWarn("step1c", `Linear injection test error: ${err}`);
   }
+}
+
+// --- Step 1d: Linear webhook trigger ---
+
+async function hmacSign(body: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function step1d_verifyLinearWebhookTrigger(ctx: TestContext): Promise<void> {
+  if (!LINEAR_WEBHOOK_SECRET) {
+    logWarn("step1d", "Skipping Linear webhook test (LINEAR_WEBHOOK_SECRET not set)");
+    return;
+  }
+
+  log("step1d", "Verifying Linear webhook trigger...");
+
+  // Look up the app user ID and team ID from the conductor settings
+  const settings = await apiCall<{ settings: Record<string, string> }>("/api/settings");
+  const appUserId = settings.settings.linear_app_user_id;
+  const teamId = settings.settings.linear_team_id;
+
+  if (!appUserId || !teamId) {
+    logWarn("step1d", `Missing settings: linear_app_user_id=${appUserId}, linear_team_id=${teamId}`);
+    return;
+  }
+
+  // Look up a product with Linear triggers enabled
+  const products = await apiCall<{ products: Record<string, any> }>("/api/products");
+  let targetProduct: string | null = null;
+  let projectName: string | null = null;
+  for (const [name, config] of Object.entries(products.products)) {
+    if (config.triggers?.linear?.enabled) {
+      targetProduct = name;
+      projectName = config.triggers.linear.project_name;
+      break;
+    }
+  }
+
+  if (!targetProduct || !projectName) {
+    logWarn("step1d", "No product with Linear triggers enabled — skipping webhook test");
+    return;
+  }
+
+  const testIssueId = `e2e-linear-webhook-${ctx.testId}`;
+
+  // Build the Linear webhook payload
+  const payload = {
+    action: "create",
+    type: "Issue",
+    data: {
+      id: testIssueId,
+      identifier: `E2E-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+      title: `[E2E Linear Webhook Test] ${ctx.testId}`,
+      description: "Automated E2E test verifying Linear webhook processing. This task should be auto-cleaned.",
+      priority: 0,
+      teamId,
+      labelIds: [],
+      project: { id: "e2e-project", name: projectName },
+      assignee: { id: appUserId, name: "Agent" },
+      state: { name: "Todo" },
+    },
+  };
+
+  const body = JSON.stringify(payload);
+  const signature = await hmacSign(body, LINEAR_WEBHOOK_SECRET);
+
+  // Send the webhook
+  const res = await fetch(`${STAGING_URL}/api/webhooks/linear`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Linear-Signature": signature,
+    },
+    body,
+  });
+
+  const resBody = await res.text();
+  log("step1d", `Webhook response: ${res.status} ${resBody}`);
+
+  if (res.status === 401) {
+    throw new Error("LINEAR_WEBHOOK_SECRET mismatch — signature verification failed");
+  }
+
+  if (!res.ok) {
+    throw new Error(`Linear webhook handler returned ${res.status}: ${resBody}`);
+  }
+
+  const resJson = JSON.parse(resBody);
+  if (resJson.ignored) {
+    throw new Error(`Webhook was ignored: ${resJson.reason}`);
+  }
+
+  logSuccess("step1d", `Linear webhook accepted: product=${resJson.product}, taskUUID=${resJson.taskUUID}`);
+
+  // Poll for the task to appear in the conductor
+  const deadline = Date.now() + 30_000; // 30s should be enough
+  while (Date.now() < deadline) {
+    const tickets = await apiCall<{ tasks: TaskRow[] }>("/api/conductor/tickets");
+    const ticket = tickets.tasks.find((t) => t.task_uuid === testIssueId);
+
+    if (ticket) {
+      logSuccess("step1d", `Task created via Linear webhook: uuid=${ticket.task_uuid}, status=${ticket.status}, product=${ticket.product}`);
+
+      // Clean up: mark as failed to prevent agent spawn for this test ticket
+      try {
+        await fetch(`${STAGING_URL}/api/internal/status`, {
+          method: "POST",
+          headers: {
+            "X-Internal-Key": API_KEY!,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ taskUUID: testIssueId, status: "failed" }),
+        });
+        log("step1d", "Test task marked as failed (cleanup)");
+      } catch {
+        logWarn("step1d", "Could not clean up test task — may need manual cleanup");
+      }
+      return;
+    }
+
+    await sleep(2_000);
+  }
+
+  throw new Error("Task was not created via Linear webhook within 30s timeout");
 }
 
 // --- Step 2: Verify ticket created ---
@@ -1258,6 +1393,7 @@ try {
   await step1_triggerViaSlack(ctx);
   await step1b_verifyInjectionDetection();
   await step1c_verifyLinearInjectionDetection();
+  await step1d_verifyLinearWebhookTrigger(ctx);
   await step2_verifyTicketCreated(ctx);
   await step3_verifyAgentSpawned(ctx);
 
