@@ -476,6 +476,141 @@ export function createTools(config: AgentConfig) {
     },
   );
 
+  const createSchedule = tool(
+    "create_recurring_schedule",
+    "Create a recurring schedule that will spawn tasks automatically. Use natural language like 'daily at 9am: review AI news' or 'every monday at 10am: team sync' or 'monthly on 15th at 12:00: generate report'.",
+    {
+      scheduleText: z.string().describe("Natural language schedule (e.g., 'daily at 9am: review AI news')"),
+    },
+    async ({ scheduleText }) => {
+      try {
+        const res = await fetch(`${config.workerUrl}/api/schedules`, {
+          method: "POST",
+          headers: {
+            "X-Internal-Key": config.apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            product: config.product,
+            scheduleText,
+            createdBy: config.slackChannel,
+          }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          return { content: [{ type: "text" as const, text: `Failed to create schedule: ${text}` }] };
+        }
+        const data = await res.json() as { id: string; next_scheduled_for: string };
+        return { content: [{ type: "text" as const, text: `Schedule created (ID: ${data.id}). Next run: ${data.next_scheduled_for}` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
+  const listSchedules = tool(
+    "list_recurring_schedules",
+    "List all recurring schedules for this product.",
+    {},
+    async () => {
+      try {
+        const res = await fetch(`${config.workerUrl}/api/schedules?product=${config.product}`, {
+          headers: { "X-Internal-Key": config.apiKey },
+        });
+        if (!res.ok) {
+          return { content: [{ type: "text" as const, text: `Failed to list schedules: ${res.status}` }] };
+        }
+        const data = await res.json() as { schedules: Array<{ id: string; title: string; recurrence: string; time: string; enabled: number; next_scheduled_for: string }> };
+        if (data.schedules.length === 0) {
+          return { content: [{ type: "text" as const, text: "No recurring schedules found." }] };
+        }
+        const summary = data.schedules.map(s =>
+          `• ${s.title} (${s.recurrence} at ${s.time}) - ${s.enabled ? "enabled" : "disabled"}\n  ID: ${s.id}\n  Next: ${s.next_scheduled_for}`
+        ).join("\n\n");
+        return { content: [{ type: "text" as const, text: `Recurring Schedules:\n\n${summary}` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
+  const pauseSchedule = tool(
+    "pause_recurring_schedule",
+    "Pause (disable) a recurring schedule by ID. The schedule remains in the system but won't create new tasks.",
+    {
+      scheduleId: z.string().describe("Schedule ID to pause"),
+    },
+    async ({ scheduleId }) => {
+      try {
+        const res = await fetch(`${config.workerUrl}/api/schedules/${scheduleId}`, {
+          method: "PUT",
+          headers: {
+            "X-Internal-Key": config.apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ enabled: false }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          return { content: [{ type: "text" as const, text: `Failed to pause schedule: ${text}` }] };
+        }
+        return { content: [{ type: "text" as const, text: `Schedule ${scheduleId} paused.` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
+  const resumeSchedule = tool(
+    "resume_recurring_schedule",
+    "Resume (enable) a paused recurring schedule by ID.",
+    {
+      scheduleId: z.string().describe("Schedule ID to resume"),
+    },
+    async ({ scheduleId }) => {
+      try {
+        const res = await fetch(`${config.workerUrl}/api/schedules/${scheduleId}`, {
+          method: "PUT",
+          headers: {
+            "X-Internal-Key": config.apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ enabled: true }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          return { content: [{ type: "text" as const, text: `Failed to resume schedule: ${text}` }] };
+        }
+        return { content: [{ type: "text" as const, text: `Schedule ${scheduleId} resumed.` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
+  const deleteSchedule = tool(
+    "delete_recurring_schedule",
+    "Permanently delete a recurring schedule by ID.",
+    {
+      scheduleId: z.string().describe("Schedule ID to delete"),
+    },
+    async ({ scheduleId }) => {
+      try {
+        const res = await fetch(`${config.workerUrl}/api/schedules/${scheduleId}`, {
+          method: "DELETE",
+          headers: { "X-Internal-Key": config.apiKey },
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          return { content: [{ type: "text" as const, text: `Failed to delete schedule: ${text}` }] };
+        }
+        return { content: [{ type: "text" as const, text: `Schedule ${scheduleId} deleted.` }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err}` }] };
+      }
+    },
+  );
+
   // Build tool list based on agent role
   const agentRole = process.env.AGENT_ROLE || "ticket";
   const isConductorRole = agentRole === "conductor";
@@ -484,9 +619,9 @@ export function createTools(config: AgentConfig) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allTools: SdkMcpToolDefinition<any>[] = [notifySlack, askQuestion, updateTaskStatus, listTranscripts, fetchTranscript, fetchSlackFile];
 
-  // Conductor and project leads can spawn/relay tasks
+  // Conductor and project leads can spawn/relay tasks and manage schedules
   if (isProjectLeadRole) {
-    allTools.push(listTasks, spawnTask, sendMessageToTask);
+    allTools.push(listTasks, spawnTask, sendMessageToTask, createSchedule, listSchedules, pauseSchedule, resumeSchedule, deleteSchedule);
   }
 
   // All non-conductor roles get CI/merge tools (project leads need them for direct coding)
