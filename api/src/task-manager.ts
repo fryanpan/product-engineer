@@ -8,6 +8,7 @@ export interface CreateTaskParams {
   slackChannel?: string;
   taskId?: string;
   title?: string;
+  scheduledFor?: string; // ISO8601 timestamp
 }
 
 export interface StatusUpdate {
@@ -16,6 +17,7 @@ export interface StatusUpdate {
   branch_name?: string;
   slack_thread_ts?: string;
   transcript_r2_key?: string;
+  scheduled_for?: string; // ISO8601 timestamp
 }
 
 export interface SpawnConfig {
@@ -66,11 +68,12 @@ export class TaskManager {
     }
 
     this.sql.exec(
-      `INSERT INTO tasks (task_uuid, product, status, slack_thread_ts, slack_channel, task_id, title, agent_active)
-       VALUES (?, ?, 'created', ?, ?, ?, ?, 0)`,
+      `INSERT INTO tasks (task_uuid, product, status, slack_thread_ts, slack_channel, task_id, title, agent_active, scheduled_for)
+       VALUES (?, ?, 'created', ?, ?, ?, ?, 0, ?)`,
       params.taskUUID, params.product,
       params.slackThreadTs || null, params.slackChannel || null,
       params.taskId || null, params.title || null,
+      params.scheduledFor || null,
     );
 
     return this.getTask(params.taskUUID)!;
@@ -144,6 +147,7 @@ export class TaskManager {
     if (update.branch_name !== undefined) { sets.push("branch_name = ?"); values.push(update.branch_name); }
     if (update.slack_thread_ts !== undefined) { sets.push("slack_thread_ts = ?"); values.push(update.slack_thread_ts); }
     if (update.transcript_r2_key !== undefined) { sets.push("transcript_r2_key = ?"); values.push(update.transcript_r2_key); }
+    if (update.scheduled_for !== undefined) { sets.push("scheduled_for = ?"); values.push(update.scheduled_for); }
 
     values.push(taskUUID);
     this.sql.exec(`UPDATE tasks SET ${sets.join(", ")} WHERE task_uuid = ?`, ...values);
@@ -407,5 +411,31 @@ export class TaskManager {
     for (const { task_uuid } of inactive) {
       await this.stopAgent(task_uuid, "cleanup: terminal but still active").catch(() => {});
     }
+  }
+
+  /**
+   * Get all tasks that are scheduled and ready to be spawned.
+   * Returns tasks in 'queued' status with scheduled_for <= now.
+   */
+  getScheduledTasksReadyToSpawn(): TaskRecord[] {
+    return this.sql.exec(
+      `SELECT * FROM tasks
+       WHERE status = 'queued'
+         AND scheduled_for IS NOT NULL
+         AND scheduled_for <= datetime('now')
+       ORDER BY scheduled_for ASC`,
+    ).toArray() as unknown as TaskRecord[];
+  }
+
+  /**
+   * Check if a task is scheduled for a future time.
+   */
+  isScheduledForFuture(taskUUID: string): boolean {
+    const task = this.getTask(taskUUID);
+    if (!task || !task.scheduled_for) return false;
+
+    const scheduled = new Date(task.scheduled_for).getTime();
+    const now = Date.now();
+    return scheduled > now;
   }
 }

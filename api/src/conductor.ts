@@ -357,6 +357,7 @@ export class Conductor extends Container<Bindings> {
     const payload = event.payload as Record<string, unknown>;
     const taskId = (payload.identifier as string) || null;
     const title = (payload.title as string) || null;
+    const scheduledFor = (payload.scheduledFor as string) || null;
     const existingTicket = this.taskManager.getTask(event.taskUUID);
     if (!existingTicket) {
       this.taskManager.createTask({
@@ -366,12 +367,14 @@ export class Conductor extends Container<Bindings> {
         slackChannel: event.slackChannel || undefined,
         taskId: taskId || undefined,
         title: title || undefined,
+        scheduledFor: scheduledFor || undefined,
       });
     } else {
       // Update metadata — preserve existing values when new ones are null
       const metadataUpdate: Record<string, string | undefined> = {};
       if (event.slackThreadTs) metadataUpdate.slack_thread_ts = event.slackThreadTs;
       if (event.slackChannel) metadataUpdate.slack_channel = event.slackChannel;
+      if (scheduledFor) metadataUpdate.scheduled_for = scheduledFor;
       if (Object.keys(metadataUpdate).length > 0) {
         this.taskManager.updateStatus(event.taskUUID, metadataUpdate as any);
       }
@@ -489,6 +492,17 @@ export class Conductor extends Container<Bindings> {
       const agentActive = taskRow.agent_active as number;
       if (agentActive === 1 || (status !== "created" && status !== "needs_info")) {
         console.log(`[Conductor] Skipping task review for ${event.taskUUID} — already active (status=${status}, agent_active=${agentActive})`);
+        return;
+      }
+    }
+
+    // Check if task is scheduled for the future
+    if (taskRow?.scheduled_for) {
+      const scheduledTime = new Date(taskRow.scheduled_for as string).getTime();
+      const now = Date.now();
+      if (scheduledTime > now) {
+        console.log(`[Conductor] Task ${event.taskUUID} scheduled for ${taskRow.scheduled_for} — queuing`);
+        this.taskManager.updateStatus(event.taskUUID, { status: "queued" });
         return;
       }
     }
@@ -615,6 +629,41 @@ export class Conductor extends Container<Bindings> {
         "UPDATE tasks SET agent_active = 0, agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
         agent.task_uuid,
       );
+    }
+
+    // Check for scheduled tasks ready to spawn
+    const readyScheduledTasks = this.taskManager.getScheduledTasksReadyToSpawn();
+    for (const task of readyScheduledTasks) {
+      console.log(`[Supervisor] Scheduled task ready: ${task.task_uuid} (scheduled for ${task.scheduled_for})`);
+      try {
+        // Transition from queued → reviewing so the task can be spawned
+        this.taskManager.updateStatus(task.task_uuid, { status: "reviewing" });
+
+        // Get product config to spawn the agent
+        const productConfig = getProductConfig(this.sqlExec, task.product);
+        if (!productConfig) {
+          console.error(`[Supervisor] Product config not found for ${task.product}`);
+          continue;
+        }
+
+        const gatewayConfig = getGatewayConfig(this.sqlExec);
+
+        await this.taskManager.spawnAgent(task.task_uuid, {
+          product: task.product,
+          repos: productConfig.repos,
+          slackChannel: task.slack_channel || productConfig.slackChannel,
+          slackThreadTs: task.slack_thread_ts || undefined,
+          secrets: productConfig.secrets || {},
+          gatewayConfig,
+          model: productConfig.model,
+          mode: productConfig.mode || "coding",
+          slackPersona: productConfig.slackPersona,
+        });
+
+        console.log(`[Supervisor] Spawned scheduled task ${task.task_uuid}`);
+      } catch (err) {
+        console.error(`[Supervisor] Failed to spawn scheduled task ${task.task_uuid}:`, err);
+      }
     }
   }
 

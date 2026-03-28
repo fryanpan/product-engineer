@@ -1,3 +1,43 @@
+## 2026-03-28 - Scheduled tasks feature (BC-203, PR #125)
+
+### Time Breakdown
+| Phase | Agent Time | Key Activities |
+|-------|------------|----------------|
+| Architecture exploration | 15m | Read conductor, task-manager, webhooks to understand event flow |
+| Implementation | 45m | Schema changes, TaskManager methods, supervisor integration, Linear webhook parsing |
+| Testing | 20m | Unit tests for extractScheduledFor(), integration tests for TaskManager, debug mock SQL |
+| Documentation + PR | 10m | Feature docs, commit, push, PR creation |
+
+### Metrics
+- **Total time**: ~90 minutes
+- **Files changed**: 9 (5 source, 3 tests, 1 doc)
+- **Lines added**: ~570
+- **Tests written**: 15 (9 unit, 6 integration)
+- **Turns**: ~25
+
+### What Worked
+- **Read-first approach** - Understanding the existing supervisor alarm and TaskManager patterns before implementing avoided rework
+- **Incremental implementation** - Schema → types → TaskManager → webhooks → conductor → tests in logical order
+- **Comprehensive testing** - Created standalone unit tests plus integration tests, caught mock SQL bugs early
+- **Clear documentation** - `docs/features/scheduled-tasks.md` explains the full workflow, testing instructions, and future enhancements
+
+### What Could Be Better
+- **Test isolation** - Initially tried to import `extractScheduledFor` from `webhooks.ts` which pulled in Hono and broke test runner. Had to duplicate the function in test file. Should have made it a separate utility module.
+- **Mock SQL parameter order** - Took 3 attempts to get the mock SQL INSERT handler params in the right order to match the actual SQL statement. Could have read the actual INSERT statement more carefully first.
+
+### Technical Decisions
+- **Supervisor polling vs per-task alarms** - Chose supervisor tick (5min interval) for simplicity. Could add Durable Object alarms per task for real-time precision as future enhancement.
+- **UTC timezone assumption** - All date/time strings without explicit timezone are interpreted as UTC. Good for consistency, but could add timezone auto-detection from description in future.
+- **Queued status** - Reused existing `queued` status in state machine rather than adding a new `scheduled` status. Keeps state machine simple.
+
+### Code Quality Notes
+- All existing tests pass (238/247, failures unrelated to changes)
+- No backward compatibility issues - new column is nullable, optional param
+- Schema migration uses `addColumn()` helper for safe deployment
+- Clear separation of concerns: parsing in webhooks, queuing in conductor, spawning in supervisor
+
+---
+
 ## 2026-03-25 - Task terminology migration + thread simplification (PR #114)
 
 ### Time Breakdown
