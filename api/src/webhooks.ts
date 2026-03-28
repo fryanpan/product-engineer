@@ -41,6 +41,46 @@ export function extractTaskId(branch: string): string | null {
   return branch.match(/^(?:feedback|ticket)\/(.+)$/)?.[1] ?? null;
 }
 
+/**
+ * Extract scheduled_for timestamp from issue description.
+ * Supports formats:
+ * - "Scheduled for: 2024-03-28 14:30" (local time interpreted as UTC)
+ * - "Scheduled for: 2024-03-28T14:30:00Z" (ISO8601)
+ * - "Schedule: 2024-03-28 14:30"
+ * Returns ISO8601 string or null if no valid schedule found.
+ */
+export function extractScheduledFor(description: string): string | null {
+  if (!description) return null;
+
+  // Match patterns like "Scheduled for: 2024-03-28 14:30" or "Schedule: 2024-03-28 14:30"
+  const patterns = [
+    /scheduled?\s+for:\s*(\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?)/i,
+    /schedule:\s*(\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = description.match(pattern);
+    if (match) {
+      const dateStr = match[1].trim();
+      try {
+        // If it has a space instead of 'T', replace it
+        const normalized = dateStr.includes(' ') && !dateStr.includes('T')
+          ? dateStr.replace(' ', 'T') + 'Z'  // Assume UTC if no timezone
+          : dateStr;
+
+        const parsed = new Date(normalized);
+        if (!isNaN(parsed.getTime())) {
+          return parsed.toISOString();
+        }
+      } catch {
+        // Invalid date, continue
+      }
+    }
+  }
+
+  return null;
+}
+
 // Helper to reduce repetition across webhook handlers
 async function routeWebhookEvent(
   env: Bindings,
@@ -305,6 +345,9 @@ linearWebhook.post("/", async (c) => {
     // Continue without comments rather than failing the webhook
   }
 
+  // Extract scheduled_for from description
+  const scheduledFor = extractScheduledFor(payload.data.description || "");
+
   await forwardToConductor(c.env, {
     type: "task_created",
     source: "linear",
@@ -318,6 +361,7 @@ linearWebhook.post("/", async (c) => {
       priority: payload.data.priority,
       labels: payload.data.labelIds || [],
       comments,
+      scheduledFor,
     },
   });
 

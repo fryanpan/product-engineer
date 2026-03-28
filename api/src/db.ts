@@ -143,6 +143,7 @@ export function initSchema(sql: SqlExec): void {
   addColumn("tasks", "agent_message TEXT");
   addColumn("tasks", "checks_passed INTEGER DEFAULT 0");
   addColumn("tasks", "last_merge_decision_sha TEXT");
+  addColumn("tasks", "scheduled_for TEXT");
 
   // Merge gate retry state
   sql.exec(`

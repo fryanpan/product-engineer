@@ -56,6 +56,7 @@ export interface TaskRecord {
   transcript_r2_key: string | null;
   session_id: string | null;
   last_heartbeat: string | null;
+  scheduled_for: string | null;
   created_at: string;
   updated_at: string;
 }
