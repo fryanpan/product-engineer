@@ -131,6 +131,12 @@ Technical discoveries that should persist across sessions.
 - If you only handle the merged case, tasks with closed-but-not-merged PRs stay in `pr_open` status forever, causing supervisor to repeatedly trigger merge gate evaluations (every 5 min).
 - **Terminal webhook events (`pr_merged`, `pr_closed`) must update conductor state directly.** Don't route them through `sendEvent` to the agent container — the container may have already exited. Handle these events in `handleEvent` by updating status and calling `stopAgent`, not by forwarding to the (possibly dead) agent. (Fixed in BC-162)
 
+## Linear Webhook Integration
+- Products without a `triggers` field crash `getProductByLinearProject()` when it accesses `config.triggers.linear` — always use `config.triggers?.linear?.enabled`. One missing `?` caused a 500 on every Linear webhook, which made Linear stop delivering after repeated failures.
+- Linear stops delivering webhooks after repeated 500 errors. The webhook shows `enabled: true` in the API but no deliveries arrive. Fix: delete and recreate the webhook. After recreation, delivery may still be delayed due to internal backoff.
+- The `vard` injection detector in `strict()` mode flags "AI" (severity 0.65) as `delimiterInjection`. Adding `.threshold(0.8)` filters false positives while real injections score 0.9+. When adding common words to ticket descriptions, check if the injection scanner rejects them.
+- `LINEAR_WEBHOOK_SECRET` must be synced between the Linear webhook config (`secret` field) and the Cloudflare Worker secret. Use `wrangler secret put LINEAR_WEBHOOK_SECRET` and verify the values match.
+
 ## Supervisor Health Detection
 - The supervisor uses the `last_heartbeat` column (set by agent phone-home via `/heartbeat`) to detect stale agents. Don't confuse this with `updated_at`, which changes on any task field update (status, PR URL, metadata).
 - Always include `last_heartbeat` in SQL queries for supervisor context. Using `updated_at` for staleness detection gives false positives because status updates (which aren't real heartbeats) reset the timer. (Fixed in BC-162)
