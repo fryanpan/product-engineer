@@ -33,6 +33,10 @@ Project-specific conventions that guide how superpowers plugin skills behave in 
 
 Do NOT ask which approach to use. Use Subagent-Driven Development.
 
+## Deployment Safety
+- Never run deployment commands (`wrangler deploy`, `wrangler publish`, etc.) without first committing, pushing, and merging the code being deployed. Deploying uncommitted code to production is never acceptable, even for urgent fixes.
+- After identifying a root cause during debugging, the fix must go through the same commit/PR/merge flow as any other change. Debugging urgency does not justify skipping safety gates.
+
 ## Output Destination
 
 Each project should define where standalone deliverables (docs, plans, research, reviews) are written. Check the project's CLAUDE.md for a `docs_destination` convention. If none is set, ask the user on first encounter and record it.

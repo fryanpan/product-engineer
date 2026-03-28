@@ -104,6 +104,10 @@ Agent decision-making is encoded in English skills, not TypeScript. Skills are s
 To change agent behavior: edit skills in `agent/src/skills/` and redeploy.
 To change target repo config: edit `templates/` and use `/propagate`.
 
+### Deployment
+- **Never deploy uncommitted code.** All changes to production (including `wrangler deploy`, `wrangler publish`, or any infrastructure CLI) must be committed, pushed, PR'd, and merged before deploying. There is no "quick deploy to test" path — if it touches prod, it goes through the full git flow first.
+- The only exception is `wrangler secret put` for rotating secrets, which doesn't involve code.
+
 ### Secrets
 - Platform secrets (Slack, Linear, Anthropic) are shared across products
 - GitHub tokens are per-product (different repo access)
