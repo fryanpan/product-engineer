@@ -26,6 +26,12 @@ export function createMockEnv(overrides: Partial<Bindings> = {}): Bindings {
     PRODUCT_ENGINEER_GITHUB_TOKEN: "ghp_pe_test",
     WORKER_URL: "https://test.workers.dev",
     SENTRY_DSN: "",
+    SENTRY_ACCESS_TOKEN: "test-sentry-access-token",
+    NOTION_TOKEN: "test-notion-token",
+    CONTEXT7_API_KEY: "test-context7-key",
+    GOOGLE_CLIENT_ID: "test-google-client-id",
+    GOOGLE_CLIENT_SECRET: "test-google-client-secret",
+    GOOGLE_ALLOWED_DOMAIN: "test.com",
     PROMPT_DELIMITER: "---END-OF-USER-INPUT---",
     ...overrides,
   };
