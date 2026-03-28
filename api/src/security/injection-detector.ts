@@ -36,6 +36,7 @@ function createValidator(promptDelimiter?: string) {
     .block("delimiterInjection")
     .block("systemPromptLeak")
     .block("encoding")
+    .threshold(0.8)
     .maxLength(MAX_CONTENT_LENGTH);
 
   // Add secret delimiter as a custom delimiter to detect
