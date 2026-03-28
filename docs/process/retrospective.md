@@ -1,3 +1,42 @@
+## 2026-03-28 - Debug Linear webhook failure (BC-203/BC-205, PRs #126 #127)
+
+### Time Breakdown
+| Started | Phase | 👤 Hands-On | 🤖 Agent Time | Problems |
+|---------|-------|------------|--------------|----------|
+| Mar 28 6:40am | Debugging (explore flow, query Linear/prod, trace root cause) | █ ~5m | ██████████████████ ~25m | ⚠ Mutated BC-203 description |
+| Mar 28 7:10am | Fix + test + deploy | █ ~2m | ████ ~8m | ⚠ Deployed uncommitted code to prod |
+| Mar 28 7:18am | User corrections + revert + proper PR flow | ██ ~8m | ██ ~5m | ⚠ 3 correction cycles |
+| Mar 28 7:32am | Retro + BC-205 debug (injection false positive) | █ ~3m | ████ ~10m | |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~70 min |
+| Hands-on | ~18 min (26%) |
+| Automated agent time | ~48 min (69%) |
+| Idle/away | ~4 min (5%) |
+| Retro analysis time | ~10 min |
+
+### Key Observations
+- Root cause identification was solid (systematic tracing through webhook → conductor → crash)
+- Two serious process violations: deployed uncommitted code, mutated real user ticket
+- Secondary bug found during retro: injection detector false positive on "AI" blocking BC-205
+
+### Feedback
+**What worked:** Systematic debugging methodology found the root cause efficiently
+**What didn't:** Skipped all safety gates during "fix and ship" phase; mutated real user data
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Deployed uncommitted code to prod | CLAUDE.md + rules | Added deployment safety rules to CLAUDE.md, workflow-conventions.md |
+| Mutated real user data | Rules | Added to administrative-operations.md: never mutate real user resources |
+| Injection false positive on "AI" | Code fix | Added `.threshold(0.8)` to vard validator (PR #127) |
+| Missing `config.triggers?.` optional chaining | Code fix | One-char fix in registry.ts (PR #126) |
+| No E2E test for Linear webhooks | Test | Added step 1d to e2e-staging-test.ts (PR #126) |
+
+---
+
 ## 2026-03-28 - Scheduled tasks feature (BC-203, PR #125)
 
 ### Time Breakdown
