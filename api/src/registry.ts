@@ -104,7 +104,7 @@ export async function getProductByLinearProject(
   const normalized = projectName.toLowerCase();
   for (const [name, config] of Object.entries(registry.products)) {
     if (
-      config.triggers.linear?.enabled &&
+      config.triggers?.linear?.enabled &&
       config.triggers.linear.project_name.toLowerCase() === normalized
     ) {
       return { name, config };
