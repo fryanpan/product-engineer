@@ -840,3 +840,21 @@ When gathering context for LLM decisions, failing with clear error is better tha
 - StatusUpdater pattern is solid: parallel updates with graceful error handling
 - Linear GraphQL API requires issue ID (UUID), not identifier (e.g., "PE-42")
 - Silent failures are debugging nightmares - log everything with context
+
+## 2026-03-30 - Zod v4 Upgrade and CI Investigation
+
+**Context:** User requested zod v4 upgrade and CI issue investigation
+
+**What worked:**
+- Zod upgrade was straightforward - no breaking changes in v4 schema API
+- Local testing comprehensive (207 agent + 378 API tests)
+- Root cause analysis of CI failures identified Bun runtime bug, not code issue
+- Clear documentation in PR of the Bun issue and resolution strategy
+
+**What didn't:**
+- Git workflow fumble with force-push overwrote initial commit (used --amend + --force-with-lease incorrectly)
+- Had to redo the zod upgrade after accidentally pushing main branch over it
+
+**Action:**
+- Add to learnings.md: CI "failures" from Bun's test harness WriteStream bug are safe to ignore - all test assertions pass
+- Consider pinning Bun version if the issue regresses in newer releases
