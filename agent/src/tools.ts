@@ -273,11 +273,8 @@ export function createTools(config: AgentConfig) {
             content: [
               {
                 type: "image" as const,
-                source: {
-                  type: "base64" as const,
-                  media_type: normalizeImageMediaType(mimetype || "image/png"),
-                  data: base64,
-                },
+                data: base64,
+                mimeType: normalizeImageMediaType(mimetype || "image/png"),
               },
             ],
           };
