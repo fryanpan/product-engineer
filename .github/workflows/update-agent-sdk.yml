@@ -1,0 +1,96 @@
+name: Update Agent SDK
+
+on:
+  schedule:
+    # Run every Monday at 9am UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Check for SDK updates
+        id: check
+        working-directory: agent
+        run: |
+          # Get current version
+          CURRENT=$(bun pm ls @anthropic-ai/claude-agent-sdk 2>/dev/null | grep "claude-agent-sdk@" | head -1 | sed 's/.*@//' | tr -d '\n')
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+
+          # Get latest version
+          LATEST=$(npm view @anthropic-ai/claude-agent-sdk version)
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+
+          # Check if update needed
+          if [ "$CURRENT" != "$LATEST" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "📦 Update available: $CURRENT → $LATEST"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "✅ Already on latest version: $CURRENT"
+          fi
+
+      - name: Update SDK
+        if: steps.check.outputs.needs_update == 'true'
+        working-directory: agent
+        run: |
+          bun add @anthropic-ai/claude-agent-sdk@latest
+
+      - name: Run tests
+        if: steps.check.outputs.needs_update == 'true'
+        working-directory: agent
+        run: |
+          bun run typecheck
+          bun test
+
+      - name: Create Pull Request
+        if: steps.check.outputs.needs_update == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            chore: update Agent SDK to v${{ steps.check.outputs.latest }}
+
+            - Updated @anthropic-ai/claude-agent-sdk from ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}
+            - Tests pass locally
+
+            Co-Authored-By: GitHub Actions <actions@github.com>
+          branch: auto-update/agent-sdk-${{ steps.check.outputs.latest }}
+          delete-branch: true
+          title: "Update Agent SDK to v${{ steps.check.outputs.latest }}"
+          body: |
+            🤖 Automated update of the Agent SDK to the latest version.
+
+            ## Changes
+
+            - Updated `@anthropic-ai/claude-agent-sdk` from `${{ steps.check.outputs.current }}` to `${{ steps.check.outputs.latest }}`
+
+            ## Testing
+
+            - ✅ TypeScript compilation passes
+            - ✅ All agent tests pass
+
+            ## Review Checklist
+
+            - [ ] Check [SDK changelog](https://github.com/anthropics/claude-agent-sdk/releases) for breaking changes
+            - [ ] Verify CI passes
+            - [ ] Deploy to staging if needed
+
+            ---
+
+            This PR was created automatically by the `update-agent-sdk` workflow.
+            If tests fail, review the breaking changes and update the code accordingly.
+          labels: |
+            dependencies
+            automated
