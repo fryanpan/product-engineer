@@ -236,6 +236,12 @@ async function startSession(initialPrompt: MessageContent, resumeSessionId?: str
     },
   };
 
+  // Enable agent teams if ENABLE_AGENT_TEAMS env var is set
+  if (process.env.ENABLE_AGENT_TEAMS === "true") {
+    queryOptions.agentTeams = true;
+    console.log("[Agent] Agent teams enabled via ENABLE_AGENT_TEAMS");
+  }
+
   if (config.model) {
     queryOptions.model = config.model;
     console.log(`[Agent] Using model: ${config.model}`);
