@@ -930,3 +930,29 @@ When gathering context for LLM decisions, failing with clear error is better tha
 ✅ Natural language scheduling working for daily/weekly/monthly patterns
 ✅ Full CRUD via Slack commands
 ✅ Supervisor automatically spawns tasks at scheduled times
+
+## 2026-03-30 - Copilot Feedback and CI Issues (PR #129, #124)
+
+**Context:** Addressed CI failures and Copilot feedback on two open PRs.
+
+**What worked:**
+- Quick diagnosis from CI logs identifying exact TypeScript errors
+- Systematic approach: fix typecheck errors first, then run tests
+- Both PRs had clear, actionable issues (not vague failures)
+
+**What didn't:**
+- GitHub Actions didn't auto-trigger CI on the fix push - webhook delay or issue with the push event
+- Had to rely on manual verification via local test runs
+- Copilot "feedback" was just review summaries, not inline comments to address
+
+**Learnings:**
+- PR #129: ProductConfig interface uses snake_case (`slack_channel`, `slack_persona`), not camelCase
+- PR #129: ProductConfig doesn't have a `model` field - it was incorrectly referenced in conductor.ts
+- PR #124: Tests were already passing - the original CI failure may have been transient
+- `ALLOWED_EMAILS` is a required field in Bindings but was missing from mock-env.ts
+- GitHub Actions `pull_request` trigger should fire on push, but delays can occur
+
+**Action:**
+- Monitor PR #129 for CI to complete automatically
+- Consider adding a manual workflow_dispatch trigger to ci.yml for debugging scenarios
+- Document ProductConfig schema changes when adding new fields
