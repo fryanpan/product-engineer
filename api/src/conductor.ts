@@ -659,7 +659,6 @@ export class Conductor extends Container<Bindings> {
           slackThreadTs: task.slack_thread_ts || undefined,
           secrets: productConfig.secrets || {},
           gatewayConfig,
-          model: undefined, // TODO: Add model field to ProductConfig if needed
           mode: productConfig.mode || "coding",
           slackPersona: productConfig.slack_persona,
         });
@@ -718,7 +717,6 @@ export class Conductor extends Container<Bindings> {
           slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
           secrets: productConfig.secrets || {},
           gatewayConfig,
-          model: productConfig.model,
           mode: productConfig.mode || "coding",
           slackPersona: productConfig.slack_persona,
         });
