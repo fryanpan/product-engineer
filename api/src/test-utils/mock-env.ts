@@ -32,6 +32,7 @@ export function createMockEnv(overrides: Partial<Bindings> = {}): Bindings {
     GOOGLE_CLIENT_ID: "test-google-client-id",
     GOOGLE_CLIENT_SECRET: "test-google-client-secret",
     GOOGLE_ALLOWED_DOMAIN: "test.com",
+    ALLOWED_EMAILS: "test@example.com",
     PROMPT_DELIMITER: "---END-OF-USER-INPUT---",
     ...overrides,
   };

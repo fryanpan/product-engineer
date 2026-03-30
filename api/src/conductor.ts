@@ -651,13 +651,13 @@ export class Conductor extends Container<Bindings> {
         await this.taskManager.spawnAgent(task.task_uuid, {
           product: task.product,
           repos: productConfig.repos,
-          slackChannel: task.slack_channel || productConfig.slackChannel,
+          slackChannel: task.slack_channel || productConfig.slack_channel,
           slackThreadTs: task.slack_thread_ts || undefined,
           secrets: productConfig.secrets || {},
           gatewayConfig,
-          model: productConfig.model,
+          model: undefined, // TODO: Add model field to ProductConfig if needed
           mode: productConfig.mode || "coding",
-          slackPersona: productConfig.slackPersona,
+          slackPersona: productConfig.slack_persona,
         });
 
         console.log(`[Supervisor] Spawned scheduled task ${task.task_uuid}`);
