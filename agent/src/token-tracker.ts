@@ -60,6 +60,7 @@ export class TokenTracker {
   private totalCostUsd = 0;
   private turnLog: TurnUsage[] = [];
   private model?: string;
+  private costOverridden = false;
 
   /** Record a single assistant turn's token usage. */
   recordTurn(input: {
@@ -111,6 +112,7 @@ export class TokenTracker {
   /** Override the calculated total cost with the SDK-provided final cost. */
   overrideCost(costUsd: number): void {
     this.totalCostUsd = costUsd;
+    this.costOverridden = true;
     console.log(`[Agent] Final cost from SDK: $${costUsd.toFixed(2)}`);
   }
 
@@ -123,6 +125,7 @@ export class TokenTracker {
     this.totalCostUsd = 0;
     this.turnLog = [];
     this.model = undefined;
+    this.costOverridden = false;
   }
 
   /** Return a snapshot of current totals and per-turn log. */
@@ -149,7 +152,7 @@ export class TokenTracker {
     if (this.model) {
       msg += `**Model:** ${this.model}\n`;
     }
-    msg += `**Total Cost:** $${formattedCost}\n`;
+    msg += `**Total Cost:** $${formattedCost}${this.costOverridden ? " (SDK-reported)" : ""}\n`;
     msg += `**Input:** ${formattedInputTokens}K tokens ($${(this.totalInputTokens * INPUT_COST_PER_TOKEN).toFixed(2)})\n`;
     msg += `**Output:** ${formattedOutputTokens}K tokens ($${(this.totalOutputTokens * OUTPUT_COST_PER_TOKEN).toFixed(2)})\n`;
 
@@ -160,7 +163,12 @@ export class TokenTracker {
       msg += `**Cache Creation:** ${(this.totalCacheCreationTokens / 1000).toFixed(1)}K tokens ($${(this.totalCacheCreationTokens * CACHE_CREATION_COST_PER_TOKEN).toFixed(2)})\n`;
     }
 
-    msg += `**Conversation Turns:** ${this.turnLog.length}\n\n`;
+    msg += `**Conversation Turns:** ${this.turnLog.length}\n`;
+
+    if (this.costOverridden) {
+      msg += `\n_Note: Total cost from Agent SDK may differ from sum of components due to actual API pricing._\n`;
+    }
+    msg += `\n`;
 
     // Top 3 most expensive turns
     const topTurns = [...this.turnLog]

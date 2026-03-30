@@ -112,6 +112,15 @@ describe("TokenTracker", () => {
       tracker.overrideCost(1.23);
       expect(tracker.getSummary().totalCostUsd).toBe(1.23);
     });
+
+    test("Slack summary shows override warning when cost is overridden", () => {
+      tracker.recordTurn({ inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheCreationTokens: 0 });
+      tracker.overrideCost(1.23);
+
+      const msg = tracker.formatSlackSummary();
+      expect(msg).toContain("Total Cost:** $1.23");
+      expect(msg).toContain("(SDK-reported)");
+    });
   });
 
   describe("reset", () => {
