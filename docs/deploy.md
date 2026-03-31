@@ -100,6 +100,29 @@ Then update each product via the admin API (`PUT /api/products/:slug`) — add `
 
 Commit, push, and redeploy (`wrangler deploy`).
 
+### Infra Channel (optional)
+
+To route infrastructure/lifecycle events (agent spawns, ghost detection, stale agents, supervisor alerts) to a dedicated channel instead of cluttering product channels:
+
+1. Create a Slack channel (e.g., `#product-engineer-infra`) and invite the bot.
+
+2. Get the channel ID:
+   ```bash
+   curl -s -H "Authorization: Bearer xoxb-YOUR-BOT-TOKEN" \
+     "https://slack.com/api/conversations.list?types=public_channel" \
+     | jq '.channels[] | select(.name == "product-engineer-infra") | .id'
+   ```
+
+3. Configure via the admin API:
+   ```bash
+   curl -H "X-API-Key: $API_KEY" \
+     "$WORKER_URL/api/settings/infra_channel_id" \
+     -X PUT -H "Content-Type: application/json" \
+     -d '{"value": "C_YOUR_INFRA_CHANNEL_ID"}'
+   ```
+
+If this setting is not configured, infra messages are silently dropped — they do **not** fall back to product channels.
+
 ## Step 4: Configure Slack App
 
 In [api.slack.com/apps](https://api.slack.com/apps):

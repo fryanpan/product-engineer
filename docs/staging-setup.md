@@ -81,6 +81,21 @@ Deploy from a development branch to test changes before merging to main.
 
 Use a **separate Slack app** for staging to prevent cross-contamination with production. Both apps connect via Socket Mode independently.
 
+## Infra Channel
+
+Configure a staging-specific infra channel to keep lifecycle events separate from product channels:
+
+1. Create `#staging-pe-infra` in Slack and invite the staging bot.
+2. Get the channel ID and set it:
+   ```bash
+   curl -H "X-API-Key: $API_KEY" \
+     "$STAGING_WORKER_URL/api/settings/infra_channel_id" \
+     -X PUT -H "Content-Type: application/json" \
+     -d '{"value": "C_STAGING_INFRA_CHANNEL_ID"}'
+   ```
+
+If not set, infra messages are silently dropped — they do not fall back to product channels.
+
 ## Testing
 
 1. **Test Linear trigger**: Create an issue in your staging Linear team
