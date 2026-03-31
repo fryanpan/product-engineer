@@ -463,14 +463,16 @@ export class Conductor extends Container<Bindings> {
   }
 
   /**
-   * Post a message to the infra channel for a product (or fall back to the main channel).
+   * Post a message to the global infra channel.
    * Used for lifecycle/infrastructure events: agent spawn, kill, ghost detection, etc.
+   * Channel is a global setting (`infra_channel_id`) — not per-product.
+   * If the setting is not configured, the message is silently dropped (no fallback to project channels).
    * Non-fatal — silently swallows errors.
    */
-  private async notifyInfra(productConfig: ProductConfig, message: string): Promise<void> {
+  private async notifyInfra(_productConfig: ProductConfig, message: string): Promise<void> {
     const token = (this.env as any).SLACK_BOT_TOKEN as string | undefined;
     if (!token) return;
-    const channel = productConfig.infra_channel_id || productConfig.slack_channel_id || productConfig.slack_channel;
+    const channel = getSetting(this.sqlExec, "infra_channel_id");
     if (!channel) return;
     await postSlackMessage(token, channel, message).catch((err) =>
       console.error("[Conductor] Failed to post to infra channel:", err)
