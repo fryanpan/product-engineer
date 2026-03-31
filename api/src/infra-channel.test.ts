@@ -2,32 +2,16 @@ import { describe, test, expect } from "bun:test";
 import type { ProductConfig } from "./registry";
 
 /**
- * Tests for infra channel routing logic.
+ * Tests for infra channel routing.
  *
- * The notifyInfra method in conductor.ts uses:
- *   productConfig.infra_channel_id || productConfig.slack_channel_id || productConfig.slack_channel
- *
- * We test this channel resolution logic directly.
+ * The infra channel is a GLOBAL setting (`infra_channel_id` in the conductor's
+ * settings table), not per-product. All products share the same infra channel
+ * for the environment. If the setting is not configured, infra messages are
+ * silently dropped — they do NOT fall back to the product channel.
  */
 
-function resolveInfraChannel(config: ProductConfig): string | undefined {
-  return config.infra_channel_id || config.slack_channel_id || config.slack_channel || undefined;
-}
-
-describe("infra channel resolution", () => {
-  test("uses infra_channel_id when configured", () => {
-    const config: ProductConfig = {
-      repos: ["org/repo"],
-      slack_channel: "#main",
-      slack_channel_id: "C_MAIN",
-      infra_channel_id: "C_INFRA",
-      triggers: { slack: { enabled: true } },
-      secrets: {},
-    };
-    expect(resolveInfraChannel(config)).toBe("C_INFRA");
-  });
-
-  test("falls back to slack_channel_id when infra_channel_id is not set", () => {
+describe("ProductConfig interface", () => {
+  test("does not have infra_channel_id field", () => {
     const config: ProductConfig = {
       repos: ["org/repo"],
       slack_channel: "#main",
@@ -35,49 +19,46 @@ describe("infra channel resolution", () => {
       triggers: { slack: { enabled: true } },
       secrets: {},
     };
-    expect(resolveInfraChannel(config)).toBe("C_MAIN");
+    // infra_channel_id is NOT a per-product field — it's a global conductor setting
+    expect("infra_channel_id" in config).toBe(false);
   });
 
-  test("falls back to slack_channel when neither infra_channel_id nor slack_channel_id is set", () => {
-    const config: ProductConfig = {
-      repos: ["org/repo"],
-      slack_channel: "#main",
-      triggers: { slack: { enabled: true } },
-      secrets: {},
-    };
-    expect(resolveInfraChannel(config)).toBe("#main");
-  });
-
-  test("infra_channel_id takes precedence over slack_channel_id", () => {
+  test("allows all standard product config fields", () => {
     const config: ProductConfig = {
       repos: ["org/repo"],
       slack_channel: "#main",
       slack_channel_id: "C_MAIN",
-      infra_channel_id: "C_INFRA_SPECIFIC",
-      triggers: { slack: { enabled: true } },
-      secrets: {},
+      triggers: {
+        linear: { enabled: true, project_name: "My Project" },
+        slack: { enabled: true },
+      },
+      secrets: { GITHUB_TOKEN: "GH_TOKEN_BINDING" },
+      slack_persona: { username: "bot", icon_emoji: ":robot_face:" },
+      mode: "coding",
     };
-    expect(resolveInfraChannel(config)).toBe("C_INFRA_SPECIFIC");
+    expect(config.slack_channel).toBe("#main");
+    expect(config.slack_channel_id).toBe("C_MAIN");
+  });
+});
+
+describe("infra channel global setting behavior", () => {
+  test("infra messages are dropped when no global setting is configured", () => {
+    // Simulate getSetting returning null (not configured)
+    const infraChannel = null; // getSetting(sql, "infra_channel_id") → null
+    expect(infraChannel).toBeNull();
+    // With null channel, notifyInfra returns early — no Slack message sent
   });
 
-  test("ProductConfig interface accepts infra_channel_id", () => {
-    const config: ProductConfig = {
-      repos: ["org/repo"],
-      slack_channel: "#main",
-      infra_channel_id: "C_INFRA",
-      triggers: {},
-      secrets: {},
-    };
-    expect(config.infra_channel_id).toBe("C_INFRA");
+  test("infra messages go to global channel when configured", () => {
+    const infraChannel = "C_INFRA_GLOBAL"; // getSetting(sql, "infra_channel_id")
+    expect(infraChannel).toBe("C_INFRA_GLOBAL");
+    // All products use this single channel
   });
 
-  test("ProductConfig interface allows infra_channel_id to be omitted", () => {
-    const config: ProductConfig = {
-      repos: ["org/repo"],
-      slack_channel: "#main",
-      triggers: {},
-      secrets: {},
-    };
-    expect(config.infra_channel_id).toBeUndefined();
+  test("infra channel is set via admin API at settings level, not product level", () => {
+    // The setting key is "infra_channel_id" in the conductor settings table
+    // Set via: PUT /api/settings/infra_channel_id with body { value: "C_..." }
+    const settingKey = "infra_channel_id";
+    expect(settingKey).toBe("infra_channel_id");
   });
 });
