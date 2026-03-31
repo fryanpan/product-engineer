@@ -1,14 +1,5 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 
-// Mock the agent SDK before importing tools.ts
-// The `tool` function captures the handler so we can invoke it directly in tests.
-mock.module("@anthropic-ai/claude-agent-sdk", () => ({
-  tool: (_name: string, _desc: string, _schema: unknown, handler: Function) => ({
-    __name: _name,
-    __handler: handler,
-  }),
-}));
-
 import { persistSlackThreadTs, createTools } from "./tools";
 import type { AgentConfig } from "./config";
 
@@ -138,9 +129,9 @@ describe("persistSlackThreadTs", () => {
 // Helper to extract a tool handler by name from createTools result
 function getToolHandler(config: AgentConfig, toolName: string): Function {
   const { tools } = createTools(config);
-  const found = tools.find((t: any) => t.__name === toolName);
+  const found = tools.find((t: any) => (t.__name || t.name) === toolName);
   if (!found) throw new Error(`Tool "${toolName}" not found`);
-  return (found as any).__handler;
+  return (found as any).__handler || (found as any).handler;
 }
 
 describe("update_task_status", () => {
