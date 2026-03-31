@@ -410,6 +410,56 @@ app.put("/api/settings/:key", async (c) => {
   }));
 });
 
+// Schedules API: proxy to conductor DO
+app.post("/api/schedules", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request("http://internal/schedules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+app.get("/api/schedules", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const product = c.req.query("product") || "";
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request(`http://internal/schedules?product=${encodeURIComponent(product)}`));
+});
+
+app.put("/api/schedules/:id", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const id = c.req.param("id");
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request(`http://internal/schedules/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+app.delete("/api/schedules/:id", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const id = c.req.param("id");
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request(`http://internal/schedules/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  }));
+});
+
 // Conductor: system status
 app.get("/api/conductor/status", async (c) => {
   const apiKey = c.req.header("X-API-Key");

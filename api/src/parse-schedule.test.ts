@@ -125,7 +125,7 @@ describe("calculateNextScheduledTime", () => {
     };
     const now = new Date("2024-03-28T10:00:00Z");
     const next = calculateNextScheduledTime(schedule, now);
-    expect(next).toBe("2024-03-28T14:00:00.000Z");
+    expect(next).toBe("2024-03-28 14:00:00");
   });
 
   test("daily: schedules for tomorrow if time has passed", () => {
@@ -136,7 +136,7 @@ describe("calculateNextScheduledTime", () => {
     };
     const now = new Date("2024-03-28T10:00:00Z");
     const next = calculateNextScheduledTime(schedule, now);
-    expect(next).toBe("2024-03-29T09:00:00.000Z");
+    expect(next).toBe("2024-03-29 09:00:00");
   });
 
   test("weekly: schedules for next occurrence of the day", () => {
@@ -150,7 +150,7 @@ describe("calculateNextScheduledTime", () => {
     const now = new Date("2024-03-28T10:00:00Z");
     const next = calculateNextScheduledTime(schedule, now);
     // Next Monday is April 1
-    expect(next).toBe("2024-04-01T10:00:00.000Z");
+    expect(next).toBe("2024-04-01 10:00:00");
   });
 
   test("weekly: schedules for same day next week if time passed", () => {
@@ -164,7 +164,7 @@ describe("calculateNextScheduledTime", () => {
     const now = new Date("2024-03-28T10:00:00Z");
     const next = calculateNextScheduledTime(schedule, now);
     // Next Thursday is April 4
-    expect(next).toBe("2024-04-04T09:00:00.000Z");
+    expect(next).toBe("2024-04-04 09:00:00");
   });
 
   test("monthly: schedules for this month if date hasn't passed", () => {
@@ -176,7 +176,7 @@ describe("calculateNextScheduledTime", () => {
     };
     const now = new Date("2024-03-10T10:00:00Z");
     const next = calculateNextScheduledTime(schedule, now);
-    expect(next).toBe("2024-03-15T12:00:00.000Z");
+    expect(next).toBe("2024-03-15 12:00:00");
   });
 
   test("monthly: schedules for next month if date has passed", () => {
@@ -188,6 +188,32 @@ describe("calculateNextScheduledTime", () => {
     };
     const now = new Date("2024-03-20T10:00:00Z");
     const next = calculateNextScheduledTime(schedule, now);
-    expect(next).toBe("2024-04-15T12:00:00.000Z");
+    expect(next).toBe("2024-04-15 12:00:00");
+  });
+
+  test("monthly: clamps to last day of month for invalid dates", () => {
+    // April only has 30 days, so scheduling for the 31st should clamp to Apr 30
+    const schedule: ParsedSchedule = {
+      recurrence: "monthly",
+      time: "12:00",
+      dayOfMonth: 31,
+      description: "test",
+    };
+    const now = new Date("2024-04-01T10:00:00Z");
+    const next = calculateNextScheduledTime(schedule, now);
+    expect(next).toBe("2024-04-30 12:00:00");
+  });
+
+  test("monthly: Feb 29 in non-leap year clamps to Feb 28", () => {
+    const schedule: ParsedSchedule = {
+      recurrence: "monthly",
+      time: "09:00",
+      dayOfMonth: 29,
+      description: "test",
+    };
+    // January 2025 (non-leap year), so next Feb only has 28 days
+    const now = new Date("2025-01-30T10:00:00Z");
+    const next = calculateNextScheduledTime(schedule, now);
+    expect(next).toBe("2025-02-28 09:00:00");
   });
 });

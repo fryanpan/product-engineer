@@ -776,7 +776,7 @@ export class Conductor extends Container<Bindings> {
         return Response.json({ error: "Invalid schedule format" }, { status: 400 });
       }
 
-      const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const id = `sched-${crypto.randomUUID()}`;
       const nextScheduledFor = calculateNextScheduledTime(parsed);
 
       this.ctx.storage.sql.exec(

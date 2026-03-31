@@ -514,7 +514,7 @@ export function createTools(config: AgentConfig) {
     {},
     async () => {
       try {
-        const res = await fetch(`${config.workerUrl}/api/schedules?product=${config.product}`, {
+        const res = await fetch(`${config.workerUrl}/api/schedules?product=${encodeURIComponent(config.product)}`, {
           headers: { "X-Internal-Key": config.apiKey },
         });
         if (!res.ok) {

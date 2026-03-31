@@ -30,8 +30,8 @@ function createMockSqlForSchedules() {
           next_scheduled_for: nextScheduledFor,
           created_by: createdBy,
           enabled: 1,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          created_at: new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, ""),
+          updated_at: new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, ""),
         });
         return { toArray: () => [] };
       }
@@ -44,7 +44,7 @@ function createMockSqlForSchedules() {
           return { toArray: () => results };
         }
         if (normalized.includes("where enabled = 1")) {
-          const now = new Date().toISOString();
+          const now = new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
           const results = Array.from(schedules.values()).filter(
             s => s.enabled === 1 && s.next_scheduled_for && s.next_scheduled_for <= now
           );
@@ -61,7 +61,7 @@ function createMockSqlForSchedules() {
           const schedule = schedules.get(id as string);
           if (schedule) {
             schedule.enabled = enabled as number;
-            schedule.updated_at = new Date().toISOString();
+            schedule.updated_at = new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
           }
           return { toArray: () => [] };
         }
@@ -71,8 +71,8 @@ function createMockSqlForSchedules() {
           const schedule = schedules.get(id as string);
           if (schedule) {
             schedule.next_scheduled_for = nextScheduledFor;
-            schedule.last_spawned_at = new Date().toISOString();
-            schedule.updated_at = new Date().toISOString();
+            schedule.last_spawned_at = new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
+            schedule.updated_at = new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
           }
           return { toArray: () => [] };
         }
@@ -105,7 +105,7 @@ describe("Recurring Schedules", () => {
     expect(parsed!.time).toBe("09:00");
 
     const nextScheduledFor = calculateNextScheduledTime(parsed!);
-    expect(nextScheduledFor).toMatch(/^\d{4}-\d{2}-\d{2}T09:00:00/);
+    expect(nextScheduledFor).toMatch(/^\d{4}-\d{2}-\d{2} 09:00:00$/);
   });
 
   test("creates weekly schedule", () => {
@@ -269,7 +269,7 @@ describe("Recurring Schedules", () => {
       "09:00",
       null,
       null,
-      new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
+      new Date(Date.now() - 3600000).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, ""), // 1 hour ago
       null,
     );
 
@@ -286,7 +286,7 @@ describe("Recurring Schedules", () => {
       "14:00",
       null,
       null,
-      new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
+      new Date(Date.now() + 3600000).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, ""), // 1 hour from now
       null,
     );
 

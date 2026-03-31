@@ -137,6 +137,15 @@ export function parseSchedule(input: string): ParsedSchedule | null {
  * Calculate the next scheduled time for a recurring schedule.
  * Returns ISO8601 timestamp.
  */
+/**
+ * Format a Date as SQLite-compatible datetime string (YYYY-MM-DD HH:MM:SS).
+ * This matches the output of SQLite's datetime('now') function,
+ * ensuring consistent string comparisons in SQL queries.
+ */
+function toSQLiteDatetime(d: Date): string {
+  return d.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
+}
+
 export function calculateNextScheduledTime(schedule: ParsedSchedule, after?: Date): string {
   const now = after || new Date();
   const [hour, minute] = schedule.time.split(":").map(Number);
@@ -149,7 +158,7 @@ export function calculateNextScheduledTime(schedule: ParsedSchedule, after?: Dat
       if (next <= now) {
         next.setUTCDate(next.getUTCDate() + 1);
       }
-      return next.toISOString();
+      return toSQLiteDatetime(next);
     }
 
     case "weekly": {
@@ -164,7 +173,7 @@ export function calculateNextScheduledTime(schedule: ParsedSchedule, after?: Dat
         daysUntilTarget += 7;
       }
       next.setUTCDate(next.getUTCDate() + daysUntilTarget);
-      return next.toISOString();
+      return toSQLiteDatetime(next);
     }
 
     case "monthly": {
@@ -177,7 +186,16 @@ export function calculateNextScheduledTime(schedule: ParsedSchedule, after?: Dat
       if (next <= now) {
         next.setUTCMonth(next.getUTCMonth() + 1);
       }
-      return next.toISOString();
+
+      // Handle invalid dates (e.g., setting day 31 in a 30-day month
+      // causes Date to roll over to the next month). Clamp to last day.
+      const targetMonth = next.getUTCMonth();
+      if (next.getUTCDate() !== schedule.dayOfMonth) {
+        // Rolled over — go back to last day of the intended month
+        next.setUTCDate(0); // sets to last day of previous month (which is our target month)
+      }
+
+      return toSQLiteDatetime(next);
     }
 
     default:
