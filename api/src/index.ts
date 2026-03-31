@@ -195,8 +195,9 @@ app.post("/api/internal/upload-transcript", async (c) => {
     taskUUID: string;
     r2Key: string;
     transcript: string;
+    associatedTaskUUID?: string;
   }>();
-  const { taskUUID } = body;
+  const { taskUUID, associatedTaskUUID } = body;
   const { r2Key, transcript } = body;
 
   if (!taskUUID) {
@@ -217,6 +218,17 @@ app.post("/api/internal/upload-transcript", async (c) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ taskUUID, transcript_r2_key: r2Key }),
     }));
+
+    // If an associated task UUID is provided (e.g., project lead uploading for a child task),
+    // also update that task's record with the transcript R2 key
+    if (associatedTaskUUID && associatedTaskUUID !== taskUUID) {
+      await conductor.fetch(new Request("http://internal/ticket/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskUUID: associatedTaskUUID, transcript_r2_key: r2Key }),
+      }));
+      console.log(`[Worker] Transcript also associated with task=${associatedTaskUUID}`);
+    }
 
     console.log(`[Worker] Transcript uploaded: ticket=${taskUUID} key=${r2Key} size=${transcript.length}`);
     return c.json({ ok: true, r2Key });

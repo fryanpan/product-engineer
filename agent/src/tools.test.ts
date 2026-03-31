@@ -479,3 +479,68 @@ describe("update_task_status", () => {
     expect<string | null>(queriedIssueId).toBe("explicit-uuid");
   });
 });
+
+describe("spawn_task", () => {
+  const originalFetch = globalThis.fetch;
+  const originalAgentRole = process.env.AGENT_ROLE;
+
+  beforeEach(() => {
+    process.env.AGENT_ROLE = "project-lead";
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalAgentRole === undefined) {
+      delete process.env.AGENT_ROLE;
+    } else {
+      process.env.AGENT_ROLE = originalAgentRole;
+    }
+  });
+
+  test("passes mode: 'research' when specified", async () => {
+    const config = makeConfig();
+    const handler = getToolHandler(config, "spawn_task");
+
+    let capturedBody: any = null;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/api/project-lead/spawn-task")) {
+        capturedBody = JSON.parse(init!.body as string);
+        return new Response(JSON.stringify({ taskUUID: "task-123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("Not found", { status: 404 });
+    }) as any;
+
+    await handler({ product: "test-app", description: "Research the widget", mode: "research" });
+
+    expect(capturedBody).toBeTruthy();
+    expect(capturedBody.mode).toBe("research");
+    expect(capturedBody.product).toBe("test-app");
+  });
+
+  test("defaults to mode: 'coding' when mode is not specified", async () => {
+    const config = makeConfig();
+    const handler = getToolHandler(config, "spawn_task");
+
+    let capturedBody: any = null;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr.includes("/api/project-lead/spawn-task")) {
+        capturedBody = JSON.parse(init!.body as string);
+        return new Response(JSON.stringify({ taskUUID: "task-456" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("Not found", { status: 404 });
+    }) as any;
+
+    await handler({ product: "test-app", description: "Fix the widget" });
+
+    expect(capturedBody).toBeTruthy();
+    expect(capturedBody.mode).toBe("coding");
+  });
+});

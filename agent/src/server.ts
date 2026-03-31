@@ -342,6 +342,12 @@ app.post("/event", async (c) => {
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
   lifecycle.recordActivity();
 
+  // When a ProjectLead receives an event for a specific child task,
+  // associate transcript uploads with that task's record too
+  if (event.taskUUID && event.taskUUID !== config.taskUUID) {
+    transcriptMgr.setAssociatedTaskUUID(event.taskUUID);
+  }
+
   try {
     if (event.slackThreadTs) {
       config.slackThreadTs = event.slackThreadTs;
