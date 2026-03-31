@@ -17,7 +17,7 @@ const PE_REPO = "fryanpan/product-engineer";
 
 const TWO_HOURS = 2 * 60 * 60 * 1000;
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
-const FIVE_MINUTES = 5 * 60 * 1000;
+const THIRTY_MINUTES = 30 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
 
 export function resolveRoleConfig(agentRole?: string, mode?: string): RoleConfig {
@@ -52,7 +52,7 @@ export function resolveRoleConfig(agentRole?: string, mode?: string): RoleConfig
     isConductor: false,
     maxTurns: 200,
     sessionTimeoutMs: isResearchMode ? FOUR_HOURS : TWO_HOURS,
-    idleTimeoutMs: isResearchMode ? ONE_HOUR : FIVE_MINUTES,
+    idleTimeoutMs: isResearchMode ? ONE_HOUR : THIRTY_MINUTES,
     persistAfterSession: isResearchMode,
     exitOnError: true,
     peRepoRequired: false,

@@ -360,13 +360,34 @@ app.post("/event", async (c) => {
     await ensureWorkspace();
 
     if (!lifecycle.state.sessionActive) {
-      // Check if this is a resume from suspended state
+      // Determine which transcript to resume from.
+      // Prefer event-provided key (explicit suspend/reopen), fall back to conductor DB
+      // (covers deploy restarts where agent_active=1 so no resumeTranscriptR2Key is sent).
       let resumeSessionId: string | undefined;
-      if (event.resumeTranscriptR2Key) {
-        console.log(`[Agent] Resume requested: transcript=${event.resumeTranscriptR2Key}`);
-        const downloadedSessionId = await transcriptMgr.download(event.resumeTranscriptR2Key);
+      let transcriptKey = event.resumeTranscriptR2Key;
+      if (!transcriptKey) {
+        try {
+          const taskInfoRes = await fetch(
+            `${config.workerUrl}/api/conductor/task-status/${encodeURIComponent(config.taskUUID)}`,
+            { headers: { "X-Internal-Key": config.apiKey } },
+          );
+          if (taskInfoRes.ok) {
+            const taskInfo = await taskInfoRes.json() as { transcript_r2_key?: string };
+            if (taskInfo.transcript_r2_key) {
+              transcriptKey = taskInfo.transcript_r2_key;
+              console.log(`[Agent] Using transcript from conductor DB: ${transcriptKey}`);
+            }
+          }
+        } catch (err) {
+          console.warn("[Agent] Could not fetch transcript key from conductor DB:", err);
+        }
+      }
+      if (transcriptKey) {
+        console.log(`[Agent] Resume requested: transcript=${transcriptKey}`);
+        const downloadedSessionId = await transcriptMgr.download(transcriptKey);
         if (downloadedSessionId) {
-          resumeSessionId = event.resumeSessionId || downloadedSessionId;
+          // Use session ID from transcript file — more reliable than DB session_id (avoids stale value)
+          resumeSessionId = downloadedSessionId;
           console.log(`[Agent] Will resume session: ${resumeSessionId}`);
         } else {
           console.warn("[Agent] Transcript download failed — starting fresh session");
@@ -537,7 +558,8 @@ setTimeout(async () => {
           if (taskInfo.transcript_r2_key) {
             const downloadedSessionId = await transcriptMgr.download(taskInfo.transcript_r2_key);
             if (downloadedSessionId) {
-              autoResumeSessionId = taskInfo.session_id || downloadedSessionId;
+              // Use session ID from transcript file — more reliable than DB session_id (avoids stale value)
+              autoResumeSessionId = downloadedSessionId;
               console.log(`[Agent] Auto-resume will use session: ${autoResumeSessionId}`);
             }
           }

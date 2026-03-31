@@ -21,7 +21,7 @@ export function resolveAgentEnvVars(
 
 export class TaskAgent extends Container<Bindings> {
   defaultPort = 3000;
-  sleepAfter = "1h"; // Safety net — agent should exit within 5min of completion
+  sleepAfter = "4h"; // Safety net — agent should exit within 5min of completion
 
   private persistentConfig: PersistentConfig<TaskAgentConfig>;
   private eventBuffer: EventBuffer;
