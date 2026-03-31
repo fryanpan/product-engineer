@@ -153,14 +153,15 @@ export class TokenTracker {
       msg += `**Model:** ${this.model}\n`;
     }
     msg += `**Total Cost:** $${formattedCost}${this.costOverridden ? " (SDK-reported)" : ""}\n`;
-    msg += `**Input:** ${formattedInputTokens}K tokens ($${(this.totalInputTokens * INPUT_COST_PER_TOKEN).toFixed(2)})\n`;
-    msg += `**Output:** ${formattedOutputTokens}K tokens ($${(this.totalOutputTokens * OUTPUT_COST_PER_TOKEN).toFixed(2)})\n`;
+    const estLabel = this.costOverridden ? " est." : "";
+    msg += `**Input:** ${formattedInputTokens}K tokens (~$${(this.totalInputTokens * INPUT_COST_PER_TOKEN).toFixed(2)}${estLabel})\n`;
+    msg += `**Output:** ${formattedOutputTokens}K tokens (~$${(this.totalOutputTokens * OUTPUT_COST_PER_TOKEN).toFixed(2)}${estLabel})\n`;
 
     if (this.totalCacheReadTokens > 0) {
-      msg += `**Cache Read:** ${(this.totalCacheReadTokens / 1000).toFixed(1)}K tokens ($${(this.totalCacheReadTokens * CACHE_READ_COST_PER_TOKEN).toFixed(2)})\n`;
+      msg += `**Cache Read:** ${(this.totalCacheReadTokens / 1000).toFixed(1)}K tokens (~$${(this.totalCacheReadTokens * CACHE_READ_COST_PER_TOKEN).toFixed(2)}${estLabel})\n`;
     }
     if (this.totalCacheCreationTokens > 0) {
-      msg += `**Cache Creation:** ${(this.totalCacheCreationTokens / 1000).toFixed(1)}K tokens ($${(this.totalCacheCreationTokens * CACHE_CREATION_COST_PER_TOKEN).toFixed(2)})\n`;
+      msg += `**Cache Creation:** ${(this.totalCacheCreationTokens / 1000).toFixed(1)}K tokens (~$${(this.totalCacheCreationTokens * CACHE_CREATION_COST_PER_TOKEN).toFixed(2)}${estLabel})\n`;
     }
 
     msg += `**Conversation Turns:** ${this.turnLog.length}\n`;
