@@ -89,7 +89,7 @@ Configure a staging-specific infra channel to keep lifecycle events separate fro
 2. Get the channel ID and set it:
    ```bash
    curl -H "X-API-Key: $API_KEY" \
-     "$STAGING_WORKER_URL/api/settings/infra_channel_id" \
+     "$WORKER_URL/api/settings/infra_channel_id" \
      -X PUT -H "Content-Type: application/json" \
      -d '{"value": "C_STAGING_INFRA_CHANNEL_ID"}'
    ```

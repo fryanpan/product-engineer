@@ -104,13 +104,13 @@ Commit, push, and redeploy (`wrangler deploy`).
 
 To route infrastructure/lifecycle events (agent spawns, ghost detection, stale agents, supervisor alerts) to a dedicated channel instead of cluttering product channels:
 
-1. Create a Slack channel (e.g., `#product-engineer-infra`) and invite the bot.
+1. Create a Slack channel (public or private, e.g., `#product-engineer-infra`) and invite the bot.
 
 2. Get the channel ID:
    ```bash
    curl -s -H "Authorization: Bearer xoxb-YOUR-BOT-TOKEN" \
-     "https://slack.com/api/conversations.list?types=public_channel" \
-     | jq '.channels[] | select(.name == "product-engineer-infra") | .id'
+     "https://slack.com/api/conversations.list?types=public_channel,private_channel" \
+     | jq -r '.channels[] | select(.name == "product-engineer-infra") | .id'
    ```
 
 3. Configure via the admin API:
