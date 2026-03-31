@@ -73,6 +73,7 @@ const slackEcho = new SlackEcho({
   slackChannel: config.slackChannel,
   slackThreadTs: config.slackThreadTs,
   slackPersona: config.slackPersona,
+  anthropicApiKey: config.anthropicApiKey,
 });
 const lifecycle = new AgentLifecycle({
   config,
@@ -297,6 +298,11 @@ async function startSession(initialPrompt: MessageContent, resumeSessionId?: str
               lifecycle.state.lastToolCall = `${block.name}(${JSON.stringify(block.input).slice(0, 100)})`;
               console.log(`[Agent] Tool: ${block.name}`);
               slackEcho.echoToolUse(block.name, block.input as Record<string, unknown>);
+              // Flush buffered activity immediately before ask_question posts to Slack,
+              // so the user sees what the agent was doing when the question arrives.
+              if (block.name === "ask_question") {
+                await slackEcho.flush();
+              }
             }
           }
         } else if (message.type === "user") {
@@ -318,11 +324,13 @@ async function startSession(initialPrompt: MessageContent, resumeSessionId?: str
         }
       }
 
+      await slackEcho.stop();
       await lifecycle.handleSessionEnd();
       if (roleConfig.persistAfterSession) {
         messageYielder = null;
       }
     } catch (err) {
+      await slackEcho.stop();
       await lifecycle.handleSessionError(err as Error);
       if (roleConfig.persistAfterSession) {
         messageYielder = null;
