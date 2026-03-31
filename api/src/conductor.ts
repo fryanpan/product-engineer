@@ -31,7 +31,7 @@ import {
   updateSetting as updateSettingHandler,
   seedProducts as seedProductsHandler,
 } from "./product-crud";
-import { handleSlackEvent as handleSlackEventImpl, refreshLinearToken } from "./slack-handler";
+import { handleSlackEvent as handleSlackEventImpl, refreshLinearToken, postSlackMessage } from "./slack-handler";
 
 function sanitizeTaskUUID(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -463,6 +463,21 @@ export class Conductor extends Container<Bindings> {
   }
 
   /**
+   * Post a message to the infra channel for a product (or fall back to the main channel).
+   * Used for lifecycle/infrastructure events: agent spawn, kill, ghost detection, etc.
+   * Non-fatal — silently swallows errors.
+   */
+  private async notifyInfra(productConfig: ProductConfig, message: string): Promise<void> {
+    const token = (this.env as any).SLACK_BOT_TOKEN as string | undefined;
+    if (!token) return;
+    const channel = productConfig.infra_channel_id || productConfig.slack_channel_id || productConfig.slack_channel;
+    if (!channel) return;
+    await postSlackMessage(token, channel, message).catch((err) =>
+      console.error("[Conductor] Failed to post to infra channel:", err)
+    );
+  }
+
+  /**
    * Review a new task and decide how to handle it.
    *
    * v3 flow: Routes the event to the persistent ProjectLead for the product.
@@ -549,8 +564,10 @@ export class Conductor extends Container<Bindings> {
     try {
       await this.taskManager.spawnAgent(event.taskUUID, spawnConfig);
       await this.taskManager.sendEvent(event.taskUUID, event);
+      await this.notifyInfra(productConfig, `🤖 *Agent spawned* (fallback) \`${event.taskUUID}\` — product: ${event.product}, model: ${model}`);
     } catch (err) {
       console.error(`[Conductor] Failed to spawn agent for ${event.taskUUID}:`, err);
+      await this.notifyInfra(productConfig, `❌ *Agent spawn failed* \`${event.taskUUID}\`: ${err}`);
     }
   }
 
@@ -581,6 +598,7 @@ export class Conductor extends Container<Bindings> {
     // spawnAgent accepts active status as a re-spawn
     await this.taskManager.spawnAgent(taskUUID, spawnConfig);
     await this.taskManager.sendEvent(taskUUID, event);
+    await this.notifyInfra(productConfig, `♻️ *Agent respawned* \`${taskUUID}\` — product: ${product} (thread reply triggered resume)`);
   }
 
   /**
@@ -609,6 +627,10 @@ export class Conductor extends Container<Bindings> {
         "UPDATE tasks SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE task_uuid = ?",
         agent.task_uuid,
       );
+      const staleProductConfig = getProductConfig(this.sqlExec, agent.product);
+      if (staleProductConfig) {
+        await this.notifyInfra(staleProductConfig, `⚠️ *Stale agent* \`${agent.task_uuid}\` — no heartbeat since ${agent.last_heartbeat}. Agent may be stuck.`);
+      }
     }
 
     // Detect "ghost" agents — agent_active=1 but never received a heartbeat
@@ -633,19 +655,22 @@ export class Conductor extends Container<Bindings> {
         "UPDATE tasks SET agent_active = 0, agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
         agent.task_uuid,
       );
+      const ghostProductConfig = getProductConfig(this.sqlExec, agent.product);
+      if (ghostProductConfig) {
+        await this.notifyInfra(ghostProductConfig, `🚨 *Ghost agent* \`${agent.task_uuid}\` — spawned at ${agent.created_at} but never received task event. Agent marked inactive.`);
+      }
     }
 
     // Check for scheduled tasks ready to spawn
     const readyScheduledTasks = this.taskManager.getScheduledTasksReadyToSpawn();
     for (const task of readyScheduledTasks) {
       console.log(`[Supervisor] Scheduled task ready: ${task.task_uuid} (scheduled for ${task.scheduled_for})`);
+      const scheduledProductConfig = getProductConfig(this.sqlExec, task.product);
       try {
         // Transition from queued → reviewing so the task can be spawned
         this.taskManager.updateStatus(task.task_uuid, { status: "reviewing" });
 
-        // Get product config to spawn the agent
-        const productConfig = getProductConfig(this.sqlExec, task.product);
-        if (!productConfig) {
+        if (!scheduledProductConfig) {
           console.error(`[Supervisor] Product config not found for ${task.product}`);
           continue;
         }
@@ -654,18 +679,22 @@ export class Conductor extends Container<Bindings> {
 
         await this.taskManager.spawnAgent(task.task_uuid, {
           product: task.product,
-          repos: productConfig.repos,
-          slackChannel: task.slack_channel || productConfig.slack_channel,
+          repos: scheduledProductConfig.repos,
+          slackChannel: task.slack_channel || scheduledProductConfig.slack_channel,
           slackThreadTs: task.slack_thread_ts || undefined,
-          secrets: productConfig.secrets || {},
+          secrets: scheduledProductConfig.secrets || {},
           gatewayConfig,
-          mode: productConfig.mode || "coding",
-          slackPersona: productConfig.slack_persona,
+          mode: scheduledProductConfig.mode || "coding",
+          slackPersona: scheduledProductConfig.slack_persona,
         });
 
         console.log(`[Supervisor] Spawned scheduled task ${task.task_uuid}`);
+        await this.notifyInfra(scheduledProductConfig, `🤖 *Scheduled task spawned* \`${task.task_uuid}\` (scheduled for ${task.scheduled_for})`);
       } catch (err) {
         console.error(`[Supervisor] Failed to spawn scheduled task ${task.task_uuid}:`, err);
+        if (scheduledProductConfig) {
+          await this.notifyInfra(scheduledProductConfig, `❌ *Failed to spawn scheduled task* \`${task.task_uuid}\`: ${err}`);
+        }
       }
     }
 
@@ -754,8 +783,13 @@ export class Conductor extends Container<Bindings> {
         );
 
         console.log(`[Supervisor] Spawned recurring task ${taskUUID} from schedule ${schedule.id}. Next: ${nextScheduledFor}`);
+        await this.notifyInfra(productConfig, `🔄 *Recurring task spawned* \`${taskUUID}\` — ${schedule.title}. Next run: ${nextScheduledFor}`);
       } catch (err) {
         console.error(`[Supervisor] Failed to spawn recurring schedule ${schedule.id}:`, err);
+        const scheduleProductConfig = getProductConfig(this.sqlExec, schedule.product);
+        if (scheduleProductConfig) {
+          await this.notifyInfra(scheduleProductConfig, `❌ *Failed to spawn recurring schedule* \`${schedule.id}\` (${schedule.title}): ${err}`);
+        }
       }
     }
   }

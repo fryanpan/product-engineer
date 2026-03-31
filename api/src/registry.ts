@@ -15,6 +15,8 @@ export interface ProductConfig {
   repos: string[];
   slack_channel: string;
   slack_channel_id?: string;
+  /** Optional channel for infra/lifecycle events (container start/stop, agent spawn/kill, supervisor alerts). Falls back to slack_channel_id / slack_channel if not set. */
+  infra_channel_id?: string;
   triggers: {
     feedback?: { enabled: boolean; callback_url?: string };
     linear?: { enabled: boolean; project_name: string };
