@@ -19,7 +19,7 @@ export async function resolveTranscriptKey(
   workerUrl: string,
   taskUUID: string,
   apiKey: string,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: (url: string, init?: RequestInit) => Promise<Response> = fetch,
 ): Promise<string | undefined> {
   if (event.resumeTranscriptR2Key) {
     return event.resumeTranscriptR2Key;
