@@ -5,8 +5,8 @@
  * Buffers tool uses and assistant text, then summarizes via Claude Haiku
  * before posting. Posts immediately when ask_question is flushed.
  *
- * Important user-facing messages (questions, completion messages, detailed
- * status with URLs or paragraph breaks) bypass the buffer and post directly.
+ * Important user-facing messages (questions, detailed status with URLs or
+ * paragraph breaks) bypass the buffer and post directly.
  *
  * Fire-and-forget: all Slack posts silently catch errors.
  */
@@ -33,6 +33,8 @@ export interface SlackEchoConfig {
 const RATE_LIMIT_MS = 30_000;
 const MAX_BUFFER_ENTRY_LENGTH = 200;
 const MAX_SUMMARY_LENGTH = 500;
+/** Maximum length for passthrough (immediate) Slack posts before truncation. */
+const MAX_PASSTHROUGH_LENGTH = 3_000;
 
 /** Tools that should NOT be echoed (they already post to Slack). */
 const SKIP_TOOLS = new Set(["notify_slack", "ask_question", "update_task_status"]);
@@ -78,7 +80,11 @@ export class SlackEcho {
     if (!trimmed) return;
 
     if (isPassthroughMessage(trimmed)) {
-      this.postImmediate(`\u{1F4AC} ${trimmed}`).catch(() => {});
+      const capped =
+        trimmed.length > MAX_PASSTHROUGH_LENGTH
+          ? trimmed.slice(0, MAX_PASSTHROUGH_LENGTH) + "... [truncated]"
+          : trimmed;
+      this.postImmediate(`\u{1F4AC} ${capped}`).catch(() => {});
       return;
     }
 

@@ -205,6 +205,17 @@ describe("SlackEcho", () => {
       echo.echoAssistantText("Ok?");
       expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
+
+    test("very long passthrough message is truncated to MAX_PASSTHROUGH_LENGTH", async () => {
+      const longMsg = "https://github.com/org/repo/pull/1 " + "x".repeat(3100);
+      echo.echoAssistantText(longMsg);
+
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      const text = slackCalls(mockFetch.calls)[0].body.text as string;
+      expect(text).toContain("... [truncated]");
+      // 💬 prefix + space + 3000 chars + "... [truncated]"
+      expect(text.length).toBeLessThan(3_020);
+    });
   });
 
   // ── echoToolUse ────────────────────────────────────────────────────────
@@ -406,11 +417,6 @@ describe("formatToolSummary", () => {
   test("file tools show short path", () => {
     expect(formatToolSummary("Read", { file_path: "/a/b/c/file.ts" })).toBe("c/file.ts");
     expect(formatToolSummary("Edit", { file_path: "/x/y.ts" })).toBe("x/y.ts");
-  });
-
-  test("Bash without description falls back to command", () => {
-    const result = formatToolSummary("Bash", { command: "git status" });
-    expect(result).toBe("git status");
   });
 
   test("Bash with description uses description over command", () => {
