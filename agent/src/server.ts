@@ -24,6 +24,7 @@ import { SlackEcho } from "./slack-echo";
 import { resolveRoleConfig } from "./role-config";
 import { setupWorkspace, checkAndCheckoutWorkBranch } from "./workspace-setup";
 import { AgentLifecycle } from "./lifecycle";
+import { resolveTranscriptKey, resolveResumeSessionId } from "./resume";
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
@@ -360,34 +361,14 @@ app.post("/event", async (c) => {
     await ensureWorkspace();
 
     if (!lifecycle.state.sessionActive) {
-      // Determine which transcript to resume from.
-      // Prefer event-provided key (explicit suspend/reopen), fall back to conductor DB
-      // (covers deploy restarts where agent_active=1 so no resumeTranscriptR2Key is sent).
       let resumeSessionId: string | undefined;
-      let transcriptKey = event.resumeTranscriptR2Key;
-      if (!transcriptKey) {
-        try {
-          const taskInfoRes = await fetch(
-            `${config.workerUrl}/api/conductor/task-status/${encodeURIComponent(config.taskUUID)}`,
-            { headers: { "X-Internal-Key": config.apiKey } },
-          );
-          if (taskInfoRes.ok) {
-            const taskInfo = await taskInfoRes.json() as { transcript_r2_key?: string };
-            if (taskInfo.transcript_r2_key) {
-              transcriptKey = taskInfo.transcript_r2_key;
-              console.log(`[Agent] Using transcript from conductor DB: ${transcriptKey}`);
-            }
-          }
-        } catch (err) {
-          console.warn("[Agent] Could not fetch transcript key from conductor DB:", err);
-        }
-      }
+      const transcriptKey = await resolveTranscriptKey(
+        event, config.workerUrl, config.taskUUID, config.apiKey,
+      );
       if (transcriptKey) {
         console.log(`[Agent] Resume requested: transcript=${transcriptKey}`);
-        const downloadedSessionId = await transcriptMgr.download(transcriptKey);
-        if (downloadedSessionId) {
-          // Use session ID from transcript file — more reliable than DB session_id (avoids stale value)
-          resumeSessionId = downloadedSessionId;
+        resumeSessionId = await resolveResumeSessionId(transcriptKey, transcriptMgr);
+        if (resumeSessionId) {
           console.log(`[Agent] Will resume session: ${resumeSessionId}`);
         } else {
           console.warn("[Agent] Transcript download failed — starting fresh session");
@@ -546,22 +527,14 @@ setTimeout(async () => {
       // Try transcript-based session resume for full conversation history
       let autoResumeSessionId: string | undefined;
       try {
-        const taskInfoRes = await fetch(
-          `${config.workerUrl}/api/conductor/task-status/${encodeURIComponent(config.taskUUID)}`,
-          { headers: { "X-Internal-Key": config.apiKey } },
+        const autoTranscriptKey = await resolveTranscriptKey(
+          { resumeTranscriptR2Key: undefined } as any,
+          config.workerUrl, config.taskUUID, config.apiKey,
         );
-        if (taskInfoRes.ok) {
-          const taskInfo = await taskInfoRes.json() as {
-            session_id?: string;
-            transcript_r2_key?: string;
-          };
-          if (taskInfo.transcript_r2_key) {
-            const downloadedSessionId = await transcriptMgr.download(taskInfo.transcript_r2_key);
-            if (downloadedSessionId) {
-              // Use session ID from transcript file — more reliable than DB session_id (avoids stale value)
-              autoResumeSessionId = downloadedSessionId;
-              console.log(`[Agent] Auto-resume will use session: ${autoResumeSessionId}`);
-            }
+        if (autoTranscriptKey) {
+          autoResumeSessionId = await resolveResumeSessionId(autoTranscriptKey, transcriptMgr);
+          if (autoResumeSessionId) {
+            console.log(`[Agent] Auto-resume will use session: ${autoResumeSessionId}`);
           }
         }
       } catch (err) {
