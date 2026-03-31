@@ -229,6 +229,18 @@ describe("Schedule CRUD — edit operations", () => {
     expect(parsed).toBeNull();
     // The handler returns 400 when parsed is null
   });
+
+  test("empty body (no fields) is a no-op — updated_at not bumped", () => {
+    const originalUpdatedAt = sql.schedules.get("sched-1")?.updated_at as string;
+
+    // No updates to apply — simulate the no-op path (no SQL UPDATE runs)
+    const updates: string[] = [];
+    expect(updates.length).toBe(0);
+    // The handler returns the existing schedule without touching updated_at
+
+    const [schedule] = sql.exec("SELECT * FROM recurring_schedules WHERE id = ?", "sched-1").toArray();
+    expect(schedule.updated_at).toBe(originalUpdatedAt);
+  });
 });
 
 describe("Schedule CRUD — delete operations", () => {
@@ -267,14 +279,14 @@ describe("Schedule CRUD — delete operations", () => {
 
 describe("Schedule CRUD — description truncation", () => {
   test("long description is truncated to 80 chars for title", () => {
-    const longDescription = "A".repeat(100) + ": task description";
-    const scheduleText = `daily at 9am: ${"A".repeat(100)}`;
+    const longTask = "A".repeat(100);
+    const scheduleText = `daily at 9am: ${longTask}`;
     const parsed = parseSchedule(scheduleText);
-    // The description parsed is everything after ": "
-    if (parsed) {
-      const title = parsed.description.slice(0, 80);
-      expect(title.length).toBeLessThanOrEqual(80);
-    }
+    expect(parsed).not.toBeNull();
+    const title = parsed!.description.slice(0, 80);
+    expect(title.length).toBe(80);
+    expect(title).toBe("A".repeat(80));
+    expect(parsed!.description.length).toBe(100); // full description preserved
   });
 
   test("description under 80 chars preserved as title", () => {

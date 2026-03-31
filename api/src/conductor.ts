@@ -857,7 +857,7 @@ export class Conductor extends Container<Bindings> {
       const scheduleId = pathParts[1];
       const body = await request.json<{ enabled?: boolean; scheduleText?: string; description?: string }>();
 
-      const updates: string[] = ["updated_at = datetime('now')"];
+      const updates: string[] = [];
       const values: (string | number | null)[] = [];
 
       if (body.enabled !== undefined) {
@@ -865,6 +865,7 @@ export class Conductor extends Container<Bindings> {
         values.push(body.enabled ? 1 : 0);
       }
 
+      // scheduleText takes precedence over description — it re-parses timing + extracts description
       if (body.scheduleText !== undefined) {
         const parsed = parseSchedule(body.scheduleText);
         if (!parsed) {
@@ -886,6 +887,19 @@ export class Conductor extends Container<Bindings> {
         values.push(body.description.slice(0, 80), body.description);
       }
 
+      // No-op if nothing to update
+      if (updates.length === 0) {
+        const existing = this.ctx.storage.sql.exec(
+          `SELECT id, product, title, description, recurrence, time, day_of_week, day_of_month, enabled, next_scheduled_for FROM recurring_schedules WHERE id = ?`,
+          scheduleId,
+        ).toArray();
+        if (existing.length === 0) {
+          return Response.json({ error: "schedule not found" }, { status: 404 });
+        }
+        return Response.json({ ok: true, schedule: existing[0] });
+      }
+
+      updates.push("updated_at = datetime('now')");
       values.push(scheduleId);
       this.ctx.storage.sql.exec(
         `UPDATE recurring_schedules SET ${updates.join(", ")} WHERE id = ?`,
