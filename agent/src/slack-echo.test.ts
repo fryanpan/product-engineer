@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { SlackEcho, formatToolSummary } from "./slack-echo";
+import { SlackEcho, formatToolSummary, isPassthroughMessage } from "./slack-echo";
 
 // ── Mock fetch ───────────────────────────────────────────────────────────────
 
@@ -152,6 +152,69 @@ describe("SlackEcho", () => {
     test("no Slack post if buffer is empty on stop", async () => {
       await echo.stop();
       expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("passthrough message posts immediately without buffering", async () => {
+      // URL-containing message should bypass buffer (URL check has no min-length guard)
+      echo.echoAssistantText(
+        "Task complete. PR opened at https://github.com/org/repo/pull/42 — ready for review!",
+      );
+
+      // Should post immediately, not wait for stop()
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      const text = slackCalls(mockFetch.calls)[0].body.text as string;
+      expect(text).toStartWith("\u{1F4AC}");
+      expect(text).toContain("https://github.com");
+    });
+
+    test("passthrough message does NOT call Haiku", async () => {
+      echo.echoAssistantText(
+        "Task complete. PR opened at https://github.com/org/repo/pull/123 — merged!",
+      );
+      await echo.stop();
+
+      // No Haiku summarization for passthrough messages
+      expect(haikusCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("question message posts immediately without buffering", async () => {
+      const question =
+        "I found two possible approaches to fix this bug. Should I use option A (rewrite the function) or option B (add a guard clause)?";
+      echo.echoAssistantText(question);
+
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      expect(slackCalls(mockFetch.calls)[0].body.text).toContain(question);
+    });
+
+    test("multi-paragraph message posts immediately", async () => {
+      const status =
+        "I've analyzed the codebase and found the root cause.\n\nThe issue is in slack-echo.ts where all messages are summarized regardless of importance. I'll fix it by adding detection logic.\n\nNext step is to write tests.";
+      echo.echoAssistantText(status);
+
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+    });
+
+    test("short message is buffered (not passthrough)", async () => {
+      echo.echoAssistantText("Reading files now");
+      // Nothing posted immediately
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("short question is buffered (not passthrough)", async () => {
+      // Under 100 chars — too short to be a real question
+      echo.echoAssistantText("Ok?");
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("very long passthrough message is truncated to MAX_PASSTHROUGH_LENGTH", async () => {
+      const longMsg = "https://github.com/org/repo/pull/1 " + "x".repeat(3100);
+      echo.echoAssistantText(longMsg);
+
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      const text = slackCalls(mockFetch.calls)[0].body.text as string;
+      expect(text).toContain("... [truncated]");
+      // 💬 prefix + space + 3000 chars + "... [truncated]"
+      expect(text.length).toBeLessThan(3_020);
     });
   });
 
@@ -327,9 +390,9 @@ describe("formatToolSummary", () => {
     expect(result).toBe("Run tests");
   });
 
-  test("Bash without description returns empty", () => {
+  test("Bash without description falls back to command", () => {
     const result = formatToolSummary("Bash", { command: "npm test" });
-    expect(result).toBe("");
+    expect(result).toBe("npm test");
   });
 
   test("unknown tool returns empty", () => {
@@ -354,5 +417,75 @@ describe("formatToolSummary", () => {
   test("file tools show short path", () => {
     expect(formatToolSummary("Read", { file_path: "/a/b/c/file.ts" })).toBe("c/file.ts");
     expect(formatToolSummary("Edit", { file_path: "/x/y.ts" })).toBe("x/y.ts");
+  });
+
+  test("Bash with description uses description over command", () => {
+    const result = formatToolSummary("Bash", { command: "bun test --coverage", description: "Run tests" });
+    expect(result).toBe("Run tests");
+  });
+
+  test("Grep with pattern and path returns both", () => {
+    const result = formatToolSummary("Grep", { pattern: "isPassthrough", path: "/workspace/agent/src" });
+    expect(result).toContain("isPassthrough");
+    expect(result).toContain("agent/src");
+  });
+
+  test("Grep with pattern only returns pattern", () => {
+    const result = formatToolSummary("Grep", { pattern: "SlackEcho" });
+    expect(result).toContain("SlackEcho");
+  });
+
+  test("Grep with no args returns empty", () => {
+    expect(formatToolSummary("Grep", {})).toBe("");
+  });
+
+  test("Glob with pattern returns pattern", () => {
+    const result = formatToolSummary("Glob", { pattern: "**/*.test.ts" });
+    expect(result).toBe("**/*.test.ts");
+  });
+
+  test("Glob with no pattern returns empty", () => {
+    expect(formatToolSummary("Glob", {})).toBe("");
+  });
+});
+
+// ── isPassthroughMessage unit tests ──────────────────────────────────────────
+
+describe("isPassthroughMessage", () => {
+  test("short message is not passthrough", () => {
+    expect(isPassthroughMessage("Reading files")).toBe(false);
+    expect(isPassthroughMessage("Ok?")).toBe(false);
+  });
+
+  test("URL-containing message is passthrough", () => {
+    expect(isPassthroughMessage("PR is open at https://github.com/org/repo/pull/42 — ready for review.")).toBe(true);
+  });
+
+  test("long question is passthrough", () => {
+    const q = "I found two approaches. Should I use option A (rewrite the function to be async) or option B (add a synchronous guard clause to the existing code)?";
+    expect(isPassthroughMessage(q)).toBe(true);
+  });
+
+  test("short question is not passthrough (under 100 chars)", () => {
+    expect(isPassthroughMessage("Which file should I edit?")).toBe(false);
+  });
+
+  test("multi-paragraph message is passthrough", () => {
+    const msg = "I've analyzed the codebase and found the root cause.\n\nThe issue is in slack-echo.ts. I'll fix it by adding detection logic.";
+    expect(isPassthroughMessage(msg)).toBe(true);
+  });
+
+  test("single paragraph > 200 chars without question is not passthrough", () => {
+    const msg = "a".repeat(201);
+    expect(isPassthroughMessage(msg)).toBe(false);
+  });
+
+  test("URL check has no minimum length guard", () => {
+    // URLs are always important (PR links, completions) regardless of surrounding text length
+    expect(isPassthroughMessage("https://short.url")).toBe(true);
+  });
+
+  test("non-URL message under 80 chars is not passthrough", () => {
+    expect(isPassthroughMessage("a".repeat(79))).toBe(false);
   });
 });

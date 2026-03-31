@@ -5,6 +5,9 @@
  * Buffers tool uses and assistant text, then summarizes via Claude Haiku
  * before posting. Posts immediately when ask_question is flushed.
  *
+ * Important user-facing messages (questions, detailed status with URLs or
+ * paragraph breaks) bypass the buffer and post directly.
+ *
  * Fire-and-forget: all Slack posts silently catch errors.
  */
 
@@ -30,6 +33,8 @@ export interface SlackEchoConfig {
 const RATE_LIMIT_MS = 30_000;
 const MAX_BUFFER_ENTRY_LENGTH = 200;
 const MAX_SUMMARY_LENGTH = 500;
+/** Maximum length for passthrough (immediate) Slack posts before truncation. */
+const MAX_PASSTHROUGH_LENGTH = 3_000;
 
 /** Tools that should NOT be echoed (they already post to Slack). */
 const SKIP_TOOLS = new Set(["notify_slack", "ask_question", "update_task_status"]);
@@ -65,11 +70,24 @@ export class SlackEcho {
     this.threadTs = ts;
   }
 
-  /** Buffer assistant text for the next rate-limited flush. */
+  /** Buffer assistant text for the next rate-limited flush.
+   * Important messages (questions, completions, detailed status) bypass the
+   * buffer and post immediately so they are never summarized away.
+   */
   echoAssistantText(text: string): void {
     if (!this.threadTs) return;
     const trimmed = text.trim();
     if (!trimmed) return;
+
+    if (isPassthroughMessage(trimmed)) {
+      const capped =
+        trimmed.length > MAX_PASSTHROUGH_LENGTH
+          ? trimmed.slice(0, MAX_PASSTHROUGH_LENGTH) + "... [truncated]"
+          : trimmed;
+      this.postImmediate(`\u{1F4AC} ${capped}`).catch(() => {});
+      return;
+    }
+
     const truncated =
       trimmed.length > MAX_BUFFER_ENTRY_LENGTH
         ? trimmed.slice(0, MAX_BUFFER_ENTRY_LENGTH) + "..."
@@ -114,6 +132,11 @@ export class SlackEcho {
 
   // ── Private ──────────────────────────────────────────────────────────────
 
+  /** Post text immediately without buffering or summarization. */
+  private async postImmediate(text: string): Promise<void> {
+    await this.postToSlack(text);
+  }
+
   private async flushBuffer(): Promise<void> {
     if (this.buffer.length === 0) return;
     if (!this.threadTs) {
@@ -146,13 +169,14 @@ export class SlackEcho {
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 100,
+          max_tokens: 120,
           messages: [
             {
               role: "user",
               content:
-                "Summarize this AI coding agent activity in 1 concise sentence for a Slack status update. " +
-                "Be specific about what the agent is doing or accomplished. No bullet points, no intro phrase.\n\n" +
+                "Summarize this AI coding agent activity in 1-2 concise sentences for a Slack status update. " +
+                "Be specific: name which tools were used (e.g. 'read 3 files', 'ran tests', 'edited slack-echo.ts'), " +
+                "and what was found or accomplished. No bullet points, no intro phrase.\n\n" +
                 `Activity:\n${activity}`,
             },
           ],
@@ -219,11 +243,14 @@ export function formatToolSummary(
   toolName: string,
   input: Record<string, unknown>,
 ): string {
-  // Compact summaries — just enough to know what happened, not the full input.
+  // Compact summaries — enough context to know what happened.
   switch (toolName) {
     case "Bash": {
       const desc = typeof input.description === "string" ? input.description : "";
-      return desc ? truncate(desc, 150) : "";
+      if (desc) return truncate(desc, 150);
+      // Fall back to the command itself when no description is provided
+      const cmd = typeof input.command === "string" ? input.command : "";
+      return cmd ? truncate(cmd, 100) : "";
     }
     case "Read":
     case "Edit":
@@ -231,9 +258,17 @@ export function formatToolSummary(
       const fp = typeof input.file_path === "string" ? input.file_path : "";
       return fp ? shortPath(fp) : "";
     }
-    case "Glob":
-    case "Grep":
+    case "Grep": {
+      const pattern = typeof input.pattern === "string" ? input.pattern : "";
+      const path = typeof input.path === "string" ? shortPath(input.path) : "";
+      if (pattern && path) return `"${truncate(pattern, 50)}" in ${path}`;
+      if (pattern) return `"${truncate(pattern, 50)}"`;
       return "";
+    }
+    case "Glob": {
+      const pattern = typeof input.pattern === "string" ? input.pattern : "";
+      return pattern ? truncate(pattern, 100) : "";
+    }
     case "Agent": {
       const desc = typeof input.description === "string" ? input.description : "";
       return desc ? truncate(desc, 150) : "";
@@ -241,4 +276,32 @@ export function formatToolSummary(
     default:
       return "";
   }
+}
+
+/**
+ * Returns true for assistant messages that should bypass the rate-limited
+ * buffer and post to Slack immediately without summarization.
+ *
+ * Important signals:
+ * - Contains a URL (PR links, completion confirmations, external references)
+ * - Contains a question mark with substantial content (seeking input)
+ * - Multi-paragraph message (detailed status update)
+ */
+export function isPassthroughMessage(text: string): boolean {
+  const trimmed = text.trim();
+
+  // Contains a URL — PR links, task completion, external references.
+  // These are almost always important (e.g. "PR opened at https://...").
+  if (/https?:\/\//.test(trimmed)) return true;
+
+  // Very short messages are always intermediate thoughts
+  if (trimmed.length < 80) return false;
+
+  // Question with substantial content — seeking input or clarification
+  if (trimmed.includes("?") && trimmed.length > 100) return true;
+
+  // Multi-paragraph message — detailed status update or explanation
+  if (trimmed.includes("\n\n") && trimmed.length > 100) return true;
+
+  return false;
 }
