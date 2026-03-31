@@ -156,6 +156,26 @@ export function initSchema(sql: SqlExec): void {
     )
   `);
 
+  // Recurring schedules
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS recurring_schedules (
+      id TEXT PRIMARY KEY,
+      product TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      recurrence TEXT NOT NULL,
+      time TEXT NOT NULL,
+      day_of_week INTEGER,
+      day_of_month INTEGER,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_spawned_at TEXT,
+      next_scheduled_for TEXT NOT NULL,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
   // Migration: add phase column if missing
   try {
     sql.exec(`ALTER TABLE merge_gate_retries ADD COLUMN phase TEXT NOT NULL DEFAULT 'copilot'`);

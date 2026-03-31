@@ -5,6 +5,7 @@ import { TaskManager, type SpawnConfig } from "./task-manager";
 import { configure as configureInjectionDetector } from "./security/injection-detector";
 import type { ProjectLeadConfig } from "./project-lead";
 import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTaskMetrics } from "./db";
+import { parseSchedule, calculateNextScheduledTime } from "./parse-schedule";
 import {
   ensureProjectLead as ensureProjectLeadImpl,
   ensureConductor as ensureConductorImpl,
@@ -287,6 +288,9 @@ export class Conductor extends Container<Bindings> {
     if (url.pathname.startsWith("/project-lead/")) {
       const subpath = url.pathname.replace("/project-lead/", "");
       return handleProjectLeadRouteImpl(subpath, request, this.env, this.sqlExec, this.taskManager);
+    }
+    if (url.pathname === "/schedules" || url.pathname.startsWith("/schedules/")) {
+      return this.handleScheduleRoute(url, request);
     }
     return Response.json({ error: "not found" }, { status: 404 });
   }
@@ -655,7 +659,6 @@ export class Conductor extends Container<Bindings> {
           slackThreadTs: task.slack_thread_ts || undefined,
           secrets: productConfig.secrets || {},
           gatewayConfig,
-          model: undefined, // TODO: Add model field to ProductConfig if needed
           mode: productConfig.mode || "coding",
           slackPersona: productConfig.slack_persona,
         });
@@ -665,6 +668,178 @@ export class Conductor extends Container<Bindings> {
         console.error(`[Supervisor] Failed to spawn scheduled task ${task.task_uuid}:`, err);
       }
     }
+
+    // Check for recurring schedules ready to spawn
+    const readySchedules = this.ctx.storage.sql.exec(`
+      SELECT * FROM recurring_schedules
+      WHERE enabled = 1
+        AND next_scheduled_for IS NOT NULL
+        AND next_scheduled_for <= datetime('now')
+    `).toArray() as Array<{
+      id: string;
+      product: string;
+      title: string;
+      description: string;
+      recurrence: string;
+      time: string;
+      day_of_week: number | null;
+      day_of_month: number | null;
+      next_scheduled_for: string;
+    }>;
+
+    for (const schedule of readySchedules) {
+      console.log(`[Supervisor] Recurring schedule ready: ${schedule.id} (${schedule.title})`);
+      try {
+        // Create a new task instance for this schedule
+        const taskUUID = `schedule-${schedule.id}-${Date.now()}`;
+        this.taskManager.createTask({
+          taskUUID,
+          product: schedule.product,
+          title: schedule.title,
+        });
+
+        // Transition to reviewing so it can be spawned
+        this.taskManager.updateStatus(taskUUID, { status: "reviewing" });
+
+        // Get product config
+        const productConfig = getProductConfig(this.sqlExec, schedule.product);
+        if (!productConfig) {
+          console.error(`[Supervisor] Product config not found for ${schedule.product}`);
+          continue;
+        }
+
+        const gatewayConfig = getGatewayConfig(this.sqlExec);
+
+        // Spawn the task agent
+        await this.taskManager.spawnAgent(taskUUID, {
+          product: schedule.product,
+          repos: productConfig.repos,
+          slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+          secrets: productConfig.secrets || {},
+          gatewayConfig,
+          mode: productConfig.mode || "coding",
+          slackPersona: productConfig.slack_persona,
+        });
+
+        // Send the task description to the agent
+        const taskEvent: TaskEvent = {
+          type: "slack_mention",
+          source: "internal",
+          taskUUID,
+          product: schedule.product,
+          payload: {
+            text: schedule.description,
+            title: schedule.title,
+          },
+        };
+        await this.taskManager.sendEvent(taskUUID, taskEvent);
+
+        // Calculate next scheduled time
+        const parsedSchedule = {
+          recurrence: schedule.recurrence as "daily" | "weekly" | "monthly",
+          time: schedule.time,
+          dayOfWeek: schedule.day_of_week ?? undefined,
+          dayOfMonth: schedule.day_of_month ?? undefined,
+          description: schedule.description,
+        };
+        const nextScheduledFor = calculateNextScheduledTime(parsedSchedule);
+
+        // Update the schedule with new next_scheduled_for and last_spawned_at
+        this.ctx.storage.sql.exec(
+          `UPDATE recurring_schedules
+           SET next_scheduled_for = ?, last_spawned_at = datetime('now'), updated_at = datetime('now')
+           WHERE id = ?`,
+          nextScheduledFor,
+          schedule.id,
+        );
+
+        console.log(`[Supervisor] Spawned recurring task ${taskUUID} from schedule ${schedule.id}. Next: ${nextScheduledFor}`);
+      } catch (err) {
+        console.error(`[Supervisor] Failed to spawn recurring schedule ${schedule.id}:`, err);
+      }
+    }
+  }
+
+  private async handleScheduleRoute(url: URL, request: Request): Promise<Response> {
+    const pathParts = url.pathname.split("/").filter(Boolean);
+
+    // POST /schedules — create schedule
+    if (request.method === "POST" && pathParts.length === 1) {
+      const body = await request.json<{
+        product: string;
+        scheduleText: string;
+        createdBy?: string;
+      }>();
+
+      const parsed = parseSchedule(body.scheduleText);
+      if (!parsed) {
+        return Response.json({ error: "Invalid schedule format" }, { status: 400 });
+      }
+
+      const id = `sched-${crypto.randomUUID()}`;
+      const nextScheduledFor = calculateNextScheduledTime(parsed);
+
+      this.ctx.storage.sql.exec(
+        `INSERT INTO recurring_schedules
+         (id, product, title, description, recurrence, time, day_of_week, day_of_month, next_scheduled_for, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        body.product,
+        parsed.description.slice(0, 80), // Use first 80 chars as title
+        parsed.description,
+        parsed.recurrence,
+        parsed.time,
+        parsed.dayOfWeek ?? null,
+        parsed.dayOfMonth ?? null,
+        nextScheduledFor,
+        body.createdBy || null,
+      );
+
+      return Response.json({ id, next_scheduled_for: nextScheduledFor });
+    }
+
+    // GET /schedules?product=X — list schedules for a product
+    if (request.method === "GET" && pathParts.length === 1) {
+      const product = url.searchParams.get("product");
+      if (!product) {
+        return Response.json({ error: "product param required" }, { status: 400 });
+      }
+
+      const schedules = this.ctx.storage.sql.exec(
+        `SELECT id, product, title, description, recurrence, time, day_of_week, day_of_month, enabled, next_scheduled_for, last_spawned_at, created_at
+         FROM recurring_schedules
+         WHERE product = ?
+         ORDER BY created_at DESC`,
+        product,
+      ).toArray();
+
+      return Response.json({ schedules });
+    }
+
+    // PUT /schedules/:id — update schedule (enable/disable)
+    if (request.method === "PUT" && pathParts.length === 2) {
+      const scheduleId = pathParts[1];
+      const body = await request.json<{ enabled?: boolean }>();
+
+      if (body.enabled !== undefined) {
+        this.ctx.storage.sql.exec(
+          `UPDATE recurring_schedules SET enabled = ?, updated_at = datetime('now') WHERE id = ?`,
+          body.enabled ? 1 : 0,
+          scheduleId,
+        );
+      }
+
+      return Response.json({ ok: true });
+    }
+
+    // DELETE /schedules/:id — delete schedule
+    if (request.method === "DELETE" && pathParts.length === 2) {
+      const scheduleId = pathParts[1];
+      this.ctx.storage.sql.exec(`DELETE FROM recurring_schedules WHERE id = ?`, scheduleId);
+      return Response.json({ ok: true });
+    }
+
+    return Response.json({ error: "not found" }, { status: 404 });
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {

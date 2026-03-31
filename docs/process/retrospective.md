@@ -900,3 +900,59 @@ When gathering context for LLM decisions, failing with clear error is better tha
 - Small clarification changes (just adding labels) are low-risk and don't need extensive CI waiting
 - The real issue wasn't a bug but unclear presentation: users thought there was a calculation error when both values were correct for their different purposes
 
+## 2026-03-28 - BC-205: Recurring Scheduled Tasks
+
+**What worked:**
+- Natural language parsing approach was intuitive and user-friendly - project leads can just say "daily at 9am: task" without learning syntax
+- Comprehensive testing (28 tests) caught regex issues early during development
+- Building on existing scheduled task infrastructure (supervisor tick, TaskManager) meant minimal changes to core system
+- Separating parsing logic into parse-schedule.ts made it easy to test independently
+- Using `: ` (colon-space) as separator avoided conflicts with time separators like "14:30"
+
+**What didn't:**
+- Initial regex patterns for time extraction were too complex - took 3 iterations to get right
+- The colon separator issue wasn't obvious until tests failed - should have considered this upfront
+- Forgot to handle pm/am properly in first attempt - whitespace normalization broke the parsing
+
+**Learnings:**
+- When parsing user input with multiple delimiters (`:` for time vs `:` for description), always use the most specific pattern (`: ` vs `:`)
+- Regex debugging is faster with standalone test scripts rather than running full test suite
+- Natural language parsing for schedules should support both 12-hour and 24-hour formats - users expect flexibility
+- The supervisor tick pattern (check every 5min, spawn due tasks, update next run time) works well for recurring schedules
+- Project lead tools are the right abstraction for schedule management - keeps implementation logic in conductor, exposes simple interface to agents
+
+**Action items:**
+- None - feature complete and well-tested
+
+**Outcome:**
+✅ PR #129 created with full implementation
+✅ 28 new tests, all passing
+✅ Natural language scheduling working for daily/weekly/monthly patterns
+✅ Full CRUD via Slack commands
+✅ Supervisor automatically spawns tasks at scheduled times
+
+## 2026-03-30 - Copilot Feedback and CI Issues (PR #129, #124)
+
+**Context:** Addressed CI failures and Copilot feedback on two open PRs.
+
+**What worked:**
+- Quick diagnosis from CI logs identifying exact TypeScript errors
+- Systematic approach: fix typecheck errors first, then run tests
+- Both PRs had clear, actionable issues (not vague failures)
+
+**What didn't:**
+- GitHub Actions didn't auto-trigger CI on the fix push - webhook delay or issue with the push event
+- Had to rely on manual verification via local test runs
+- Copilot "feedback" was just review summaries, not inline comments to address
+
+**Learnings:**
+- PR #129: ProductConfig interface uses snake_case (`slack_channel`, `slack_persona`), not camelCase
+- PR #129: ProductConfig doesn't have a `model` field - it was incorrectly referenced in conductor.ts
+- PR #124: Tests were already passing - the original CI failure may have been transient
+- `ALLOWED_EMAILS` is a required field in Bindings but was missing from mock-env.ts
+- GitHub Actions `pull_request` trigger should fire on push, but delays can occur
+
+**Action:**
+- Monitor PR #129 for CI to complete automatically
+- Consider adding a manual workflow_dispatch trigger to ci.yml for debugging scenarios
+- Document ProductConfig schema changes when adding new fields
