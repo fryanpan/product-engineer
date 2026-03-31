@@ -137,6 +137,14 @@ Technical discoveries that should persist across sessions.
 - The `vard` injection detector in `strict()` mode flags "AI" (severity 0.65) as `delimiterInjection`. Adding `.threshold(0.8)` filters false positives while real injections score 0.9+. When adding common words to ticket descriptions, check if the injection scanner rejects them.
 - `LINEAR_WEBHOOK_SECRET` must be synced between the Linear webhook config (`secret` field) and the Cloudflare Worker secret. Use `wrangler secret put LINEAR_WEBHOOK_SECRET` and verify the values match.
 
+## Dispatch API
+- The dispatch endpoint (`POST /api/dispatch`) requires `type: "task_created"` for new tasks. Using `type: "task"` or any other value silently skips `handleTaskReview` — the event is accepted (200 OK) but no agent is spawned. The event falls through to the "route to TaskAgent" catch-all, which fails silently when no agent exists yet.
+- Always use `task_created` as the event type when dispatching new work via the API.
+
+## CI Workflow & Multi-PR Coordination
+- CI (`ci.yml`) triggers on `pull_request` events only (not `push`). Pushes to feature branches (e.g., from subagents via SSH) do not trigger CI — only opening or synchronizing a PR against `main` does. Use an empty commit to force a `synchronize` event if a push doesn't trigger CI.
+- When merging multiple PRs that touch the same repo, they must be rebased sequentially — merging one PR changes the base and creates conflicts in the others. Merge one at a time, rebasing the next PR onto updated `main` before merging.
+
 ## Supervisor Health Detection
 - The supervisor uses the `last_heartbeat` column (set by agent phone-home via `/heartbeat`) to detect stale agents. Don't confuse this with `updated_at`, which changes on any task field update (status, PR URL, metadata).
 - Always include `last_heartbeat` in SQL queries for supervisor context. Using `updated_at` for staleness detection gives false positives because status updates (which aren't real heartbeats) reset the timer. (Fixed in BC-162)

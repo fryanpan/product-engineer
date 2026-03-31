@@ -1,3 +1,43 @@
+## 2026-03-31 - Easter week planning, project setup, PR cleanup, CI fixes
+
+### Time Breakdown
+| Started | Phase | 👤 Hands-On | 🤖 Agent Time | Problems |
+|---------|-------|-------------|---------------|----------|
+| 8:34am | Planning (weekly schedule, bucketing, priorities) | ██████ 27m | ██ 6m | ⚠ 3 correction cycles (day of week, travel day, launch timing) |
+| 8:43am | Project setup (bike-route-finder repo, dispatch tasks, Notion) | ██ 7m | █████████████ 23m | ⚠ Dispatch API wrong event type |
+| 9:08am | PR review & CI fixes (3 PRs in parallel) | ██ 7m | ████████████████████ 40m | ⚠ CI didn't retrigger; merge conflicts |
+| 9:26am | Merge & test isolation fix | ██ 5m | ██████████ 20m | |
+| 12:07pm | Status check, Notion update, retro | ██ 5m | ██ 5m | |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~4.5 hours |
+| Hands-on | ~51 min (19%) |
+| Automated agent time | ~94 min (35%) |
+| Idle/away | ~125 min (46%) |
+| Retro analysis time | ~10 min |
+
+### Key Observations
+- Parallel subagent pattern for PR fixes was highly effective: 3 agents fixing CI/Copilot issues simultaneously, ~40min agent time in ~15min wall clock
+- Dispatch API requires `type: "task_created"` — using `type: "task"` silently fails (blog-assistant and research-notes tasks didn't spawn)
+- CI triggers on `pull_request` events only, not `push` — SSH pushes from subagents don't generate synchronize events
+- Planning phase had 3 avoidable correction cycles — should confirm date/constraints upfront
+- Coordinator pattern (main session orchestrates, agents do work) kept user involvement to high-level decisions
+
+### Feedback
+**What worked:** Parallel agent dispatch for PR fixes, coordinator pattern, rapid project scaffolding (bike-route-finder from zero to registered+agent-running in ~20min)
+**What didn't:** Wrong dispatch event type wasted time; CI retriggering was manual and painful; planning corrections
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Dispatch API wrong event type | Learnings | Added "Dispatch API" section to learnings.md |
+| CI doesn't trigger on SSH push | Learnings | Added "CI Workflow & Multi-PR Coordination" section to learnings.md |
+| Planning day-of-week error | No action | One-off, not systemic |
+
+---
+
 ## 2026-03-28 - Debug Linear webhook failure (BC-203/BC-205, PRs #126 #127)
 
 ### Time Breakdown
