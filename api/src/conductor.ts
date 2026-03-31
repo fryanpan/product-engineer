@@ -665,13 +665,12 @@ export class Conductor extends Container<Bindings> {
     const readyScheduledTasks = this.taskManager.getScheduledTasksReadyToSpawn();
     for (const task of readyScheduledTasks) {
       console.log(`[Supervisor] Scheduled task ready: ${task.task_uuid} (scheduled for ${task.scheduled_for})`);
+      const scheduledProductConfig = getProductConfig(this.sqlExec, task.product);
       try {
         // Transition from queued → reviewing so the task can be spawned
         this.taskManager.updateStatus(task.task_uuid, { status: "reviewing" });
 
-        // Get product config to spawn the agent
-        const productConfig = getProductConfig(this.sqlExec, task.product);
-        if (!productConfig) {
+        if (!scheduledProductConfig) {
           console.error(`[Supervisor] Product config not found for ${task.product}`);
           continue;
         }
@@ -680,21 +679,21 @@ export class Conductor extends Container<Bindings> {
 
         await this.taskManager.spawnAgent(task.task_uuid, {
           product: task.product,
-          repos: productConfig.repos,
-          slackChannel: task.slack_channel || productConfig.slack_channel,
+          repos: scheduledProductConfig.repos,
+          slackChannel: task.slack_channel || scheduledProductConfig.slack_channel,
           slackThreadTs: task.slack_thread_ts || undefined,
-          secrets: productConfig.secrets || {},
+          secrets: scheduledProductConfig.secrets || {},
           gatewayConfig,
-          mode: productConfig.mode || "coding",
-          slackPersona: productConfig.slack_persona,
+          mode: scheduledProductConfig.mode || "coding",
+          slackPersona: scheduledProductConfig.slack_persona,
         });
 
         console.log(`[Supervisor] Spawned scheduled task ${task.task_uuid}`);
-        await this.notifyInfra(productConfig, `🤖 *Scheduled task spawned* \`${task.task_uuid}\` (scheduled for ${task.scheduled_for})`);
+        await this.notifyInfra(scheduledProductConfig, `🤖 *Scheduled task spawned* \`${task.task_uuid}\` (scheduled for ${task.scheduled_for})`);
       } catch (err) {
         console.error(`[Supervisor] Failed to spawn scheduled task ${task.task_uuid}:`, err);
-        if (productConfig) {
-          await this.notifyInfra(productConfig, `❌ *Failed to spawn scheduled task* \`${task.task_uuid}\`: ${err}`);
+        if (scheduledProductConfig) {
+          await this.notifyInfra(scheduledProductConfig, `❌ *Failed to spawn scheduled task* \`${task.task_uuid}\`: ${err}`);
         }
       }
     }
