@@ -10,7 +10,7 @@ describe("resolveRoleConfig", () => {
       expect(config.isConductor).toBe(false);
       expect(config.maxTurns).toBe(200);
       expect(config.sessionTimeoutMs).toBe(2 * 60 * 60 * 1000);
-      expect(config.idleTimeoutMs).toBe(5 * 60 * 1000);
+      expect(config.idleTimeoutMs).toBe(30 * 60 * 1000);
       expect(config.persistAfterSession).toBe(false);
       expect(config.exitOnError).toBe(true);
       expect(config.peRepoRequired).toBe(false);
