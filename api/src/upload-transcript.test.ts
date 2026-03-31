@@ -225,5 +225,9 @@ describe("upload-transcript endpoint", () => {
 
     expect(r2Puts.length).toBe(1);
     expect(r2Puts[0].key).toBe("my-r2-key");
+    expect(r2Puts[0].metadata).toEqual({
+      httpMetadata: { contentType: "application/x-ndjson" },
+      customMetadata: { taskUUID: "task-123", uploadedAt: expect.any(String) },
+    });
   });
 });

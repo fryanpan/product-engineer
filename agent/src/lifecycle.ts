@@ -189,6 +189,7 @@ export class AgentLifecycle {
     this.state.lastToolCall = "";
     this.state.lastAssistantText = "";
     this.state.lastUserPrompt = "";
+    this.state.currentSessionId = "";
     this.tokenTracker.reset();
   }
 

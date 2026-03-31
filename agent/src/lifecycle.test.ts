@@ -183,12 +183,13 @@ describe("AgentLifecycle", () => {
       expect(tokenTracker.reset).toHaveBeenCalledTimes(1);
     });
 
-    test("does not reset currentSessionId", () => {
+    test("resets currentSessionId to prevent stale ID reuse", () => {
       const { lifecycle } = createLifecycle();
       lifecycle.state.currentSessionId = "session-123";
       lifecycle.resetSession();
-      // currentSessionId is not reset — it's set when a new session starts
-      expect(lifecycle.state.currentSessionId).toBe("session-123");
+      // currentSessionId must be cleared so a stale ID isn't reused
+      // if the next session fails to emit a session_id
+      expect(lifecycle.state.currentSessionId).toBe("");
     });
   });
 
