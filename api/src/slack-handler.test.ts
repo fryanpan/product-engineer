@@ -124,7 +124,6 @@ function createMockDeps(sqlOverride?: ReturnType<typeof createMockSql>): SlackHa
       fetch: mock(() => Promise.resolve(new Response("ok"))),
     })) as unknown as SlackHandlerDeps["ensureConductor"],
     handleTaskReview: mock(() => Promise.resolve()),
-    respawnSuspendedTask: mock(() => Promise.resolve()),
   };
 }
 
@@ -189,15 +188,15 @@ describe("handleSlackEvent — thread reply routing", () => {
     expect(body.ok).toBe(true);
     expect(body.taskUUID).toBe("task-1");
 
-    // Should have called sendEvent (not respawn) since task is active with agent_active=1
+    // Should have called sendEvent (not ProjectLead routing) since task is active with agent_active=1
     expect(deps.taskManager.sendEvent).toHaveBeenCalledTimes(1);
-    expect(deps.respawnSuspendedTask).not.toHaveBeenCalled();
+    expect(deps.routeToProjectLead).not.toHaveBeenCalled();
 
     // Should have called reactivate (non-terminal path)
     expect(deps.taskManager.reactivate).toHaveBeenCalledTimes(1);
   });
 
-  it("reopens terminal task and respawns on thread reply", async () => {
+  it("reopens terminal task and routes to ProjectLead on thread reply", async () => {
     const sql = createMockSql([{
       task_uuid: "task-2",
       product: "myapp",
@@ -223,23 +222,24 @@ describe("handleSlackEvent — thread reply routing", () => {
     expect(body.ok).toBe(true);
     expect(body.taskUUID).toBe("task-2");
 
-    // Terminal task should be reopened
+    // Terminal task should be reopened first
     expect(deps.taskManager.reopenTask).toHaveBeenCalledTimes(1);
     const reopenCall = (deps.taskManager.reopenTask as ReturnType<typeof mock>).mock.calls[0];
     expect(reopenCall[0]).toBe("task-2");
 
-    // Should respawn (not sendEvent) since terminal → needs new container
-    expect(deps.respawnSuspendedTask).toHaveBeenCalledTimes(1);
+    // Should route to ProjectLead (not spawn TaskAgent) — ProjectLead is the persistent coordinator
+    expect(deps.routeToProjectLead).toHaveBeenCalledTimes(1);
     expect(deps.taskManager.sendEvent).not.toHaveBeenCalled();
 
-    // The event should include resume context
-    const respawnCall = (deps.respawnSuspendedTask as ReturnType<typeof mock>).mock.calls[0];
-    const event = respawnCall[2];
+    // The event should include resume context for the ProjectLead
+    const routeCall = (deps.routeToProjectLead as ReturnType<typeof mock>).mock.calls[0];
+    expect(routeCall[0]).toBe("myapp"); // product
+    const event = routeCall[1];
     expect(event.resumeSessionId).toBe("sess-abc");
     expect(event.resumeTranscriptR2Key).toBe("transcripts/task-2.json");
   });
 
-  it("reactivates and respawns inactive task (agent_active=0, non-terminal)", async () => {
+  it("reactivates and routes to ProjectLead for inactive task (agent_active=0, non-terminal)", async () => {
     const sql = createMockSql([{
       task_uuid: "task-3",
       product: "myapp",
@@ -271,8 +271,8 @@ describe("handleSlackEvent — thread reply routing", () => {
     // Should call reactivate (non-terminal path)
     expect(deps.taskManager.reactivate).toHaveBeenCalledTimes(1);
 
-    // agent_active=0 means needsRespawn, so respawnSuspendedTask should be called
-    expect(deps.respawnSuspendedTask).toHaveBeenCalledTimes(1);
+    // agent_active=0 means needsRespawn → route to ProjectLead (not spawn TaskAgent)
+    expect(deps.routeToProjectLead).toHaveBeenCalledTimes(1);
     expect(deps.taskManager.sendEvent).not.toHaveBeenCalled();
   });
 
@@ -307,9 +307,9 @@ describe("handleSlackEvent — thread reply routing", () => {
     expect(updateCall[0]).toBe("task-susp");
     expect(updateCall[1]).toEqual({ status: "active" });
 
-    // Should reactivate and respawn
+    // Should reactivate and route to ProjectLead
     expect(deps.taskManager.reactivate).toHaveBeenCalledTimes(1);
-    expect(deps.respawnSuspendedTask).toHaveBeenCalledTimes(1);
+    expect(deps.routeToProjectLead).toHaveBeenCalledTimes(1);
   });
 
   it("ignores thread reply with no matching task (plain message)", async () => {
@@ -583,7 +583,7 @@ describe("handleSlackEvent — terminal states enumeration", () => {
       expect(body.ok).toBe(true);
 
       expect(deps.taskManager.reopenTask).toHaveBeenCalledTimes(1);
-      expect(deps.respawnSuspendedTask).toHaveBeenCalledTimes(1);
+      expect(deps.routeToProjectLead).toHaveBeenCalledTimes(1);
       // Should NOT call reactivate (terminal path uses reopenTask instead)
       expect(deps.taskManager.reactivate).not.toHaveBeenCalled();
     });
