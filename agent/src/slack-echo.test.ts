@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { SlackEcho, formatToolSummary, isPassthroughMessage } from "./slack-echo";
+import { SlackEcho, formatToolSummary } from "./slack-echo";
 
 // ── Mock fetch ───────────────────────────────────────────────────────────────
 
@@ -97,28 +97,25 @@ describe("SlackEcho", () => {
       noThread.echoAssistantText("posted");
       await noThread.stop();
 
-      // "ignored" was buffered without threadTs so it's dropped.
-      // "posted" is sent after threadTs is set.
+      // "ignored" is dropped — no threadTs at call time.
+      // "posted" posts immediately after threadTs is set.
       expect(slackCalls(mockFetch.calls)).toHaveLength(1);
       expect(slackCalls(mockFetch.calls)[0].body.thread_ts).toBe("111.222");
     });
 
-    test("batches multiple texts into one summarized post on stop", async () => {
+    test("posts each assistant text immediately without buffering", async () => {
       echo.echoAssistantText("first");
       echo.echoAssistantText("second");
       echo.echoAssistantText("third");
 
-      // Nothing posted yet (waiting for rate-limit window)
-      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+      // All three posted immediately — no buffering
+      expect(slackCalls(mockFetch.calls)).toHaveLength(3);
 
-      await echo.stop();
-
-      // One Slack post (summarized via Haiku)
-      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
-      const text = slackCalls(mockFetch.calls)[0].body.text as string;
-      expect(text).toStartWith("\u{1F527}");
-      // Haiku summary returned "Reading config and running tests."
-      expect(text).toContain("Reading config and running tests.");
+      const texts = slackCalls(mockFetch.calls).map((c) => c.body.text as string);
+      expect(texts[0]).toStartWith("\u{1F4AC}");
+      expect(texts[0]).toContain("first");
+      expect(texts[1]).toContain("second");
+      expect(texts[2]).toContain("third");
     });
 
     test("sends correct Slack API payload", async () => {
@@ -154,56 +151,35 @@ describe("SlackEcho", () => {
       expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
-    test("passthrough message posts immediately without buffering", async () => {
-      // URL-containing message should bypass buffer (URL check has no min-length guard)
+    test("posts URL-containing message immediately", async () => {
       echo.echoAssistantText(
         "Task complete. PR opened at https://github.com/org/repo/pull/42 — ready for review!",
       );
 
-      // Should post immediately, not wait for stop()
       expect(slackCalls(mockFetch.calls)).toHaveLength(1);
       const text = slackCalls(mockFetch.calls)[0].body.text as string;
       expect(text).toStartWith("\u{1F4AC}");
       expect(text).toContain("https://github.com");
     });
 
-    test("passthrough message does NOT call Haiku", async () => {
+    test("assistant text does NOT call Haiku", async () => {
       echo.echoAssistantText(
         "Task complete. PR opened at https://github.com/org/repo/pull/123 — merged!",
       );
       await echo.stop();
 
-      // No Haiku summarization for passthrough messages
+      // No Haiku summarization for assistant text
       expect(haikusCalls(mockFetch.calls)).toHaveLength(0);
     });
 
-    test("question message posts immediately without buffering", async () => {
-      const question =
-        "I found two possible approaches to fix this bug. Should I use option A (rewrite the function) or option B (add a guard clause)?";
-      echo.echoAssistantText(question);
-
-      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
-      expect(slackCalls(mockFetch.calls)[0].body.text).toContain(question);
-    });
-
-    test("multi-paragraph message posts immediately", async () => {
-      const status =
-        "I've analyzed the codebase and found the root cause.\n\nThe issue is in slack-echo.ts where all messages are summarized regardless of importance. I'll fix it by adding detection logic.\n\nNext step is to write tests.";
-      echo.echoAssistantText(status);
-
-      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
-    });
-
-    test("short message is buffered (not passthrough)", async () => {
+    test("short message posts immediately", async () => {
       echo.echoAssistantText("Reading files now");
-      // Nothing posted immediately
-      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
     });
 
-    test("short question is buffered (not passthrough)", async () => {
-      // Under 100 chars — too short to be a real question
+    test("short question posts immediately", async () => {
       echo.echoAssistantText("Ok?");
-      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
     });
 
     test("very long passthrough message is truncated to MAX_PASSTHROUGH_LENGTH", async () => {
@@ -300,9 +276,13 @@ describe("SlackEcho", () => {
       echo.echoAssistantText("reading files");
       echo.echoToolUse("Read", { file_path: "/src/config.ts" });
 
+      // echoAssistantText already posted once immediately
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+
       await echo.flush();
 
-      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      // flush() posts the buffered tool use — total 2 posts
+      expect(slackCalls(mockFetch.calls)).toHaveLength(2);
     });
 
     test("is a no-op when nothing pending", async () => {
@@ -322,7 +302,7 @@ describe("SlackEcho", () => {
   // ── Haiku fallback ─────────────────────────────────────────────────────
 
   describe("Haiku fallback", () => {
-    test("falls back to truncated raw text when no API key", async () => {
+    test("falls back to truncated raw text when no API key (tool use)", async () => {
       const noKey = new SlackEcho({
         slackBotToken: "xoxb-test",
         slackChannel: "C123",
@@ -331,17 +311,17 @@ describe("SlackEcho", () => {
         fetchFn: mockFetch.fn,
       });
 
-      noKey.echoAssistantText("doing work");
+      noKey.echoToolUse("Bash", { command: "ls", description: "List files" });
       await noKey.stop();
 
       // No Haiku call
       expect(haikusCalls(mockFetch.calls)).toHaveLength(0);
       // Still posts to Slack with raw text
       expect(slackCalls(mockFetch.calls)).toHaveLength(1);
-      expect(slackCalls(mockFetch.calls)[0].body.text).toContain("doing work");
+      expect(slackCalls(mockFetch.calls)[0].body.text).toContain("List files");
     });
 
-    test("falls back to raw text when Haiku API fails", async () => {
+    test("falls back to raw text when Haiku API fails (tool use)", async () => {
       const failFetch = createMockFetch(false);
       const failEcho = new SlackEcho({
         slackBotToken: "xoxb-test",
@@ -351,12 +331,12 @@ describe("SlackEcho", () => {
         fetchFn: failFetch.fn,
       });
 
-      failEcho.echoAssistantText("doing work");
+      failEcho.echoToolUse("Bash", { command: "ls", description: "List files" });
       await failEcho.stop();
 
       // Still posts to Slack (with fallback text)
       expect(slackCalls(failFetch.calls)).toHaveLength(1);
-      expect(slackCalls(failFetch.calls)[0].body.text).toContain("doing work");
+      expect(slackCalls(failFetch.calls)[0].body.text).toContain("List files");
     });
   });
 
@@ -449,43 +429,3 @@ describe("formatToolSummary", () => {
   });
 });
 
-// ── isPassthroughMessage unit tests ──────────────────────────────────────────
-
-describe("isPassthroughMessage", () => {
-  test("short message is not passthrough", () => {
-    expect(isPassthroughMessage("Reading files")).toBe(false);
-    expect(isPassthroughMessage("Ok?")).toBe(false);
-  });
-
-  test("URL-containing message is passthrough", () => {
-    expect(isPassthroughMessage("PR is open at https://github.com/org/repo/pull/42 — ready for review.")).toBe(true);
-  });
-
-  test("long question is passthrough", () => {
-    const q = "I found two approaches. Should I use option A (rewrite the function to be async) or option B (add a synchronous guard clause to the existing code)?";
-    expect(isPassthroughMessage(q)).toBe(true);
-  });
-
-  test("short question is not passthrough (under 100 chars)", () => {
-    expect(isPassthroughMessage("Which file should I edit?")).toBe(false);
-  });
-
-  test("multi-paragraph message is passthrough", () => {
-    const msg = "I've analyzed the codebase and found the root cause.\n\nThe issue is in slack-echo.ts. I'll fix it by adding detection logic.";
-    expect(isPassthroughMessage(msg)).toBe(true);
-  });
-
-  test("single paragraph > 200 chars without question is not passthrough", () => {
-    const msg = "a".repeat(201);
-    expect(isPassthroughMessage(msg)).toBe(false);
-  });
-
-  test("URL check has no minimum length guard", () => {
-    // URLs are always important (PR links, completions) regardless of surrounding text length
-    expect(isPassthroughMessage("https://short.url")).toBe(true);
-  });
-
-  test("non-URL message under 80 chars is not passthrough", () => {
-    expect(isPassthroughMessage("a".repeat(79))).toBe(false);
-  });
-});

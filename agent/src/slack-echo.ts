@@ -1,12 +1,9 @@
 /**
  * SlackEcho — echoes Agent SDK messages and tool uses to a Slack thread.
  *
- * Rate-limited to at most once every 30 seconds for intermediate messages.
- * Buffers tool uses and assistant text, then summarizes via Claude Haiku
+ * Non-tool assistant text posts immediately to Slack (no summarization).
+ * Tool uses are buffered for up to 1 minute, then summarized via Claude Haiku
  * before posting. Posts immediately when ask_question is flushed.
- *
- * Important user-facing messages (questions, detailed status with URLs or
- * paragraph breaks) bypass the buffer and post directly.
  *
  * Fire-and-forget: all Slack posts silently catch errors.
  */
@@ -30,10 +27,10 @@ export interface SlackEchoConfig {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const RATE_LIMIT_MS = 30_000;
-const MAX_BUFFER_ENTRY_LENGTH = 200;
+/** Aggregation window for tool use summaries. */
+const RATE_LIMIT_MS = 60_000;
 const MAX_SUMMARY_LENGTH = 500;
-/** Maximum length for passthrough (immediate) Slack posts before truncation. */
+/** Maximum length for assistant text posts before truncation. */
 const MAX_PASSTHROUGH_LENGTH = 3_000;
 
 /** Tools that should NOT be echoed (they already post to Slack). */
@@ -70,29 +67,17 @@ export class SlackEcho {
     this.threadTs = ts;
   }
 
-  /** Buffer assistant text for the next rate-limited flush.
-   * Important messages (questions, completions, detailed status) bypass the
-   * buffer and post immediately so they are never summarized away.
-   */
+  /** Post assistant text immediately without buffering or summarization. */
   echoAssistantText(text: string): void {
     if (!this.threadTs) return;
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    if (isPassthroughMessage(trimmed)) {
-      const capped =
-        trimmed.length > MAX_PASSTHROUGH_LENGTH
-          ? trimmed.slice(0, MAX_PASSTHROUGH_LENGTH) + "... [truncated]"
-          : trimmed;
-      this.postImmediate(`\u{1F4AC} ${capped}`).catch(() => {});
-      return;
-    }
-
-    const truncated =
-      trimmed.length > MAX_BUFFER_ENTRY_LENGTH
-        ? trimmed.slice(0, MAX_BUFFER_ENTRY_LENGTH) + "..."
+    const capped =
+      trimmed.length > MAX_PASSTHROUGH_LENGTH
+        ? trimmed.slice(0, MAX_PASSTHROUGH_LENGTH) + "... [truncated]"
         : trimmed;
-    this.buffer.push(`[thinking] ${truncated}`);
+    this.postImmediate(`\u{1F4AC} ${capped}`).catch(() => {});
   }
 
   /** Buffer a tool use for the next rate-limited flush. */
@@ -278,30 +263,3 @@ export function formatToolSummary(
   }
 }
 
-/**
- * Returns true for assistant messages that should bypass the rate-limited
- * buffer and post to Slack immediately without summarization.
- *
- * Important signals:
- * - Contains a URL (PR links, completion confirmations, external references)
- * - Contains a question mark with substantial content (seeking input)
- * - Multi-paragraph message (detailed status update)
- */
-export function isPassthroughMessage(text: string): boolean {
-  const trimmed = text.trim();
-
-  // Contains a URL — PR links, task completion, external references.
-  // These are almost always important (e.g. "PR opened at https://...").
-  if (/https?:\/\//.test(trimmed)) return true;
-
-  // Very short messages are always intermediate thoughts
-  if (trimmed.length < 80) return false;
-
-  // Question with substantial content — seeking input or clarification
-  if (trimmed.includes("?") && trimmed.length > 100) return true;
-
-  // Multi-paragraph message — detailed status update or explanation
-  if (trimmed.includes("\n\n") && trimmed.length > 100) return true;
-
-  return false;
-}
