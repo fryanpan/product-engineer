@@ -1228,7 +1228,6 @@ export class Conductor extends Container<Bindings> {
       routeToProjectLead: (product, event) => this.routeToProjectLead(product, event),
       ensureConductor: () => this.ensureConductor(),
       handleTaskReview: (event) => this.handleTaskReview(event),
-      respawnSuspendedTask: (taskUUID, product, event) => this.respawnSuspendedTask(taskUUID, product, event),
     });
   }
 

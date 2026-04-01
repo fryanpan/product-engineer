@@ -25,7 +25,6 @@ export interface SlackHandlerDeps {
   routeToProjectLead: (product: string, event: TaskEvent) => Promise<void>;
   ensureConductor: () => Promise<DurableObjectStub>;
   handleTaskReview: (event: TaskEvent) => Promise<void>;
-  respawnSuspendedTask: (taskUUID: string, product: string, event: TaskEvent) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +83,21 @@ export async function postSlackMessage(
     console.error("[slack-handler] Failed to post Slack message:", err);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Infra channel helper
+// ---------------------------------------------------------------------------
+
+/** Post a lifecycle/diagnostic message to the global infra channel (if configured). Non-fatal. */
+async function notifyInfraChannel(env: Record<string, unknown>, sql: SqlExec, message: string): Promise<void> {
+  const token = (env.SLACK_BOT_TOKEN as string) || "";
+  if (!token) return;
+  const channel = getSetting(sql, "infra_channel_id");
+  if (!channel) return;
+  await postSlackMessage(token, channel, message).catch(err =>
+    console.error("[slack-handler] Failed to post to infra channel:", err),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -567,15 +581,19 @@ export async function handleSlackEvent(
         resumeTranscriptR2Key,
       };
 
-      // Respawn if container is likely dead (terminal, suspended, or was inactive).
-      // For active tasks with a running container, sendEvent routes directly.
+      // Route to ProjectLead if agent is inactive (was never spawned or already exited).
+      // The ProjectLead is the persistent coordinator — it has conversation history and
+      // decides how to respond (answer directly, spawn a task agent, etc.).
+      // For active tasks with a running TaskAgent, sendEvent routes directly.
       if (needsRespawn) {
-        console.log(`[slack-handler] Re-spawning container for task=${task.task_uuid} (was ${task.status}, agent_active=${task.agent_active})`);
+        console.log(`[slack-handler] Routing thread reply to ProjectLead for task=${task.task_uuid} (status=${task.status}, agent_active=${task.agent_active})`);
         try {
-          await deps.respawnSuspendedTask(task.task_uuid, task.product, event);
+          await deps.routeToProjectLead(task.product, event);
+          await notifyInfraChannel(env, sql, `📬 Thread reply → ProjectLead: product=${task.product} task=\`${task.task_uuid}\` (was: ${task.status})`);
         } catch (err) {
-          console.error(`[slack-handler] Failed to re-spawn agent for ${task.task_uuid}:`, err);
-          return Response.json({ error: "Failed to re-spawn agent" }, { status: 500 });
+          console.error(`[slack-handler] Failed to route thread reply to ProjectLead for ${task.task_uuid}:`, err);
+          await notifyInfraChannel(env, sql, `❌ Thread reply routing failed: task=\`${task.task_uuid}\` product=${task.product}: ${err}`);
+          return Response.json({ error: "Failed to route to ProjectLead" }, { status: 500 });
         }
       } else {
         console.log(`[slack-handler] Routing thread reply to active agent for task=${task.task_uuid}`);
@@ -584,6 +602,7 @@ export async function handleSlackEvent(
       return Response.json({ ok: true, taskUUID: task.task_uuid });
     } else {
       console.log(`[slack-handler] No task found for thread_ts=${slackEvent.thread_ts}`);
+      await notifyInfraChannel(env, sql, `⚠️ Thread reply received in channel=${slackEvent.channel} thread_ts=${slackEvent.thread_ts} — no matching task found, message not handled`);
     }
 
     // Thread reply but no task found — silently ignore.
