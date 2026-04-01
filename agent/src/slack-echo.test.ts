@@ -426,5 +426,45 @@ describe("formatToolSummary", () => {
   test("Glob with no pattern returns empty", () => {
     expect(formatToolSummary("Glob", {})).toBe("");
   });
+
+  test("spawn_task with all fields", () => {
+    const result = formatToolSummary("spawn_task", {
+      mode: "coding",
+      product: "my-product",
+      description: "Fix authentication bug",
+    });
+    expect(result).toBe("Spawned coding agent for my-product: Fix authentication bug");
+  });
+
+  test("spawn_task with no product", () => {
+    const result = formatToolSummary("spawn_task", {
+      mode: "research",
+      description: "Research API options",
+    });
+    expect(result).toBe("Spawned research agent: Research API options");
+  });
+
+  test("spawn_task with no description", () => {
+    const result = formatToolSummary("spawn_task", { mode: "coding", product: "x" });
+    expect(result).toBe("Spawned coding agent for x");
+  });
+
+  test("spawn_task with no fields defaults to coding", () => {
+    const result = formatToolSummary("spawn_task", {});
+    expect(result).toBe("Spawned coding agent");
+  });
+
+  test("send_message_to_task with product and message", () => {
+    const result = formatToolSummary("send_message_to_task", {
+      product: "my-product",
+      message: "Please address the review comments",
+    });
+    expect(result).toBe("Sent message to my-product: Please address the review comments");
+  });
+
+  test("send_message_to_task with no fields", () => {
+    const result = formatToolSummary("send_message_to_task", {});
+    expect(result).toBe("Sent message to project");
+  });
 });
 
