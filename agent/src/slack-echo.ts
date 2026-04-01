@@ -251,6 +251,19 @@ export function formatToolSummary(
       const desc = typeof input.description === "string" ? input.description : "";
       return desc ? truncate(desc, 150) : "";
     }
+    case "spawn_task": {
+      const mode = typeof input.mode === "string" ? input.mode : "coding";
+      const product = typeof input.product === "string" ? input.product : "";
+      const desc = typeof input.description === "string" ? input.description : "";
+      const prefix = `Spawned ${mode} agent${product ? ` for ${product}` : ""}`;
+      return desc ? `${prefix}: ${truncate(desc, 100)}` : prefix;
+    }
+    case "send_message_to_task": {
+      const product = typeof input.product === "string" ? input.product : "";
+      const message = typeof input.message === "string" ? input.message : "";
+      const prefix = `Sent message to ${product || "project"}`;
+      return message ? `${prefix}: ${truncate(message, 100)}` : prefix;
+    }
     default:
       return "";
   }
