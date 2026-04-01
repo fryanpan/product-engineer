@@ -182,15 +182,14 @@ describe("SlackEcho", () => {
       expect(slackCalls(mockFetch.calls)).toHaveLength(1);
     });
 
-    test("very long assistant text message is truncated to MAX_ASSISTANT_TEXT_LENGTH", async () => {
-      const longMsg = "https://github.com/org/repo/pull/1 " + "x".repeat(3100);
+    test("very long assistant text posts in full without truncation", async () => {
+      const longMsg = "x".repeat(5000);
       echo.echoAssistantText(longMsg);
 
       expect(slackCalls(mockFetch.calls)).toHaveLength(1);
       const text = slackCalls(mockFetch.calls)[0].body.text as string;
-      expect(text).toContain("... [truncated]");
-      // 💬 prefix + space + 3000 chars + "... [truncated]"
-      expect(text.length).toBeLessThan(3_020);
+      expect(text).not.toContain("[truncated]");
+      expect(text).toContain(longMsg);
     });
   });
 

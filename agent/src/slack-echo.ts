@@ -30,9 +30,6 @@ export interface SlackEchoConfig {
 /** Aggregation window for tool use summaries. */
 const RATE_LIMIT_MS = 60_000;
 const MAX_SUMMARY_LENGTH = 500;
-/** Maximum length for assistant text posts before truncation. */
-const MAX_ASSISTANT_TEXT_LENGTH = 3_000;
-
 /** Tools that should NOT be echoed (they already post to Slack). */
 const SKIP_TOOLS = new Set(["notify_slack", "ask_question", "update_task_status"]);
 
@@ -67,17 +64,13 @@ export class SlackEcho {
     this.threadTs = ts;
   }
 
-  /** Post assistant text immediately without buffering or summarization. */
+  /** Post assistant text immediately without buffering, summarization, or truncation. */
   echoAssistantText(text: string): void {
     if (!this.threadTs) return;
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    const capped =
-      trimmed.length > MAX_ASSISTANT_TEXT_LENGTH
-        ? trimmed.slice(0, MAX_ASSISTANT_TEXT_LENGTH) + "... [truncated]"
-        : trimmed;
-    this.postImmediate(`\u{1F4AC} ${capped}`).catch(() => {});
+    this.postImmediate(`\u{1F4AC} ${trimmed}`).catch(() => {});
   }
 
   /** Buffer a tool use for the next rate-limited flush. */
