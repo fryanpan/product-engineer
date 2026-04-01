@@ -1,0 +1,162 @@
+/**
+ * {{project_name}} - Cloudflare Worker with [assets]
+ *
+ * Handles API routes and falls through to static assets for the SPA.
+ */
+
+interface Env {
+  ASSETS: Fetcher;
+  LINEAR_API_KEY: string;
+  LINEAR_TEAM_ID: string;
+  LINEAR_PROJECT_ID: string;
+}
+
+interface FeedbackBody {
+  title: string;
+  description?: string;
+  page?: string;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // API routes
+    if (url.pathname.startsWith("/api/")) {
+      return handleApiRoute(request, url, env);
+    }
+
+    // Everything else: serve static assets (SPA fallback via wrangler config)
+    return env.ASSETS.fetch(request);
+  },
+} satisfies ExportedHandler<Env>;
+
+async function handleApiRoute(
+  request: Request,
+  url: URL,
+  env: Env,
+): Promise<Response> {
+  // CORS headers for API routes
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+
+  // Health check
+  if (url.pathname === "/api/health") {
+    return Response.json({ ok: true }, { headers: corsHeaders });
+  }
+
+  // Feedback -> Linear issue
+  if (url.pathname === "/api/feedback" && request.method === "POST") {
+    return handleFeedback(request, env, jsonHeaders);
+  }
+
+  // TODO: Add project-specific API routes here
+
+  return Response.json(
+    { error: "Not found" },
+    { status: 404, headers: jsonHeaders },
+  );
+}
+
+async function handleFeedback(
+  request: Request,
+  env: Env,
+  headers: Record<string, string>,
+): Promise<Response> {
+  let body: FeedbackBody;
+  try {
+    body = (await request.json()) as FeedbackBody;
+  } catch {
+    return Response.json(
+      { error: "Invalid JSON body" },
+      { status: 400, headers },
+    );
+  }
+
+  if (!body.title || typeof body.title !== "string") {
+    return Response.json(
+      { error: "title is required" },
+      { status: 400, headers },
+    );
+  }
+
+  const description = [
+    body.description ?? "",
+    body.page ? `\n\n---\nSubmitted from: ${body.page}` : "",
+  ]
+    .join("")
+    .trim();
+
+  const mutation = `
+    mutation CreateIssue($input: IssueCreateInput!) {
+      issueCreate(input: $input) {
+        success
+        issue { id identifier url }
+      }
+    }
+  `;
+
+  const variables = {
+    input: {
+      title: body.title,
+      description,
+      teamId: env.LINEAR_TEAM_ID,
+      projectId: env.LINEAR_PROJECT_ID,
+      labelIds: [], // Optionally add a "feedback" label ID
+    },
+  };
+
+  try {
+    const resp = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: env.LINEAR_API_KEY,
+      },
+      body: JSON.stringify({ query: mutation, variables }),
+    });
+
+    const data = (await resp.json()) as {
+      data?: {
+        issueCreate?: {
+          success: boolean;
+          issue?: { id: string; identifier: string; url: string };
+        };
+      };
+    };
+
+    if (!data.data?.issueCreate?.success) {
+      console.error("Linear API error:", JSON.stringify(data));
+      return Response.json(
+        { error: "Failed to create issue" },
+        { status: 502, headers },
+      );
+    }
+
+    return Response.json(
+      {
+        ok: true,
+        issue: {
+          identifier: data.data.issueCreate.issue?.identifier,
+          url: data.data.issueCreate.issue?.url,
+        },
+      },
+      { status: 201, headers },
+    );
+  } catch (err) {
+    console.error("Linear API request failed:", err);
+    return Response.json(
+      { error: "Failed to reach Linear API" },
+      { status: 502, headers },
+    );
+  }
+}
