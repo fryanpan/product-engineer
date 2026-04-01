@@ -852,20 +852,70 @@ export class Conductor extends Container<Bindings> {
       return Response.json({ schedules });
     }
 
-    // PUT /schedules/:id — update schedule (enable/disable)
+    // PUT /schedules/:id — update schedule (enable/disable, description, timing)
     if (request.method === "PUT" && pathParts.length === 2) {
       const scheduleId = pathParts[1];
-      const body = await request.json<{ enabled?: boolean }>();
+      const body = await request.json<{ enabled?: boolean; scheduleText?: string; description?: string }>();
+
+      const updates: string[] = [];
+      const values: (string | number | null)[] = [];
 
       if (body.enabled !== undefined) {
-        this.ctx.storage.sql.exec(
-          `UPDATE recurring_schedules SET enabled = ?, updated_at = datetime('now') WHERE id = ?`,
-          body.enabled ? 1 : 0,
-          scheduleId,
-        );
+        updates.push("enabled = ?");
+        values.push(body.enabled ? 1 : 0);
       }
 
-      return Response.json({ ok: true });
+      // scheduleText takes precedence over description — it re-parses timing + extracts description
+      if (body.scheduleText !== undefined) {
+        const parsed = parseSchedule(body.scheduleText);
+        if (!parsed) {
+          return Response.json({ error: "Invalid schedule format" }, { status: 400 });
+        }
+        const nextScheduledFor = calculateNextScheduledTime(parsed);
+        updates.push("title = ?", "description = ?", "recurrence = ?", "time = ?", "day_of_week = ?", "day_of_month = ?", "next_scheduled_for = ?");
+        values.push(
+          parsed.description.slice(0, 80),
+          parsed.description,
+          parsed.recurrence,
+          parsed.time,
+          parsed.dayOfWeek ?? null,
+          parsed.dayOfMonth ?? null,
+          nextScheduledFor,
+        );
+      } else if (body.description !== undefined) {
+        updates.push("title = ?", "description = ?");
+        values.push(body.description.slice(0, 80), body.description);
+      }
+
+      // No-op if nothing to update
+      if (updates.length === 0) {
+        const existing = this.ctx.storage.sql.exec(
+          `SELECT id, product, title, description, recurrence, time, day_of_week, day_of_month, enabled, next_scheduled_for FROM recurring_schedules WHERE id = ?`,
+          scheduleId,
+        ).toArray();
+        if (existing.length === 0) {
+          return Response.json({ error: "schedule not found" }, { status: 404 });
+        }
+        return Response.json({ ok: true, schedule: existing[0] });
+      }
+
+      updates.push("updated_at = datetime('now')");
+      values.push(scheduleId);
+      this.ctx.storage.sql.exec(
+        `UPDATE recurring_schedules SET ${updates.join(", ")} WHERE id = ?`,
+        ...values,
+      );
+
+      const updated = this.ctx.storage.sql.exec(
+        `SELECT id, product, title, description, recurrence, time, day_of_week, day_of_month, enabled, next_scheduled_for FROM recurring_schedules WHERE id = ?`,
+        scheduleId,
+      ).toArray();
+
+      if (updated.length === 0) {
+        return Response.json({ error: "schedule not found" }, { status: 404 });
+      }
+
+      return Response.json({ ok: true, schedule: updated[0] });
     }
 
     // DELETE /schedules/:id — delete schedule
