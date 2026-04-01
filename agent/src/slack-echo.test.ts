@@ -182,7 +182,7 @@ describe("SlackEcho", () => {
       expect(slackCalls(mockFetch.calls)).toHaveLength(1);
     });
 
-    test("very long passthrough message is truncated to MAX_PASSTHROUGH_LENGTH", async () => {
+    test("very long assistant text message is truncated to MAX_ASSISTANT_TEXT_LENGTH", async () => {
       const longMsg = "https://github.com/org/repo/pull/1 " + "x".repeat(3100);
       echo.echoAssistantText(longMsg);
 

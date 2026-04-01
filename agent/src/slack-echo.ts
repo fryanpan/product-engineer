@@ -31,7 +31,7 @@ export interface SlackEchoConfig {
 const RATE_LIMIT_MS = 60_000;
 const MAX_SUMMARY_LENGTH = 500;
 /** Maximum length for assistant text posts before truncation. */
-const MAX_PASSTHROUGH_LENGTH = 3_000;
+const MAX_ASSISTANT_TEXT_LENGTH = 3_000;
 
 /** Tools that should NOT be echoed (they already post to Slack). */
 const SKIP_TOOLS = new Set(["notify_slack", "ask_question", "update_task_status"]);
@@ -74,8 +74,8 @@ export class SlackEcho {
     if (!trimmed) return;
 
     const capped =
-      trimmed.length > MAX_PASSTHROUGH_LENGTH
-        ? trimmed.slice(0, MAX_PASSTHROUGH_LENGTH) + "... [truncated]"
+      trimmed.length > MAX_ASSISTANT_TEXT_LENGTH
+        ? trimmed.slice(0, MAX_ASSISTANT_TEXT_LENGTH) + "... [truncated]"
         : trimmed;
     this.postImmediate(`\u{1F4AC} ${capped}`).catch(() => {});
   }
