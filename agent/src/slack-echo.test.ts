@@ -227,6 +227,37 @@ describe("SlackEcho", () => {
       expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
+    test("skips spawn_task tool", async () => {
+      echo.echoToolUse("spawn_task", { product: "my-product", description: "Fix bug" });
+      await echo.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("skips send_message_to_task tool", async () => {
+      echo.echoToolUse("send_message_to_task", { product: "my-product", message: "Review comments" });
+      await echo.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("skips mcp__pe-tools__ prefixed notify_slack", async () => {
+      echo.echoToolUse("mcp__pe-tools__notify_slack", { message: "hi" });
+      await echo.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("skips mcp__pe-tools__ prefixed spawn_task", async () => {
+      echo.echoToolUse("mcp__pe-tools__spawn_task", { product: "my-product", description: "Fix bug" });
+      await echo.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("normalizes mcp__pe-tools__ prefixed Bash tool", async () => {
+      echo.echoToolUse("mcp__pe-tools__Bash", { command: "ls", description: "List files" });
+      await echo.stop();
+      // Normalized to "Bash" — should be buffered and posted
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+    });
+
     test("buffers tool use and posts on stop", async () => {
       echo.echoToolUse("Bash", { command: "ls -la", description: "List files" });
 

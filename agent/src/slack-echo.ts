@@ -30,8 +30,24 @@ export interface SlackEchoConfig {
 /** Aggregation window for tool use summaries. */
 const RATE_LIMIT_MS = 60_000;
 const MAX_SUMMARY_LENGTH = 500;
-/** Tools that should NOT be echoed (they already post to Slack). */
-const SKIP_TOOLS = new Set(["notify_slack", "ask_question", "update_task_status"]);
+/** Tools that should NOT be echoed (they already post to Slack, or the agent posts explicit text). */
+const SKIP_TOOLS = new Set([
+  "notify_slack",
+  "ask_question",
+  "update_task_status",
+  // Project-lead tools: agent always posts explicit assistant text for these
+  "spawn_task",
+  "send_message_to_task",
+]);
+
+/**
+ * Strip the MCP server prefix from tool names so SKIP_TOOLS and formatToolSummary
+ * match regardless of whether the SDK uses the short name or prefixed form.
+ * e.g. "mcp__pe-tools__notify_slack" → "notify_slack"
+ */
+function normalizeTool(toolName: string): string {
+  return toolName.replace(/^mcp__[\w-]+__/, "");
+}
 
 // ── Implementation ───────────────────────────────────────────────────────────
 
@@ -76,10 +92,11 @@ export class SlackEcho {
   /** Buffer a tool use for the next rate-limited flush. */
   echoToolUse(toolName: string, input: Record<string, unknown>): void {
     if (!this.threadTs) return;
-    if (SKIP_TOOLS.has(toolName)) return;
+    const name = normalizeTool(toolName);
+    if (SKIP_TOOLS.has(name)) return;
 
-    const summary = formatToolSummary(toolName, input);
-    const entry = summary ? `[tool:${toolName}] ${summary}` : `[tool:${toolName}]`;
+    const summary = formatToolSummary(name, input);
+    const entry = summary ? `[tool:${name}] ${summary}` : `[tool:${name}]`;
     this.buffer.push(entry);
   }
 
