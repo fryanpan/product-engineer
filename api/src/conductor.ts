@@ -5,6 +5,7 @@ import { TaskManager, type SpawnConfig } from "./task-manager";
 import { configure as configureInjectionDetector } from "./security/injection-detector";
 import type { ProjectLeadConfig } from "./project-lead";
 import { initSchema, getSetting, setSetting, getGatewayConfig, getProductConfig, getAllProductConfigs, ensureTaskMetrics } from "./db";
+import { parseSchedule, calculateNextScheduledTime } from "./parse-schedule";
 import {
   ensureProjectLead as ensureProjectLeadImpl,
   ensureConductor as ensureConductorImpl,
@@ -30,7 +31,7 @@ import {
   updateSetting as updateSettingHandler,
   seedProducts as seedProductsHandler,
 } from "./product-crud";
-import { handleSlackEvent as handleSlackEventImpl, refreshLinearToken } from "./slack-handler";
+import { handleSlackEvent as handleSlackEventImpl, refreshLinearToken, postSlackMessage } from "./slack-handler";
 
 function sanitizeTaskUUID(id: string): string {
   return String(id).slice(0, 128).replace(/[^a-zA-Z0-9_\-\.]/g, "_") || `unknown-${Date.now()}`;
@@ -288,6 +289,9 @@ export class Conductor extends Container<Bindings> {
       const subpath = url.pathname.replace("/project-lead/", "");
       return handleProjectLeadRouteImpl(subpath, request, this.env, this.sqlExec, this.taskManager);
     }
+    if (url.pathname === "/schedules" || url.pathname.startsWith("/schedules/")) {
+      return this.handleScheduleRoute(url, request);
+    }
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
@@ -459,6 +463,23 @@ export class Conductor extends Container<Bindings> {
   }
 
   /**
+   * Post a message to the global infra channel.
+   * Used for lifecycle/infrastructure events: agent spawn, kill, ghost detection, etc.
+   * Channel is a global setting (`infra_channel_id`) — not per-product.
+   * If the setting is not configured, the message is silently dropped (no fallback to project channels).
+   * Non-fatal — silently swallows errors.
+   */
+  private async notifyInfra(_productConfig: ProductConfig, message: string): Promise<void> {
+    const token = (this.env as any).SLACK_BOT_TOKEN as string | undefined;
+    if (!token) return;
+    const channel = getSetting(this.sqlExec, "infra_channel_id");
+    if (!channel) return;
+    await postSlackMessage(token, channel, message).catch((err) =>
+      console.error("[Conductor] Failed to post to infra channel:", err)
+    );
+  }
+
+  /**
    * Review a new task and decide how to handle it.
    *
    * v3 flow: Routes the event to the persistent ProjectLead for the product.
@@ -545,8 +566,10 @@ export class Conductor extends Container<Bindings> {
     try {
       await this.taskManager.spawnAgent(event.taskUUID, spawnConfig);
       await this.taskManager.sendEvent(event.taskUUID, event);
+      await this.notifyInfra(productConfig, `🤖 *Agent spawned* (fallback) \`${event.taskUUID}\` — product: ${event.product}, model: ${model}`);
     } catch (err) {
       console.error(`[Conductor] Failed to spawn agent for ${event.taskUUID}:`, err);
+      await this.notifyInfra(productConfig, `❌ *Agent spawn failed* \`${event.taskUUID}\`: ${err}`);
     }
   }
 
@@ -577,6 +600,7 @@ export class Conductor extends Container<Bindings> {
     // spawnAgent accepts active status as a re-spawn
     await this.taskManager.spawnAgent(taskUUID, spawnConfig);
     await this.taskManager.sendEvent(taskUUID, event);
+    await this.notifyInfra(productConfig, `♻️ *Agent respawned* \`${taskUUID}\` — product: ${product} (thread reply triggered resume)`);
   }
 
   /**
@@ -605,6 +629,10 @@ export class Conductor extends Container<Bindings> {
         "UPDATE tasks SET agent_message = 'heartbeat timeout — agent may be stuck', updated_at = datetime('now') WHERE task_uuid = ?",
         agent.task_uuid,
       );
+      const staleProductConfig = getProductConfig(this.sqlExec, agent.product);
+      if (staleProductConfig) {
+        await this.notifyInfra(staleProductConfig, `⚠️ *Stale agent* \`${agent.task_uuid}\` — no heartbeat since ${agent.last_heartbeat}. Agent may be stuck.`);
+      }
     }
 
     // Detect "ghost" agents — agent_active=1 but never received a heartbeat
@@ -629,19 +657,22 @@ export class Conductor extends Container<Bindings> {
         "UPDATE tasks SET agent_active = 0, agent_message = 'no heartbeat since spawn — event may have been lost', needs_attention = 1, needs_attention_reason = 'ghost agent: started but never received task event', updated_at = datetime('now') WHERE task_uuid = ?",
         agent.task_uuid,
       );
+      const ghostProductConfig = getProductConfig(this.sqlExec, agent.product);
+      if (ghostProductConfig) {
+        await this.notifyInfra(ghostProductConfig, `🚨 *Ghost agent* \`${agent.task_uuid}\` — spawned at ${agent.created_at} but never received task event. Agent marked inactive.`);
+      }
     }
 
     // Check for scheduled tasks ready to spawn
     const readyScheduledTasks = this.taskManager.getScheduledTasksReadyToSpawn();
     for (const task of readyScheduledTasks) {
       console.log(`[Supervisor] Scheduled task ready: ${task.task_uuid} (scheduled for ${task.scheduled_for})`);
+      const scheduledProductConfig = getProductConfig(this.sqlExec, task.product);
       try {
         // Transition from queued → reviewing so the task can be spawned
         this.taskManager.updateStatus(task.task_uuid, { status: "reviewing" });
 
-        // Get product config to spawn the agent
-        const productConfig = getProductConfig(this.sqlExec, task.product);
-        if (!productConfig) {
+        if (!scheduledProductConfig) {
           console.error(`[Supervisor] Product config not found for ${task.product}`);
           continue;
         }
@@ -650,21 +681,251 @@ export class Conductor extends Container<Bindings> {
 
         await this.taskManager.spawnAgent(task.task_uuid, {
           product: task.product,
-          repos: productConfig.repos,
-          slackChannel: task.slack_channel || productConfig.slackChannel,
+          repos: scheduledProductConfig.repos,
+          slackChannel: task.slack_channel || scheduledProductConfig.slack_channel,
           slackThreadTs: task.slack_thread_ts || undefined,
-          secrets: productConfig.secrets || {},
+          secrets: scheduledProductConfig.secrets || {},
           gatewayConfig,
-          model: productConfig.model,
-          mode: productConfig.mode || "coding",
-          slackPersona: productConfig.slackPersona,
+          mode: scheduledProductConfig.mode || "coding",
+          slackPersona: scheduledProductConfig.slack_persona,
         });
 
         console.log(`[Supervisor] Spawned scheduled task ${task.task_uuid}`);
+        await this.notifyInfra(scheduledProductConfig, `🤖 *Scheduled task spawned* \`${task.task_uuid}\` (scheduled for ${task.scheduled_for})`);
       } catch (err) {
         console.error(`[Supervisor] Failed to spawn scheduled task ${task.task_uuid}:`, err);
+        if (scheduledProductConfig) {
+          await this.notifyInfra(scheduledProductConfig, `❌ *Failed to spawn scheduled task* \`${task.task_uuid}\`: ${err}`);
+        }
       }
     }
+
+    // Check for recurring schedules ready to spawn
+    const readySchedules = this.ctx.storage.sql.exec(`
+      SELECT * FROM recurring_schedules
+      WHERE enabled = 1
+        AND next_scheduled_for IS NOT NULL
+        AND next_scheduled_for <= datetime('now')
+    `).toArray() as Array<{
+      id: string;
+      product: string;
+      title: string;
+      description: string;
+      recurrence: string;
+      time: string;
+      day_of_week: number | null;
+      day_of_month: number | null;
+      next_scheduled_for: string;
+    }>;
+
+    for (const schedule of readySchedules) {
+      console.log(`[Supervisor] Recurring schedule ready: ${schedule.id} (${schedule.title})`);
+      try {
+        // Create a new task instance for this schedule
+        const taskUUID = `schedule-${schedule.id}-${Date.now()}`;
+        this.taskManager.createTask({
+          taskUUID,
+          product: schedule.product,
+          title: schedule.title,
+        });
+
+        // Transition to reviewing so it can be spawned
+        this.taskManager.updateStatus(taskUUID, { status: "reviewing" });
+
+        // Get product config
+        const productConfig = getProductConfig(this.sqlExec, schedule.product);
+        if (!productConfig) {
+          console.error(`[Supervisor] Product config not found for ${schedule.product}`);
+          continue;
+        }
+
+        const gatewayConfig = getGatewayConfig(this.sqlExec);
+
+        // Spawn the task agent
+        await this.taskManager.spawnAgent(taskUUID, {
+          product: schedule.product,
+          repos: productConfig.repos,
+          slackChannel: productConfig.slack_channel_id || productConfig.slack_channel,
+          secrets: productConfig.secrets || {},
+          gatewayConfig,
+          mode: productConfig.mode || "coding",
+          slackPersona: productConfig.slack_persona,
+        });
+
+        // Send the task description to the agent
+        const taskEvent: TaskEvent = {
+          type: "slack_mention",
+          source: "internal",
+          taskUUID,
+          product: schedule.product,
+          payload: {
+            text: schedule.description,
+            title: schedule.title,
+          },
+        };
+        await this.taskManager.sendEvent(taskUUID, taskEvent);
+
+        // Calculate next scheduled time
+        const parsedSchedule = {
+          recurrence: schedule.recurrence as "daily" | "weekly" | "monthly",
+          time: schedule.time,
+          dayOfWeek: schedule.day_of_week ?? undefined,
+          dayOfMonth: schedule.day_of_month ?? undefined,
+          description: schedule.description,
+        };
+        const nextScheduledFor = calculateNextScheduledTime(parsedSchedule);
+
+        // Update the schedule with new next_scheduled_for and last_spawned_at
+        this.ctx.storage.sql.exec(
+          `UPDATE recurring_schedules
+           SET next_scheduled_for = ?, last_spawned_at = datetime('now'), updated_at = datetime('now')
+           WHERE id = ?`,
+          nextScheduledFor,
+          schedule.id,
+        );
+
+        console.log(`[Supervisor] Spawned recurring task ${taskUUID} from schedule ${schedule.id}. Next: ${nextScheduledFor}`);
+        await this.notifyInfra(productConfig, `🔄 *Recurring task spawned* \`${taskUUID}\` — ${schedule.title}. Next run: ${nextScheduledFor}`);
+      } catch (err) {
+        console.error(`[Supervisor] Failed to spawn recurring schedule ${schedule.id}:`, err);
+        const scheduleProductConfig = getProductConfig(this.sqlExec, schedule.product);
+        if (scheduleProductConfig) {
+          await this.notifyInfra(scheduleProductConfig, `❌ *Failed to spawn recurring schedule* \`${schedule.id}\` (${schedule.title}): ${err}`);
+        }
+      }
+    }
+  }
+
+  private async handleScheduleRoute(url: URL, request: Request): Promise<Response> {
+    const pathParts = url.pathname.split("/").filter(Boolean);
+
+    // POST /schedules — create schedule
+    if (request.method === "POST" && pathParts.length === 1) {
+      const body = await request.json<{
+        product: string;
+        scheduleText: string;
+        createdBy?: string;
+      }>();
+
+      const parsed = parseSchedule(body.scheduleText);
+      if (!parsed) {
+        return Response.json({ error: "Invalid schedule format" }, { status: 400 });
+      }
+
+      const id = `sched-${crypto.randomUUID()}`;
+      const nextScheduledFor = calculateNextScheduledTime(parsed);
+
+      this.ctx.storage.sql.exec(
+        `INSERT INTO recurring_schedules
+         (id, product, title, description, recurrence, time, day_of_week, day_of_month, next_scheduled_for, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        body.product,
+        parsed.description.slice(0, 80), // Use first 80 chars as title
+        parsed.description,
+        parsed.recurrence,
+        parsed.time,
+        parsed.dayOfWeek ?? null,
+        parsed.dayOfMonth ?? null,
+        nextScheduledFor,
+        body.createdBy || null,
+      );
+
+      return Response.json({ id, next_scheduled_for: nextScheduledFor });
+    }
+
+    // GET /schedules?product=X — list schedules for a product
+    if (request.method === "GET" && pathParts.length === 1) {
+      const product = url.searchParams.get("product");
+      if (!product) {
+        return Response.json({ error: "product param required" }, { status: 400 });
+      }
+
+      const schedules = this.ctx.storage.sql.exec(
+        `SELECT id, product, title, description, recurrence, time, day_of_week, day_of_month, enabled, next_scheduled_for, last_spawned_at, created_at
+         FROM recurring_schedules
+         WHERE product = ?
+         ORDER BY created_at DESC`,
+        product,
+      ).toArray();
+
+      return Response.json({ schedules });
+    }
+
+    // PUT /schedules/:id — update schedule (enable/disable, description, timing)
+    if (request.method === "PUT" && pathParts.length === 2) {
+      const scheduleId = pathParts[1];
+      const body = await request.json<{ enabled?: boolean; scheduleText?: string; description?: string }>();
+
+      const updates: string[] = [];
+      const values: (string | number | null)[] = [];
+
+      if (body.enabled !== undefined) {
+        updates.push("enabled = ?");
+        values.push(body.enabled ? 1 : 0);
+      }
+
+      // scheduleText takes precedence over description — it re-parses timing + extracts description
+      if (body.scheduleText !== undefined) {
+        const parsed = parseSchedule(body.scheduleText);
+        if (!parsed) {
+          return Response.json({ error: "Invalid schedule format" }, { status: 400 });
+        }
+        const nextScheduledFor = calculateNextScheduledTime(parsed);
+        updates.push("title = ?", "description = ?", "recurrence = ?", "time = ?", "day_of_week = ?", "day_of_month = ?", "next_scheduled_for = ?");
+        values.push(
+          parsed.description.slice(0, 80),
+          parsed.description,
+          parsed.recurrence,
+          parsed.time,
+          parsed.dayOfWeek ?? null,
+          parsed.dayOfMonth ?? null,
+          nextScheduledFor,
+        );
+      } else if (body.description !== undefined) {
+        updates.push("title = ?", "description = ?");
+        values.push(body.description.slice(0, 80), body.description);
+      }
+
+      // No-op if nothing to update
+      if (updates.length === 0) {
+        const existing = this.ctx.storage.sql.exec(
+          `SELECT id, product, title, description, recurrence, time, day_of_week, day_of_month, enabled, next_scheduled_for FROM recurring_schedules WHERE id = ?`,
+          scheduleId,
+        ).toArray();
+        if (existing.length === 0) {
+          return Response.json({ error: "schedule not found" }, { status: 404 });
+        }
+        return Response.json({ ok: true, schedule: existing[0] });
+      }
+
+      updates.push("updated_at = datetime('now')");
+      values.push(scheduleId);
+      this.ctx.storage.sql.exec(
+        `UPDATE recurring_schedules SET ${updates.join(", ")} WHERE id = ?`,
+        ...values,
+      );
+
+      const updated = this.ctx.storage.sql.exec(
+        `SELECT id, product, title, description, recurrence, time, day_of_week, day_of_month, enabled, next_scheduled_for FROM recurring_schedules WHERE id = ?`,
+        scheduleId,
+      ).toArray();
+
+      if (updated.length === 0) {
+        return Response.json({ error: "schedule not found" }, { status: 404 });
+      }
+
+      return Response.json({ ok: true, schedule: updated[0] });
+    }
+
+    // DELETE /schedules/:id — delete schedule
+    if (request.method === "DELETE" && pathParts.length === 2) {
+      const scheduleId = pathParts[1];
+      this.ctx.storage.sql.exec(`DELETE FROM recurring_schedules WHERE id = ?`, scheduleId);
+      return Response.json({ ok: true });
+    }
+
+    return Response.json({ error: "not found" }, { status: 404 });
   }
 
   private async handleStatusUpdate(request: Request): Promise<Response> {
@@ -683,8 +944,31 @@ export class Conductor extends Container<Bindings> {
     // Log payloads so they appear in wrangler tail
     console.log(`[Conductor] status update: task=${taskUUID} status=${status || ""} branch=${branch_name || ""} agent_active=${agent_active ?? "unset"}`);
 
+    // Always save session_id and transcript_r2_key — these are needed for session
+    // resume on thread replies, even for tasks in terminal states. They must be
+    // persisted before the terminal guard check to avoid being silently dropped.
+    if (session_id || transcript_r2_key) {
+      const resumeUpdates: string[] = ["updated_at = datetime('now')"];
+      const resumeValues: (string | number | null)[] = [];
+      if (session_id) {
+        resumeUpdates.push("session_id = ?");
+        resumeValues.push(session_id);
+      }
+      if (transcript_r2_key) {
+        resumeUpdates.push("transcript_r2_key = ?");
+        resumeValues.push(transcript_r2_key);
+      }
+      resumeValues.push(taskUUID);
+      this.ctx.storage.sql.exec(
+        `UPDATE tasks SET ${resumeUpdates.join(", ")} WHERE task_uuid = ?`,
+        ...resumeValues,
+      );
+      console.log(`[Conductor] Saved resume context for ${taskUUID}: session_id=${session_id ? "set" : "unchanged"} transcript=${transcript_r2_key ? "set" : "unchanged"}`);
+    }
+
     // Reject heartbeats/status updates for tasks already in a terminal state.
     // This prevents agent containers from overwriting supervisor kill decisions.
+    // Note: session_id and transcript_r2_key are already saved above.
     if (this.taskManager.isTerminal(taskUUID)) {
       // Allow explicit agent_active=0 (dashboard kill) but block heartbeats
       if (agent_active === undefined || agent_active !== 0) {
@@ -779,14 +1063,8 @@ export class Conductor extends Container<Bindings> {
       updates.push("slack_thread_ts = ?");
       values.push(slack_thread_ts);
     }
-    if (transcript_r2_key) {
-      updates.push("transcript_r2_key = ?");
-      values.push(transcript_r2_key);
-    }
-    if (session_id) {
-      updates.push("session_id = ?");
-      values.push(session_id);
-    }
+    // Note: session_id and transcript_r2_key are saved early (before terminal guard)
+    // to ensure they persist even when the status transition is rejected.
 
     values.push(taskUUID);
     this.ctx.storage.sql.exec(
@@ -1000,7 +1278,6 @@ export class Conductor extends Container<Bindings> {
       routeToProjectLead: (product, event) => this.routeToProjectLead(product, event),
       ensureConductor: () => this.ensureConductor(),
       handleTaskReview: (event) => this.handleTaskReview(event),
-      respawnSuspendedTask: (taskUUID, product, event) => this.respawnSuspendedTask(taskUUID, product, event),
     });
   }
 

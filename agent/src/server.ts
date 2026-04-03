@@ -24,6 +24,7 @@ import { SlackEcho } from "./slack-echo";
 import { resolveRoleConfig } from "./role-config";
 import { setupWorkspace, checkAndCheckoutWorkBranch } from "./workspace-setup";
 import { AgentLifecycle } from "./lifecycle";
+import { resolveTranscriptKey, resolveResumeSessionId } from "./resume";
 
 if (process.env.SENTRY_DSN) {
   Sentry.init({ dsn: process.env.SENTRY_DSN });
@@ -72,6 +73,7 @@ const slackEcho = new SlackEcho({
   slackChannel: config.slackChannel,
   slackThreadTs: config.slackThreadTs,
   slackPersona: config.slackPersona,
+  anthropicApiKey: config.anthropicApiKey,
 });
 const lifecycle = new AgentLifecycle({
   config,
@@ -254,6 +256,12 @@ async function startSession(initialPrompt: MessageContent, resumeSessionId?: str
     },
   };
 
+  // Enable agent teams if ENABLE_AGENT_TEAMS env var is set
+  if (process.env.ENABLE_AGENT_TEAMS === "true") {
+    queryOptions.agentTeams = true;
+    console.log("[Agent] Agent teams enabled via ENABLE_AGENT_TEAMS");
+  }
+
   if (config.model) {
     queryOptions.model = config.model;
     console.log(`[Agent] Using model: ${config.model}`);
@@ -308,6 +316,11 @@ async function startSession(initialPrompt: MessageContent, resumeSessionId?: str
               lifecycle.state.lastToolCall = `${block.name}(${JSON.stringify(block.input).slice(0, 100)})`;
               console.log(`[Agent] Tool: ${block.name}`);
               slackEcho.echoToolUse(block.name, block.input as Record<string, unknown>);
+              // Flush buffered activity immediately before ask_question posts to Slack,
+              // so the user sees what the agent was doing when the question arrives.
+              if (block.name === "ask_question") {
+                await slackEcho.flush();
+              }
             }
           }
         } else if (message.type === "user") {
@@ -329,11 +342,13 @@ async function startSession(initialPrompt: MessageContent, resumeSessionId?: str
         }
       }
 
+      await slackEcho.stop();
       await lifecycle.handleSessionEnd();
       if (roleConfig.persistAfterSession) {
         messageYielder = null;
       }
     } catch (err) {
+      await slackEcho.stop();
       await lifecycle.handleSessionError(err as Error);
       if (roleConfig.persistAfterSession) {
         messageYielder = null;
@@ -354,6 +369,12 @@ app.post("/event", async (c) => {
   console.log(`[Agent] Event: ${event.type} from ${event.source}`);
   lifecycle.recordActivity();
 
+  // When a ProjectLead receives an event for a specific child task,
+  // associate transcript uploads with that task's record too
+  if (event.taskUUID && event.taskUUID !== config.taskUUID) {
+    transcriptMgr.setAssociatedTaskUUID(event.taskUUID);
+  }
+
   try {
     if (event.slackThreadTs) {
       config.slackThreadTs = event.slackThreadTs;
@@ -366,13 +387,14 @@ app.post("/event", async (c) => {
     await ensureWorkspace();
 
     if (!lifecycle.state.sessionActive) {
-      // Check if this is a resume from suspended state
       let resumeSessionId: string | undefined;
-      if (event.resumeTranscriptR2Key) {
-        console.log(`[Agent] Resume requested: transcript=${event.resumeTranscriptR2Key}`);
-        const downloadedSessionId = await transcriptMgr.download(event.resumeTranscriptR2Key);
-        if (downloadedSessionId) {
-          resumeSessionId = event.resumeSessionId || downloadedSessionId;
+      const transcriptKey = await resolveTranscriptKey(
+        event, config.workerUrl, config.taskUUID, config.apiKey,
+      );
+      if (transcriptKey) {
+        console.log(`[Agent] Resume requested: transcript=${transcriptKey}`);
+        resumeSessionId = await resolveResumeSessionId(transcriptKey, transcriptMgr);
+        if (resumeSessionId) {
           console.log(`[Agent] Will resume session: ${resumeSessionId}`);
         } else {
           console.warn("[Agent] Transcript download failed — starting fresh session");
@@ -531,21 +553,14 @@ setTimeout(async () => {
       // Try transcript-based session resume for full conversation history
       let autoResumeSessionId: string | undefined;
       try {
-        const taskInfoRes = await fetch(
-          `${config.workerUrl}/api/conductor/task-status/${encodeURIComponent(config.taskUUID)}`,
-          { headers: { "X-Internal-Key": config.apiKey } },
+        const autoTranscriptKey = await resolveTranscriptKey(
+          { resumeTranscriptR2Key: undefined } as any,
+          config.workerUrl, config.taskUUID, config.apiKey,
         );
-        if (taskInfoRes.ok) {
-          const taskInfo = await taskInfoRes.json() as {
-            session_id?: string;
-            transcript_r2_key?: string;
-          };
-          if (taskInfo.transcript_r2_key) {
-            const downloadedSessionId = await transcriptMgr.download(taskInfo.transcript_r2_key);
-            if (downloadedSessionId) {
-              autoResumeSessionId = taskInfo.session_id || downloadedSessionId;
-              console.log(`[Agent] Auto-resume will use session: ${autoResumeSessionId}`);
-            }
+        if (autoTranscriptKey) {
+          autoResumeSessionId = await resolveResumeSessionId(autoTranscriptKey, transcriptMgr);
+          if (autoResumeSessionId) {
+            console.log(`[Agent] Auto-resume will use session: ${autoResumeSessionId}`);
           }
         }
       } catch (err) {

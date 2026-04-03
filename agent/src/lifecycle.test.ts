@@ -54,12 +54,13 @@ function makeProjectLeadRole(): RoleConfig {
   };
 }
 
-function makeTranscriptMgr(): TranscriptManager {
+function makeTranscriptMgr(associatedTaskUUID?: string): TranscriptManager {
   return {
     upload: mock(() => Promise.resolve()),
     getTranscriptDir: () => "/tmp/transcripts",
     findAllTranscripts: mock(() => Promise.resolve([])),
     getUploadedSizes: () => new Map(),
+    getAssociatedTaskUUID: () => associatedTaskUUID,
   } as unknown as TranscriptManager;
 }
 
@@ -182,12 +183,13 @@ describe("AgentLifecycle", () => {
       expect(tokenTracker.reset).toHaveBeenCalledTimes(1);
     });
 
-    test("does not reset currentSessionId", () => {
+    test("resets currentSessionId to prevent stale ID reuse", () => {
       const { lifecycle } = createLifecycle();
       lifecycle.state.currentSessionId = "session-123";
       lifecycle.resetSession();
-      // currentSessionId is not reset — it's set when a new session starts
-      expect(lifecycle.state.currentSessionId).toBe("session-123");
+      // currentSessionId must be cleared so a stale ID isn't reused
+      // if the next session fails to emit a session_id
+      expect(lifecycle.state.currentSessionId).toBe("");
     });
   });
 
@@ -276,9 +278,100 @@ describe("AgentLifecycle", () => {
       expect(callbacks.onExit).toHaveBeenCalledWith(0);
     });
 
+    test("project lead: uploads transcript and reports session_id before resetting", async () => {
+      const transcriptMgr = makeTranscriptMgr();
+      const { lifecycle, tokenTracker, callbacks, config } = createLifecycle({
+        roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
+      });
+
+      lifecycle.state.sessionActive = true;
+      lifecycle.state.sessionStatus = "running";
+      lifecycle.state.sessionMessageCount = 5;
+      lifecycle.state.currentSessionId = "sess-abc-123";
+
+      await lifecycle.handleSessionEnd();
+
+      // Transcript uploaded with force=true
+      expect(transcriptMgr.upload).toHaveBeenCalledWith(true);
+
+      // session_id POSTed to orchestrator
+      const statusCalls = fetchCalls.filter((c) => c.url.includes("/api/internal/status"));
+      expect(statusCalls.length).toBe(1);
+      const statusBody = JSON.parse(statusCalls[0].init.body as string);
+      expect(statusBody.taskUUID).toBe("test-uuid");
+      expect(statusBody.session_id).toBe("sess-abc-123");
+      expect(statusCalls[0].init.method).toBe("POST");
+      const statusHeaders = statusCalls[0].init.headers as Record<string, string>;
+      expect(statusHeaders["X-Internal-Key"]).toBe("test-api-key");
+
+      // Token report still called
+      expect(tokenTracker.report).toHaveBeenCalledTimes(1);
+
+      // Session was reset, onExit NOT called
+      expect(lifecycle.state.sessionStatus as string).toBe("idle");
+      expect(lifecycle.state.sessionActive).toBe(false);
+      expect(callbacks.onExit).not.toHaveBeenCalled();
+    });
+
+    test("project lead: reports session_id to both container and associated task", async () => {
+      const transcriptMgr = makeTranscriptMgr("conductor-task-12345");
+      const { lifecycle, callbacks } = createLifecycle({
+        roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
+      });
+
+      lifecycle.state.sessionActive = true;
+      lifecycle.state.sessionStatus = "running";
+      lifecycle.state.currentSessionId = "sess-xyz-789";
+
+      await lifecycle.handleSessionEnd();
+
+      // session_id POSTed to BOTH container UUID and associated child task UUID
+      const statusCalls = fetchCalls.filter((c) => c.url.includes("/api/internal/status"));
+      expect(statusCalls.length).toBe(2);
+
+      const uuids = statusCalls.map((c) => JSON.parse(c.init.body as string).taskUUID);
+      expect(uuids).toContain("test-uuid"); // container UUID
+      expect(uuids).toContain("conductor-task-12345"); // associated child task
+
+      // Both have the same session_id
+      for (const call of statusCalls) {
+        expect(JSON.parse(call.init.body as string).session_id).toBe("sess-xyz-789");
+      }
+
+      expect(callbacks.onExit).not.toHaveBeenCalled();
+    });
+
+    test("project lead: skips session_id POST when currentSessionId is empty", async () => {
+      const transcriptMgr = makeTranscriptMgr();
+      const { lifecycle, callbacks } = createLifecycle({
+        roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
+      });
+
+      lifecycle.state.sessionActive = true;
+      lifecycle.state.sessionStatus = "running";
+      lifecycle.state.currentSessionId = ""; // empty — no session_id to report
+
+      await lifecycle.handleSessionEnd();
+
+      // Transcript still uploaded
+      expect(transcriptMgr.upload).toHaveBeenCalledWith(true);
+
+      // No status call made (no session_id to report)
+      const statusCalls = fetchCalls.filter((c) => c.url.includes("/api/internal/status"));
+      expect(statusCalls.length).toBe(0);
+
+      // onExit NOT called
+      expect(callbacks.onExit).not.toHaveBeenCalled();
+    });
+
     test("project lead: resets session state instead of exiting", async () => {
+      const transcriptMgr = makeTranscriptMgr();
       const { lifecycle, tokenTracker, callbacks } = createLifecycle({
         roleConfig: makeProjectLeadRole(),
+        transcriptMgr,
       });
 
       lifecycle.state.sessionActive = true;

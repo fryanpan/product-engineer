@@ -8,18 +8,42 @@ interface FetchCall {
   body: Record<string, unknown>;
 }
 
-function createMockFetch() {
+function createMockFetch(haikusRespond = true) {
   const calls: FetchCall[] = [];
 
   const fn = async (url: string | URL | Request, init?: RequestInit) => {
+    const urlStr = url.toString();
     calls.push({
-      url: url.toString(),
+      url: urlStr,
       body: JSON.parse((init?.body as string) ?? "{}"),
     });
+
+    if (urlStr.includes("anthropic.com")) {
+      if (!haikusRespond) {
+        return new Response(JSON.stringify({ error: "fail" }), { status: 500 });
+      }
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: "Reading config and running tests." }],
+        }),
+        { status: 200 },
+      );
+    }
+
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   };
 
   return { fn: fn as typeof fetch, calls };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function slackCalls(calls: FetchCall[]) {
+  return calls.filter((c) => c.url.includes("slack.com"));
+}
+
+function haikusCalls(calls: FetchCall[]) {
+  return calls.filter((c) => c.url.includes("anthropic.com"));
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -34,8 +58,13 @@ describe("SlackEcho", () => {
       slackBotToken: "xoxb-test-token",
       slackChannel: "C123",
       slackThreadTs: "1234567890.123456",
+      anthropicApiKey: "sk-ant-test",
       fetchFn: mockFetch.fn,
     });
+  });
+
+  afterEach(async () => {
+    await echo.stop();
   });
 
   // ── echoAssistantText ──────────────────────────────────────────────────
@@ -45,67 +74,55 @@ describe("SlackEcho", () => {
       const noThread = new SlackEcho({
         slackBotToken: "xoxb-test",
         slackChannel: "C123",
+        anthropicApiKey: "sk-ant-test",
         fetchFn: mockFetch.fn,
       });
 
       noThread.echoAssistantText("hello");
-      await noThread.flush();
+      await noThread.stop();
 
-      expect(mockFetch.calls).toHaveLength(0);
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
     test("posts after threadTs is set via setThreadTs", async () => {
       const noThread = new SlackEcho({
         slackBotToken: "xoxb-test",
         slackChannel: "C123",
+        anthropicApiKey: "sk-ant-test",
         fetchFn: mockFetch.fn,
       });
 
       noThread.echoAssistantText("ignored");
       noThread.setThreadTs("111.222");
       noThread.echoAssistantText("posted");
-      await noThread.flush();
+      await noThread.stop();
 
-      // Only "posted" should appear (the first was skipped)
-      expect(mockFetch.calls).toHaveLength(1);
-      expect(mockFetch.calls[0].body.text).toContain("posted");
-      expect(mockFetch.calls[0].body.thread_ts).toBe("111.222");
+      // "ignored" is dropped — no threadTs at call time.
+      // "posted" posts immediately after threadTs is set.
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      expect(slackCalls(mockFetch.calls)[0].body.thread_ts).toBe("111.222");
     });
 
-    test("debounces multiple rapid texts into one post", async () => {
+    test("posts each assistant text immediately without buffering", async () => {
       echo.echoAssistantText("first");
       echo.echoAssistantText("second");
       echo.echoAssistantText("third");
 
-      // Nothing posted yet (debouncing)
-      expect(mockFetch.calls).toHaveLength(0);
+      // All three posted immediately — no buffering
+      expect(slackCalls(mockFetch.calls)).toHaveLength(3);
 
-      await echo.flush();
-
-      expect(mockFetch.calls).toHaveLength(1);
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("first");
-      expect(text).toContain("second");
-      expect(text).toContain("third");
-      expect(text).toStartWith("\u{1F4AC}");
-    });
-
-    test("truncates text to 3000 chars", async () => {
-      const longText = "x".repeat(4000);
-      echo.echoAssistantText(longText);
-      await echo.flush();
-
-      const text = mockFetch.calls[0].body.text as string;
-      // 💬 prefix + space + 3000 chars + "..."
-      expect(text.length).toBeLessThanOrEqual(3006); // emoji + space + 3000 + "..."
-      expect(text).toContain("...");
+      const texts = slackCalls(mockFetch.calls).map((c) => c.body.text as string);
+      expect(texts[0]).toStartWith("\u{1F4AC}");
+      expect(texts[0]).toContain("first");
+      expect(texts[1]).toContain("second");
+      expect(texts[2]).toContain("third");
     });
 
     test("sends correct Slack API payload", async () => {
       echo.echoAssistantText("hello world");
-      await echo.flush();
+      await echo.stop();
 
-      const call = mockFetch.calls[0];
+      const call = slackCalls(mockFetch.calls)[0];
       expect(call.url).toBe("https://slack.com/api/chat.postMessage");
       expect(call.body.channel).toBe("C123");
       expect(call.body.thread_ts).toBe("1234567890.123456");
@@ -117,32 +134,69 @@ describe("SlackEcho", () => {
         slackChannel: "C123",
         slackThreadTs: "111.222",
         slackPersona: { username: "PE Bot", icon_emoji: ":robot:" },
+        anthropicApiKey: "sk-ant-test",
         fetchFn: mockFetch.fn,
       });
 
       echoWithPersona.echoAssistantText("hi");
-      await echoWithPersona.flush();
+      await echoWithPersona.stop();
 
-      const body = mockFetch.calls[0].body;
+      const body = slackCalls(mockFetch.calls)[0].body;
       expect(body.username).toBe("PE Bot");
       expect(body.icon_emoji).toBe(":robot:");
     });
 
-    test("fires after debounce timeout", async () => {
-      echo.echoAssistantText("auto-fire");
+    test("no Slack post if buffer is empty on stop", async () => {
+      await echo.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+    });
 
-      // Wait for debounce to fire
-      await new Promise((r) => setTimeout(r, 600));
+    test("posts URL-containing message immediately", async () => {
+      echo.echoAssistantText(
+        "Task complete. PR opened at https://github.com/org/repo/pull/42 — ready for review!",
+      );
 
-      expect(mockFetch.calls).toHaveLength(1);
-      expect(mockFetch.calls[0].body.text).toContain("auto-fire");
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      const text = slackCalls(mockFetch.calls)[0].body.text as string;
+      expect(text).toStartWith("\u{1F4AC}");
+      expect(text).toContain("https://github.com");
+    });
+
+    test("assistant text does NOT call Haiku", async () => {
+      echo.echoAssistantText(
+        "Task complete. PR opened at https://github.com/org/repo/pull/123 — merged!",
+      );
+      await echo.stop();
+
+      // No Haiku summarization for assistant text
+      expect(haikusCalls(mockFetch.calls)).toHaveLength(0);
+    });
+
+    test("short message posts immediately", async () => {
+      echo.echoAssistantText("Reading files now");
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+    });
+
+    test("short question posts immediately", async () => {
+      echo.echoAssistantText("Ok?");
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+    });
+
+    test("very long assistant text posts in full without truncation", async () => {
+      const longMsg = "x".repeat(5000);
+      echo.echoAssistantText(longMsg);
+
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      const text = slackCalls(mockFetch.calls)[0].body.text as string;
+      expect(text).not.toContain("[truncated]");
+      expect(text).toContain(longMsg);
     });
   });
 
   // ── echoToolUse ────────────────────────────────────────────────────────
 
   describe("echoToolUse", () => {
-    test("skips if no threadTs", () => {
+    test("skips if no threadTs", async () => {
       const noThread = new SlackEcho({
         slackBotToken: "xoxb-test",
         slackChannel: "C123",
@@ -150,146 +204,159 @@ describe("SlackEcho", () => {
       });
 
       noThread.echoToolUse("Bash", { command: "ls" });
-      expect(mockFetch.calls).toHaveLength(0);
+      await noThread.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
-    test("skips notify_slack tool", () => {
+    test("skips notify_slack tool", async () => {
       echo.echoToolUse("notify_slack", { message: "hi" });
-      expect(mockFetch.calls).toHaveLength(0);
+      await echo.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
-    test("skips ask_question tool", () => {
+    test("skips ask_question tool", async () => {
       echo.echoToolUse("ask_question", { question: "what?" });
-      expect(mockFetch.calls).toHaveLength(0);
+      await echo.stop();
+      // ask_question is skipped in echoToolUse; if nothing else buffered, no post
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
-    test("skips update_task_status tool", () => {
+    test("skips update_task_status tool", async () => {
       echo.echoToolUse("update_task_status", { status: "done" });
-      expect(mockFetch.calls).toHaveLength(0);
+      await echo.stop();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
-    test("posts immediately (no debounce)", () => {
-      echo.echoToolUse("Bash", { command: "ls -la" });
+    test("buffers tool use and posts on stop", async () => {
+      echo.echoToolUse("Bash", { command: "ls -la", description: "List files" });
 
-      // Posted synchronously (fire-and-forget)
-      expect(mockFetch.calls).toHaveLength(1);
-      expect(mockFetch.calls[0].body.text).toContain("Bash");
+      // Not posted immediately
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
+
+      await echo.stop();
+
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      expect(slackCalls(mockFetch.calls)[0].body.text).toContain("Reading config");
     });
 
-    test("formats Bash tool with description only", () => {
+    test("formats Bash tool with description", async () => {
       echo.echoToolUse("Bash", { command: "npm test --coverage", description: "Run tests" });
+      await echo.stop();
 
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`Bash`");
-      expect(text).toContain("Run tests");
-      expect(text).not.toContain("npm test");
+      // The Haiku call should receive the tool summary in its activity
+      const haiku = haikusCalls(mockFetch.calls)[0];
+      const content = (haiku.body.messages as any)[0].content as string;
+      expect(content).toContain("Run tests");
     });
 
-    test("formats Bash tool without description as name only", () => {
-      echo.echoToolUse("Bash", { command: "npm test --coverage" });
-
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`Bash`");
-      expect(text).not.toContain("npm test");
-    });
-
-    test("formats Read tool with short path only", () => {
+    test("formats Read tool with short path", async () => {
       echo.echoToolUse("Read", { file_path: "/home/user/project/src/index.ts" });
+      await echo.stop();
 
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`Bash`".replace("Bash", "Read"));
-      expect(text).toContain("src/index.ts");
+      const haiku = haikusCalls(mockFetch.calls)[0];
+      const content = (haiku.body.messages as any)[0].content as string;
+      expect(content).toContain("src/index.ts");
     });
 
-    test("formats Edit tool with short path only", () => {
+    test("formats Edit tool with short path", async () => {
       echo.echoToolUse("Edit", { file_path: "/a/b/c/file.ts", old_string: "x", new_string: "y" });
+      await echo.stop();
 
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`Edit`");
-      expect(text).toContain("c/file.ts");
-      expect(text).not.toContain("old_string");
+      const haiku = haikusCalls(mockFetch.calls)[0];
+      const content = (haiku.body.messages as any)[0].content as string;
+      expect(content).toContain("c/file.ts");
+    });
+  });
+
+  // ── flush (ask_question path) ─────────────────────────────────────────
+
+  describe("flush", () => {
+    test("posts immediately when called", async () => {
+      echo.echoAssistantText("reading files");
+      echo.echoToolUse("Read", { file_path: "/src/config.ts" });
+
+      // echoAssistantText already posted once immediately
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+
+      await echo.flush();
+
+      // flush() posts the buffered tool use — total 2 posts
+      expect(slackCalls(mockFetch.calls)).toHaveLength(2);
     });
 
-    test("formats Glob tool as name only", () => {
-      echo.echoToolUse("Glob", { pattern: "**/*.test.ts" });
-
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`Glob`");
-      expect(text).not.toContain("**/*.test.ts");
+    test("is a no-op when nothing pending", async () => {
+      await echo.flush();
+      expect(slackCalls(mockFetch.calls)).toHaveLength(0);
     });
 
-    test("formats Grep tool as name only", () => {
-      echo.echoToolUse("Grep", { pattern: "import.*from" });
+    test("clears buffer after flush — second flush is no-op", async () => {
+      echo.echoAssistantText("first");
+      await echo.flush();
+      await echo.flush();
 
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`Grep`");
-      expect(text).not.toContain("import.*from");
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+    });
+  });
+
+  // ── Haiku fallback ─────────────────────────────────────────────────────
+
+  describe("Haiku fallback", () => {
+    test("falls back to truncated raw text when no API key (tool use)", async () => {
+      const noKey = new SlackEcho({
+        slackBotToken: "xoxb-test",
+        slackChannel: "C123",
+        slackThreadTs: "111.222",
+        // no anthropicApiKey
+        fetchFn: mockFetch.fn,
+      });
+
+      noKey.echoToolUse("Bash", { command: "ls", description: "List files" });
+      await noKey.stop();
+
+      // No Haiku call
+      expect(haikusCalls(mockFetch.calls)).toHaveLength(0);
+      // Still posts to Slack with raw text
+      expect(slackCalls(mockFetch.calls)).toHaveLength(1);
+      expect(slackCalls(mockFetch.calls)[0].body.text).toContain("List files");
     });
 
-    test("formats Agent tool with description", () => {
-      echo.echoToolUse("Agent", { description: "Analyze the codebase structure" });
+    test("falls back to raw text when Haiku API fails (tool use)", async () => {
+      const failFetch = createMockFetch(false);
+      const failEcho = new SlackEcho({
+        slackBotToken: "xoxb-test",
+        slackChannel: "C123",
+        slackThreadTs: "111.222",
+        anthropicApiKey: "sk-ant-test",
+        fetchFn: failFetch.fn,
+      });
 
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`Agent`");
-      expect(text).toContain("Analyze the codebase structure");
-    });
+      failEcho.echoToolUse("Bash", { command: "ls", description: "List files" });
+      await failEcho.stop();
 
-    test("formats unknown tool as name only", () => {
-      echo.echoToolUse("CustomTool", { foo: "bar", count: 42 });
-
-      const text = mockFetch.calls[0].body.text as string;
-      expect(text).toContain("`CustomTool`");
-      expect(text).not.toContain('"foo"');
+      // Still posts to Slack (with fallback text)
+      expect(slackCalls(failFetch.calls)).toHaveLength(1);
+      expect(slackCalls(failFetch.calls)[0].body.text).toContain("List files");
     });
   });
 
   // ── Error handling ─────────────────────────────────────────────────────
 
   describe("error handling", () => {
-    test("silently catches fetch errors on tool echo", () => {
+    test("silently catches Slack fetch errors on flush", async () => {
+      const failFetch = (() => {
+        throw new Error("network error");
+      }) as unknown as typeof fetch;
+
       const failEcho = new SlackEcho({
         slackBotToken: "xoxb-test",
         slackChannel: "C123",
         slackThreadTs: "111.222",
-        fetchFn: (() => {
-          throw new Error("network error");
-        }) as unknown as typeof fetch,
-      });
-
-      // Should not throw
-      expect(() => failEcho.echoToolUse("Bash", { command: "ls" })).not.toThrow();
-    });
-
-    test("silently catches fetch errors on text flush", async () => {
-      const failEcho = new SlackEcho({
-        slackBotToken: "xoxb-test",
-        slackChannel: "C123",
-        slackThreadTs: "111.222",
-        fetchFn: (() => {
-          throw new Error("network error");
-        }) as unknown as typeof fetch,
+        fetchFn: failFetch,
       });
 
       failEcho.echoAssistantText("test");
       // Should not throw
-      await failEcho.flush();
-    });
-  });
-
-  // ── flush ──────────────────────────────────────────────────────────────
-
-  describe("flush", () => {
-    test("is a no-op when nothing pending", async () => {
-      await echo.flush();
-      expect(mockFetch.calls).toHaveLength(0);
-    });
-
-    test("clears pending text", async () => {
-      echo.echoAssistantText("first");
-      await echo.flush();
-      await echo.flush(); // second flush should be no-op
-
-      expect(mockFetch.calls).toHaveLength(1);
+      await failEcho.stop();
     });
   });
 });
@@ -302,9 +369,9 @@ describe("formatToolSummary", () => {
     expect(result).toBe("Run tests");
   });
 
-  test("Bash without description returns empty", () => {
+  test("Bash without description falls back to command", () => {
     const result = formatToolSummary("Bash", { command: "npm test" });
-    expect(result).toBe("");
+    expect(result).toBe("npm test");
   });
 
   test("unknown tool returns empty", () => {
@@ -327,7 +394,77 @@ describe("formatToolSummary", () => {
   });
 
   test("file tools show short path", () => {
-    expect(formatToolSummary("Read", { file_path: "/a/b/c/file.ts" })).toBe("`c/file.ts`");
-    expect(formatToolSummary("Edit", { file_path: "/x/y.ts" })).toBe("`x/y.ts`");
+    expect(formatToolSummary("Read", { file_path: "/a/b/c/file.ts" })).toBe("c/file.ts");
+    expect(formatToolSummary("Edit", { file_path: "/x/y.ts" })).toBe("x/y.ts");
+  });
+
+  test("Bash with description uses description over command", () => {
+    const result = formatToolSummary("Bash", { command: "bun test --coverage", description: "Run tests" });
+    expect(result).toBe("Run tests");
+  });
+
+  test("Grep with pattern and path returns both", () => {
+    const result = formatToolSummary("Grep", { pattern: "isPassthrough", path: "/workspace/agent/src" });
+    expect(result).toContain("isPassthrough");
+    expect(result).toContain("agent/src");
+  });
+
+  test("Grep with pattern only returns pattern", () => {
+    const result = formatToolSummary("Grep", { pattern: "SlackEcho" });
+    expect(result).toContain("SlackEcho");
+  });
+
+  test("Grep with no args returns empty", () => {
+    expect(formatToolSummary("Grep", {})).toBe("");
+  });
+
+  test("Glob with pattern returns pattern", () => {
+    const result = formatToolSummary("Glob", { pattern: "**/*.test.ts" });
+    expect(result).toBe("**/*.test.ts");
+  });
+
+  test("Glob with no pattern returns empty", () => {
+    expect(formatToolSummary("Glob", {})).toBe("");
+  });
+
+  test("spawn_task with all fields", () => {
+    const result = formatToolSummary("spawn_task", {
+      mode: "coding",
+      product: "my-product",
+      description: "Fix authentication bug",
+    });
+    expect(result).toBe("Spawned coding agent for my-product: Fix authentication bug");
+  });
+
+  test("spawn_task with no product", () => {
+    const result = formatToolSummary("spawn_task", {
+      mode: "research",
+      description: "Research API options",
+    });
+    expect(result).toBe("Spawned research agent: Research API options");
+  });
+
+  test("spawn_task with no description", () => {
+    const result = formatToolSummary("spawn_task", { mode: "coding", product: "x" });
+    expect(result).toBe("Spawned coding agent for x");
+  });
+
+  test("spawn_task with no fields defaults to coding", () => {
+    const result = formatToolSummary("spawn_task", {});
+    expect(result).toBe("Spawned coding agent");
+  });
+
+  test("send_message_to_task with product and message", () => {
+    const result = formatToolSummary("send_message_to_task", {
+      product: "my-product",
+      message: "Please address the review comments",
+    });
+    expect(result).toBe("Sent message to my-product: Please address the review comments");
+  });
+
+  test("send_message_to_task with no fields", () => {
+    const result = formatToolSummary("send_message_to_task", {});
+    expect(result).toBe("Sent message to project");
   });
 });
+

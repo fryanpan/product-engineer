@@ -195,8 +195,9 @@ app.post("/api/internal/upload-transcript", async (c) => {
     taskUUID: string;
     r2Key: string;
     transcript: string;
+    associatedTaskUUID?: string;
   }>();
-  const { taskUUID } = body;
+  const { taskUUID, associatedTaskUUID } = body;
   const { r2Key, transcript } = body;
 
   if (!taskUUID) {
@@ -217,6 +218,17 @@ app.post("/api/internal/upload-transcript", async (c) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ taskUUID, transcript_r2_key: r2Key }),
     }));
+
+    // If an associated task UUID is provided (e.g., project lead uploading for a child task),
+    // also update that task's record with the transcript R2 key
+    if (associatedTaskUUID && associatedTaskUUID !== taskUUID) {
+      await conductor.fetch(new Request("http://internal/ticket/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskUUID: associatedTaskUUID, transcript_r2_key: r2Key }),
+      }));
+      console.log(`[Worker] Transcript also associated with task=${associatedTaskUUID}`);
+    }
 
     console.log(`[Worker] Transcript uploaded: ticket=${taskUUID} key=${r2Key} size=${transcript.length}`);
     return c.json({ ok: true, r2Key });
@@ -407,6 +419,56 @@ app.put("/api/settings/:key", async (c) => {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: await c.req.text(),
+  }));
+});
+
+// Schedules API: proxy to conductor DO
+app.post("/api/schedules", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request("http://internal/schedules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+app.get("/api/schedules", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const product = c.req.query("product") || "";
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request(`http://internal/schedules?product=${encodeURIComponent(product)}`));
+});
+
+app.put("/api/schedules/:id", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const id = c.req.param("id");
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request(`http://internal/schedules/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: await c.req.text(),
+  }));
+});
+
+app.delete("/api/schedules/:id", async (c) => {
+  const key = c.req.header("X-Internal-Key");
+  if (!key || !timingSafeEqual(key, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const id = c.req.param("id");
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request(`http://internal/schedules/${encodeURIComponent(id)}`, {
+    method: "DELETE",
   }));
 });
 

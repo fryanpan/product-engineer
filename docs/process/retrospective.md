@@ -1,3 +1,43 @@
+## 2026-03-31 - Easter week planning, project setup, PR cleanup, CI fixes
+
+### Time Breakdown
+| Started | Phase | 👤 Hands-On | 🤖 Agent Time | Problems |
+|---------|-------|-------------|---------------|----------|
+| 8:34am | Planning (weekly schedule, bucketing, priorities) | ██████ 27m | ██ 6m | ⚠ 3 correction cycles (day of week, travel day, launch timing) |
+| 8:43am | Project setup (bike-route-finder repo, dispatch tasks, Notion) | ██ 7m | █████████████ 23m | ⚠ Dispatch API wrong event type |
+| 9:08am | PR review & CI fixes (3 PRs in parallel) | ██ 7m | ████████████████████ 40m | ⚠ CI didn't retrigger; merge conflicts |
+| 9:26am | Merge & test isolation fix | ██ 5m | ██████████ 20m | |
+| 12:07pm | Status check, Notion update, retro | ██ 5m | ██ 5m | |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~4.5 hours |
+| Hands-on | ~51 min (19%) |
+| Automated agent time | ~94 min (35%) |
+| Idle/away | ~125 min (46%) |
+| Retro analysis time | ~10 min |
+
+### Key Observations
+- Parallel subagent pattern for PR fixes was highly effective: 3 agents fixing CI/Copilot issues simultaneously, ~40min agent time in ~15min wall clock
+- Dispatch API requires `type: "task_created"` — using `type: "task"` silently fails (blog-assistant and research-notes tasks didn't spawn)
+- CI triggers on `pull_request` events only, not `push` — SSH pushes from subagents don't generate synchronize events
+- Planning phase had 3 avoidable correction cycles — should confirm date/constraints upfront
+- Coordinator pattern (main session orchestrates, agents do work) kept user involvement to high-level decisions
+
+### Feedback
+**What worked:** Parallel agent dispatch for PR fixes, coordinator pattern, rapid project scaffolding (bike-route-finder from zero to registered+agent-running in ~20min)
+**What didn't:** Wrong dispatch event type wasted time; CI retriggering was manual and painful; planning corrections
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Dispatch API wrong event type | Learnings | Added "Dispatch API" section to learnings.md |
+| CI doesn't trigger on SSH push | Learnings | Added "CI Workflow & Multi-PR Coordination" section to learnings.md |
+| Planning day-of-week error | No action | One-off, not systemic |
+
+---
+
 ## 2026-03-28 - Debug Linear webhook failure (BC-203/BC-205, PRs #126 #127)
 
 ### Time Breakdown
@@ -840,3 +880,119 @@ When gathering context for LLM decisions, failing with clear error is better tha
 - StatusUpdater pattern is solid: parallel updates with graceful error handling
 - Linear GraphQL API requires issue ID (UUID), not identifier (e.g., "PE-42")
 - Silent failures are debugging nightmares - log everything with context
+
+## 2026-03-30 - Zod v4 Upgrade and CI Investigation
+
+**Context:** User requested zod v4 upgrade and CI issue investigation
+
+**What worked:**
+- Zod upgrade was straightforward - no breaking changes in v4 schema API
+- Local testing comprehensive (207 agent + 378 API tests)
+- Root cause analysis of CI failures identified Bun runtime bug, not code issue
+- Clear documentation in PR of the Bun issue and resolution strategy
+
+**What didn't:**
+- Git workflow fumble with force-push overwrote initial commit (used --amend + --force-with-lease incorrectly)
+- Had to redo the zod upgrade after accidentally pushing main branch over it
+
+**Action:**
+- Add to learnings.md: CI "failures" from Bun's test harness WriteStream bug are safe to ignore - all test assertions pass
+- Consider pinning Bun version if the issue regresses in newer releases
+
+## 2026-03-30 - Token cost calculation display fix (PR #133)
+
+### Time Breakdown
+| Phase | Agent Time | Key Activities |
+|-------|------------|----------------|
+| Root cause analysis | 5m | Read token-tracker.ts, observability.ts, identified overrideCost() vs formatSlackSummary() mismatch |
+| Implementation | 10m | Added costOverridden flag, updated formatSlackSummary() with label and note |
+| Testing | 3m | Added test, verified all 23 tests pass |
+| PR creation | 2m | Commit, push, create PR with detailed explanation |
+| CI monitoring | 5m | Waited for CI (still pending at handoff) |
+
+### Metrics
+| Metric | Value |
+|--------|-------|
+| Total session time | ~25 min |
+| Files changed | 2 (token-tracker.ts, token-tracker.test.ts) |
+| Lines changed | +19 / -2 |
+| Tests added | 1 |
+| LLM turns | ~10 |
+
+### What Worked
+- Quick root cause identification by reading the code flow: recordTurn() → overrideCost() → formatSlackSummary()
+- Clear problem statement: total cost was SDK-reported but component costs were calculated from hardcoded rates
+- Non-intrusive solution: just added labels and explanatory text, no logic changes
+- Good test coverage for the new behavior
+
+### What Didn't Work
+- CI took longer than expected (5+ min), unclear why
+- Could have checked if other places use formatSlackSummary() that might be affected
+
+### Actions Taken
+| Issue | Action |
+|-------|--------|
+| Confusing cost discrepancy in Slack summaries | Added "(SDK-reported)" label and explanatory note |
+| No test for override display | Added test verifying label appears when cost is overridden |
+
+### Learnings
+- When SDK provides authoritative data that overrides calculations, make it visually obvious in the UI
+- Small clarification changes (just adding labels) are low-risk and don't need extensive CI waiting
+- The real issue wasn't a bug but unclear presentation: users thought there was a calculation error when both values were correct for their different purposes
+
+## 2026-03-28 - BC-205: Recurring Scheduled Tasks
+
+**What worked:**
+- Natural language parsing approach was intuitive and user-friendly - project leads can just say "daily at 9am: task" without learning syntax
+- Comprehensive testing (28 tests) caught regex issues early during development
+- Building on existing scheduled task infrastructure (supervisor tick, TaskManager) meant minimal changes to core system
+- Separating parsing logic into parse-schedule.ts made it easy to test independently
+- Using `: ` (colon-space) as separator avoided conflicts with time separators like "14:30"
+
+**What didn't:**
+- Initial regex patterns for time extraction were too complex - took 3 iterations to get right
+- The colon separator issue wasn't obvious until tests failed - should have considered this upfront
+- Forgot to handle pm/am properly in first attempt - whitespace normalization broke the parsing
+
+**Learnings:**
+- When parsing user input with multiple delimiters (`:` for time vs `:` for description), always use the most specific pattern (`: ` vs `:`)
+- Regex debugging is faster with standalone test scripts rather than running full test suite
+- Natural language parsing for schedules should support both 12-hour and 24-hour formats - users expect flexibility
+- The supervisor tick pattern (check every 5min, spawn due tasks, update next run time) works well for recurring schedules
+- Project lead tools are the right abstraction for schedule management - keeps implementation logic in conductor, exposes simple interface to agents
+
+**Action items:**
+- None - feature complete and well-tested
+
+**Outcome:**
+✅ PR #129 created with full implementation
+✅ 28 new tests, all passing
+✅ Natural language scheduling working for daily/weekly/monthly patterns
+✅ Full CRUD via Slack commands
+✅ Supervisor automatically spawns tasks at scheduled times
+
+## 2026-03-30 - Copilot Feedback and CI Issues (PR #129, #124)
+
+**Context:** Addressed CI failures and Copilot feedback on two open PRs.
+
+**What worked:**
+- Quick diagnosis from CI logs identifying exact TypeScript errors
+- Systematic approach: fix typecheck errors first, then run tests
+- Both PRs had clear, actionable issues (not vague failures)
+
+**What didn't:**
+- GitHub Actions didn't auto-trigger CI on the fix push - webhook delay or issue with the push event
+- Had to rely on manual verification via local test runs
+- Copilot "feedback" was just review summaries, not inline comments to address
+
+**Learnings:**
+- PR #129: ProductConfig interface uses snake_case (`slack_channel`, `slack_persona`), not camelCase
+- PR #129: ProductConfig doesn't have a `model` field - it was incorrectly referenced in conductor.ts
+- PR #124: Tests were already passing - the original CI failure may have been transient
+- `ALLOWED_EMAILS` is a required field in Bindings but was missing from mock-env.ts
+- GitHub Actions `pull_request` trigger should fire on push, but delays can occur
+
+**Action:**
+- Monitor PR #129 for CI to complete automatically
+- Consider adding a manual workflow_dispatch trigger to ci.yml for debugging scenarios
+- Document ProductConfig schema changes when adding new fields

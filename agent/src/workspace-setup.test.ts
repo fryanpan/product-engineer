@@ -83,6 +83,18 @@ beforeEach(async () => {
   setupWorkspace = mod.setupWorkspace;
 });
 
+import { afterEach } from "bun:test";
+
+afterEach(() => {
+  // Restore Bun globals to prevent leaking mocks to other test files
+  // @ts-ignore
+  Bun.spawn = originalSpawn;
+  // @ts-ignore
+  Bun.write = originalWrite;
+  // @ts-ignore
+  Bun.file = originalFile;
+});
+
 function makeRoleConfig(overrides: Partial<RoleConfig> = {}): RoleConfig {
   return {
     role: "ticket-agent",

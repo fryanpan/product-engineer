@@ -12,6 +12,7 @@ export interface TranscriptManagerConfig {
   workerUrl: string;
   apiKey: string;
   taskUUID: string;
+  associatedTaskUUID?: string;
 }
 
 export class TranscriptManager {
@@ -90,6 +91,7 @@ export class TranscriptManager {
               taskUUID: this.config.taskUUID,
               r2Key,
               transcript: transcriptContent,
+              associatedTaskUUID: this.config.associatedTaskUUID,
             }),
           });
 
@@ -167,6 +169,16 @@ export class TranscriptManager {
       console.error("[Agent] Transcript download error:", err);
       return null;
     }
+  }
+
+  /** Set the associated task UUID (e.g., when a project lead receives an event for a child task). */
+  setAssociatedTaskUUID(uuid: string): void {
+    this.config.associatedTaskUUID = uuid;
+  }
+
+  /** Get the associated task UUID, if set. */
+  getAssociatedTaskUUID(): string | undefined {
+    return this.config.associatedTaskUUID;
   }
 
   /** Returns the current uploaded sizes map (for testing/debugging). */
