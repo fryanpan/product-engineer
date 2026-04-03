@@ -53,10 +53,11 @@ Examples: database schema changes, API contract changes, deleting data, architec
 ### 2. Implement
 - In your **first turn**: create the branch, notify Slack, and update status to `in_progress`. Do all three in one turn.
 - **Dispatch an implementation subagent** using the `Agent` tool (fresh ~20K context vs your growing 100K+ history = 84% cheaper per turn):
-  - Provide: full task description, branch name, working directory path, key conventions from CLAUDE.md
-  - The subagent: reads relevant code, implements, writes tests, self-reviews, commits, and reports back
+  - Provide: full task description, branch name, absolute path to the cloned repo root, key conventions from CLAUDE.md, and explicit instruction not to use TodoWrite
+  - The subagent: reads relevant code, implements, writes tests, self-reviews, commits, and reports back: what was implemented, what tests were written, files changed, and any unresolved issues
   - Wait for it to complete, then review its report
 - If the subagent leaves gaps or reports issues, fix them directly or dispatch a targeted follow-up subagent
+- If the `Agent` tool call itself fails (infrastructure error), implement directly without retrying the dispatch
 
 ### 3. Self-review & Definition of Done
 - **Self-review** your diff: Does it match the request? Any bugs, missed edge cases, security issues?
@@ -72,9 +73,10 @@ Examples: database schema changes, API contract changes, deleting data, architec
 
 ### 5. Monitor CI
 - **Dispatch a CI monitoring subagent** using the `Agent` tool with `model: "haiku"` (87% cheaper for polling):
-  - Give it: the PR URL and instructions to call `check_ci_status` every 60 seconds, up to 10 retries
+  - Give it: the PR URL and instructions to run `gh pr checks <PR_URL> --watch` or poll `gh pr view <PR_URL> --json statusCheckRollup` every 60 seconds, up to 15 retries
   - It reports back: `passed`, `failed <reason>`, or `no_ci`
 - If CI fails: read the failure from the subagent's report, fix it yourself, push, then dispatch a new CI monitoring subagent
+- If the `Agent` tool call fails, poll CI yourself using `gh pr checks <PR_URL> --watch` in Bash
 - If CI passes or `no_ci`: proceed to merge
 - Max 3 CI fix attempts before giving up
 
