@@ -106,6 +106,24 @@ async function ensureWorkspace(): Promise<void> {
   agentCwd = result.agentCwd;
   additionalDirs = result.additionalDirs;
   loadedPlugins = result.plugins;
+
+  // Filter plugins based on task type — remove wasteful plugins to reduce context tokens
+  if (!roleConfig.isProjectLead) {
+    const taskTitle = (config.taskTitle || "").toLowerCase();
+    const taskDesc = JSON.stringify((config as any).taskData || "").toLowerCase();
+    const isSimplification = /simplif|refactor|clean.?up|code.?quality/.test(taskTitle + " " + taskDesc);
+
+    loadedPlugins = loadedPlugins.filter(p => {
+      const pluginName = p.path.split("/").pop() || "";
+      // Always remove commit-commands (ticket-agent skill handles commits)
+      if (pluginName === "commit-commands") return false;
+      // Only include code-simplifier for simplification tasks
+      if (pluginName === "code-simplifier" && !isSimplification) return false;
+      return true;
+    });
+    console.log(`[Agent] Filtered plugins (${loadedPlugins.length}): ${loadedPlugins.map(p => p.path.split("/").pop()).join(", ") || "none"}`);
+  }
+
   process.chdir(agentCwd);
 
   workspaceReady = true;

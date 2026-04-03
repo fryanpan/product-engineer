@@ -52,10 +52,12 @@ Examples: database schema changes, API contract changes, deleting data, architec
 
 ### 2. Implement
 - In your **first turn**: create the branch, notify Slack, and update status to `in_progress`. Do all three in one turn.
-- Follow the repo's conventions (check CLAUDE.md, existing patterns)
-- Write tests alongside code (not after)
-- Make small, logical commits
-- Keep changes minimal — only what the task requires
+- **Dispatch an implementation subagent** using the `Agent` tool (fresh ~20K context vs your growing 100K+ history = 84% cheaper per turn):
+  - Provide: full task description, branch name, absolute path to the cloned repo root, key conventions from CLAUDE.md, and explicit instruction not to use TodoWrite
+  - The subagent: reads relevant code, implements, writes tests, self-reviews, commits, and reports back: what was implemented, what tests were written, files changed, and any unresolved issues
+  - Wait for it to complete, then review its report
+- If the subagent leaves gaps or reports issues, fix them directly or dispatch a targeted follow-up subagent
+- If the `Agent` tool call itself fails (infrastructure error), implement directly without retrying the dispatch
 
 ### 3. Self-review & Definition of Done
 - **Self-review** your diff: Does it match the request? Any bugs, missed edge cases, security issues?
@@ -69,12 +71,13 @@ Examples: database schema changes, API contract changes, deleting data, architec
 - In **one turn**: commit, push, create PR with `gh pr create`, update status to `pr_open` (include `pr_url`), and notify Slack with the PR link.
 - Push to branch `ticket/<identifier>` or `feedback/<identifier>`
 
-### 5. Monitor CI (YOU must do this)
-- Wait 60 seconds, then call `check_ci_status` with the PR URL
-- If CI is pending: wait 60 seconds and check again (up to 10 retries)
-- If CI fails: read the failure, fix the issue, push a new commit, restart CI monitoring
-- If CI passes: proceed to merge
-- If no CI configured: proceed to merge immediately
+### 5. Monitor CI
+- **Dispatch a CI monitoring subagent** using the `Agent` tool with `model: "haiku"` (87% cheaper for polling):
+  - Give it: the PR URL and instructions to run `gh pr checks <PR_URL> --watch` or poll `gh pr view <PR_URL> --json statusCheckRollup` every 60 seconds, up to 15 retries
+  - It reports back: `passed`, `failed <reason>`, or `no_ci`
+- If CI fails: read the failure from the subagent's report, fix it yourself, push, then dispatch a new CI monitoring subagent
+- If the `Agent` tool call fails, poll CI yourself using `gh pr checks <PR_URL> --watch` in Bash
+- If CI passes or `no_ci`: proceed to merge
 - Max 3 CI fix attempts before giving up
 
 ### 6. Merge Decision (YOU must make this call)
@@ -102,21 +105,16 @@ When CI passes (or no CI), apply the same decision framework to merging:
 - Use `update_task_status` with status `failed`
 - Exit cleanly
 
-### 8. Retro
-- Save brief findings to `docs/process/retrospective.md` (what worked, what didn't, one action)
-- Commit and push retro to PR branch
-
 ## Event Handling
 
 ### On receiving a PR review or comment
 1. Read the review carefully
 2. Make requested changes, run tests, self-review the fix
 3. Commit and push, notify Slack with summary
-4. If approved: monitor CI → merge → retro
+4. If approved: monitor CI → merge
 
 ### On receiving a PR merge event
 1. Update status to `merged`, notify Slack
-2. Do a brief retro if not already done
 
 ### On receiving a CI failure
 1. Read failure output, diagnose, fix, push, notify Slack — all in minimal turns

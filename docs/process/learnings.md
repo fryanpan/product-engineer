@@ -148,3 +148,11 @@ Technical discoveries that should persist across sessions.
 ## Supervisor Health Detection
 - The supervisor uses the `last_heartbeat` column (set by agent phone-home via `/heartbeat`) to detect stale agents. Don't confuse this with `updated_at`, which changes on any task field update (status, PR URL, metadata).
 - Always include `last_heartbeat` in SQL queries for supervisor context. Using `updated_at` for staleness detection gives false positives because status updates (which aren't real heartbeats) reset the timer. (Fixed in BC-162)
+
+## Agent Cost Optimization
+- Cache reads dominate cost at ~72% of total spend. At ~70K cached tokens/turn, cost is ~$0.02-0.03/turn for Sonnet. Reducing turns matters more than reducing prompt size.
+- **Implementation subagent pattern**: dispatching the coding phase as a subagent via the `Agent` tool gives it fresh ~20K context vs the parent's growing 100K+ history — 84% cheaper per turn. With ~25 implementation turns/task, this is the single biggest cost lever.
+- **Haiku for CI monitoring**: polling CI in a Haiku subagent (87% cheaper cache reads vs Sonnet: $0.04/MTok vs $0.30/MTok) is appropriate for low-intelligence retry loops.
+- Subagents dispatched via the `Agent` tool in Claude Code do NOT inherit the parent's custom MCP servers (e.g. `pe-tools`). They only get standard Claude Code tools. Use `gh pr checks` via Bash for CI status — not PE-specific tools like `check_ci_status`.
+- Plugin context overhead: each plugin adds 2-4K tokens to every turn. Removing commit-commands and scoping code-simplifier to simplification tasks only saves ~4-8K tokens/turn.
+- Retros add ~2 turns per task with low signal. Removing them from the default flow and doing them externally across sessions is more cost-efficient.
