@@ -43,7 +43,7 @@ export async function ensureProjectLead(
     secrets: productConfig.secrets,
     mode: productConfig.mode,
     gatewayConfig,
-    model: "sonnet",
+    model: "haiku",
   };
 
   // Initialize (idempotent — if config unchanged and container healthy, returns immediately)
@@ -83,7 +83,7 @@ export async function ensureConductor(
       ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
     },
     mode: "flexible",
-    model: "sonnet",
+    model: "haiku",
   };
 
   const res = await stub.fetch(new Request("http://project-lead/ensure-running", {
