@@ -1,3 +1,36 @@
+## 2026-04-10 - Discord bot not responding (octoturtle_assistant)
+
+### Time Breakdown
+| Started | Phase | 👤 Hands-On Time | 🤖 Agent Time | Problems |
+|---------|-------|-----------------|---------------|----------|
+| Apr 10 1:33pm | Diagnosis (Discord bot not responding) | █ 3m | █ 5m | |
+
+### Metrics
+| Metric | Duration |
+|--------|----------|
+| Total wall-clock | ~3 min |
+| Hands-on | ~3 min (100%) |
+| Automated agent time | ~2 min |
+| Idle/away | 0 |
+| Retro analysis time | ~5 min |
+
+### Key Observations
+- Root cause found in 2 turns: no active Claude Code session in octoturtle_assistant directory
+- Discord plugin is not a daemon — bot only works while a session with `--channels` is running
+- Worktrees inside `<repo>/.claude/worktrees/` automatically inherit `settings.json` (including `DISCORD_STATE_DIR`) — no extra config needed
+
+### Feedback
+**What worked:** Fast diagnosis, quick fix (created worktree, documented startup command)
+**What didn't:** Nothing documented the session requirement, so the issue wasn't obvious
+
+### Actions Taken
+| Issue | Action Type | Change |
+|-------|-------------|--------|
+| Discord session requirement undocumented | Update memory | Added active session requirement + worktree inheritance to `reference_discord_channels.md` |
+| octoturtle CLAUDE.md missing Discord bot section | Update CLAUDE.md | Added Discord Bot section with startup command and troubleshooting |
+
+---
+
 ## 2026-03-31 - Easter week planning, project setup, PR cleanup, CI fixes
 
 ### Time Breakdown
