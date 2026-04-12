@@ -212,6 +212,14 @@ export class Conductor extends Container<Bindings> {
         return this.handleEvent(request);
       case "/health":
         return Response.json({ ok: true, service: "conductor-do" });
+      case "/db-dump": {
+        const tables = ["tasks", "products", "settings", "token_usage", "slack_thread_map", "task_queue", "task_metrics", "merge_gate_retries", "recurring_schedules"];
+        const dump: Record<string, unknown[]> = {};
+        for (const t of tables) {
+          try { dump[t] = this.sqlExec.exec(`SELECT * FROM ${t}`).toArray(); } catch { dump[t] = []; }
+        }
+        return Response.json(dump);
+      }
       case "/tickets":
         return Response.json(listTasksData(this.sqlExec));
       case "/ticket/status":
