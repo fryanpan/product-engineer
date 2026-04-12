@@ -503,6 +503,16 @@ app.get("/api/metrics/summary", async (c) => {
   return conductor.fetch(new Request("http://internal/metrics/summary"));
 });
 
+// Conductor: dump all DB tables as JSON (one-time backup endpoint)
+app.get("/api/conductor/db-dump", async (c) => {
+  const apiKey = c.req.header("X-API-Key");
+  if (!apiKey || !timingSafeEqual(apiKey, c.env.API_KEY)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const conductor = getConductor(c.env);
+  return conductor.fetch(new Request("http://internal/db-dump"));
+});
+
 // Conductor: cleanup inactive agents
 app.post("/api/conductor/cleanup-inactive", async (c) => {
   const apiKey = c.req.header("X-API-Key");
