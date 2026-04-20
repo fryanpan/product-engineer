@@ -9,7 +9,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.87",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@sentry/bun": "^10.40.0",
     "hono": "^4.12.3",
     "mustache": "^4.2.0",
