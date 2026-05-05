@@ -13,6 +13,14 @@ Run this skill when:
 
 For the last two triggers, use a lightweight prompt: "Good moment for a quick retro. Want me to run `/retro`?" Do NOT auto-run — just offer. If the user declines, move on.
 
+## Session Mode
+
+Determine whether this is a **human-led** or **autonomous** session:
+- **Human-led**: A human is actively participating in the conversation (they've been sending messages, answering questions, etc.)
+- **Autonomous**: The agent is running independently (ticket agent, background task, no human interaction in the session)
+
+This affects Steps 3 and 5 below. All other steps run the same regardless of mode.
+
 ## Steps
 
 1. **Session time analysis**: Run the transcript analysis script to extract timing data. Do NOT write custom parsing code or use a subagent for JSONL extraction. Note the current time before starting — you'll record how long this analysis took in the retro log.
@@ -58,26 +66,30 @@ For the last two triggers, use a lightweight prompt: "Good moment for a quick re
    - Were there avoidable back-and-forth cycles (bugs that better testing would have caught, unclear requirements that better planning would have resolved)?
    - What was the ratio of productive work to debugging/rework?
 
-   Present these observations to the user as conversation starters. For each observation, also suggest what kind of action might address it (see Step 5 for action types). This gives the user something concrete to react to.
+   In human-led mode, present these observations to the user as conversation starters. In autonomous mode, use them as input to Step 4. For each observation, also suggest what kind of action might address it (see Step 4 for action types).
 
-3. **Ask the user**:
-  - What worked well in how we approached this?
-  - What was frustrating or slower than expected?
-  - Anything I should do differently?
+3. **Gather feedback** (mode-dependent):
 
-4. **Wait for their response** - don't assume or fill in answers. If the user responds without proposing specific actions, that's fine — you propose them in Step 5.
+   **Human-led mode:** Ask the user in a single prompt:
+   - What worked well in how we approached this?
+   - What was frustrating or slower than expected?
+   - Anything I should do differently?
 
-5. **Propose concrete actions**: For each issue identified (from your observations in Step 2 AND the user's feedback in Step 4), investigate the right action and propose a specific deliverable.
+   Wait for their response — don't assume or fill in answers.
 
-   **5a. Launch CLAUDE.md review in parallel.** While investigating actions below, launch a Task agent (`general-purpose` type) to audit CLAUDE.md. In the prompt, include your key observations from Step 2 and the user's feedback from Step 4. The agent should:
+   **Autonomous mode:** Skip this step. Use only the transcript observations from Step 2 as input to Step 5.
+
+4. **Propose concrete actions**: For each issue identified (from your observations in Step 2 AND the user's feedback from Step 3 if human-led), investigate the right action and propose a specific deliverable.
+
+   **4a. Launch CLAUDE.md review in parallel.** While investigating actions below, launch a Task agent (`general-purpose` type) to audit CLAUDE.md. In the prompt, include your key observations from Step 2 and the user's feedback from Step 3 (if human-led). The agent should:
    - Glob for all `**/CLAUDE.md` files in the project
    - Read each one and evaluate whether any sections need additions or updates based on the session observations and feedback you provided
    - Return specific proposed edits (section + exact change), not vague suggestions
    - If nothing needs changing, say so
 
-   Call this Task in the same message as your first tool calls for 5b — they'll run in parallel naturally. Do NOT use `run_in_background`.
+   Call this Task in the same message as your first tool calls for 4b — they'll run in parallel naturally. Do NOT use `run_in_background`.
 
-   **5b. Investigate actions for each issue.** Each action must be one of these types:
+   **4b. Investigate actions for each issue.** Each action must be one of these types:
 
    | Action Type | When to use | What to do |
    |-------------|-------------|------------|
@@ -91,9 +103,8 @@ For the last two triggers, use a lightweight prompt: "Good moment for a quick re
    1. Read the file you'd change (skill, CLAUDE.md, doc)
    2. Identify the specific section to edit
    3. Draft the exact change (not a vague suggestion)
-   4. Present to the user for approval before making changes
 
-   **5c. Merge CLAUDE.md review results.** When the subagent returns, incorporate its recommendations into your action proposals. Deduplicate with actions you've already proposed — if the subagent suggests something you've already covered, note it as reinforcement rather than listing it twice.
+   **4c. Merge CLAUDE.md review results.** When the subagent returns, incorporate its recommendations into your action proposals. Deduplicate with actions you've already proposed — if the subagent suggests something you've already covered, note it as reinforcement rather than listing it twice.
 
    **Example — good:**
    > Issue: Agent didn't check learnings.md before writing HTTP client code.
@@ -105,9 +116,13 @@ For the last two triggers, use a lightweight prompt: "Good moment for a quick re
    > Issue: Agent didn't check learnings.md before writing HTTP client code.
    > Action: "We should remember to check learnings next time."
 
-6. **Get approval and execute actions**: Present all proposed actions (from 5b and 5c) to the user and ask which ones they'd like to take. Then go execute the approved actions (edit skills, update CLAUDE.md, update docs, create tickets). Skip any the user declines.
+5. **Approve and execute actions** (mode-dependent):
 
-7. **Log to `docs/process/retrospective.md`** using this format:
+   **Human-led mode:** Present all proposed actions (from 4b and 4c) to the user and ask which ones they'd like to take. Execute approved actions; skip declined ones.
+
+   **Autonomous mode:** Execute actions that are low-risk and reversible (doc updates, learnings additions, ticket creation). Do NOT execute actions that change skill behavior or CLAUDE.md without human review — log these as "proposed but deferred" in the retro entry.
+
+6. **Log to `docs/process/retrospective.md`** using this format:
 ```markdown
    ## YYYY-MM-DD - [Brief context of what we worked on]
 
@@ -129,8 +144,8 @@ For the last two triggers, use a lightweight prompt: "Good moment for a quick re
    - [Patterns identified from transcript]
 
    ### Feedback
-   **What worked:** [User's feedback]
-   **What didn't:** [User's feedback]
+   **What worked:** [User's feedback, or "N/A — autonomous session" if autonomous]
+   **What didn't:** [User's feedback, or "N/A — autonomous session" if autonomous]
 
    ### Actions Taken
    | Issue | Action Type | Change |
@@ -138,7 +153,7 @@ For the last two triggers, use a lightweight prompt: "Good moment for a quick re
    | [Issue description] | Skill / CLAUDE.md / Doc / Ticket | [Specific change made or ticket created] |
 ```
 
-8. **Elevate to learnings**: Review the session for things worth adding to `docs/process/learnings.md`:
+7. **Elevate to learnings**: Review the session for things worth adding to `docs/process/learnings.md`:
   - Technical gotchas or surprises
   - Patterns that worked well
   - Mistakes to avoid repeating
@@ -152,6 +167,6 @@ For the last two triggers, use a lightweight prompt: "Good moment for a quick re
 
    Don't just ask "anything to add?" - identify candidates yourself.
 
-9. **Commit** all retro changes (actions, retrospective log, learnings) with message: `docs: retro for [brief context]`
+8. **Commit** all retro changes (actions, retrospective log, learnings) with message: `docs: retro for [brief context]`
 
-10. **Confirm** what was logged and what actions were taken.
+9. **Confirm** what was logged and what actions were taken.
