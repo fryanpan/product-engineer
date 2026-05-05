@@ -64,6 +64,15 @@ If a Notion URL appeared earlier in the session, default to writing there unless
 - After implementing UI changes or bug fixes, verify the result before reporting done. Never mark a UI task complete based solely on code being written — state what verification you performed and what you could not verify.
 - At the start of any worktree session involving commits, check whether the worktree is current with its base branch. Report the result before beginning implementation.
 
+## LLM Turn Efficiency
+
+Every turn re-reads the full context and costs money + latency. Minimize turns:
+
+- **Batch tool calls.** Call multiple independent tools in a single turn. Read several files at once. Run independent Bash commands in parallel.
+- **Combine communication with work.** Never spend a turn just sending a progress message — bundle it with the next implementation action.
+- **Chain bash with `&&`** when sequential. Run `git add -A && git commit -m "..." && git push origin <branch>` in one call, not three.
+- **Use dedicated tools.** `Read` over `cat`, `Grep` over `grep`, `Glob` over `find`/`ls`.
+
 ## Implementation
 
 - Read relevant existing files before writing anything
