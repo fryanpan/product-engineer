@@ -62,48 +62,30 @@ PREOF
 
 Capture the PR URL.
 
-### 4. Monitor CI (background agent)
+### 4. Monitor CI (channel-driven, no polling)
 
-Launch a **background agent** to poll CI status:
+The `github-claude-channel` plugin pushes GitHub events to your session as `<channel source="github" ...>` notifications. **Do NOT poll `gh pr checks` in a loop** — wait for the channel event instead.
 
-```
-Loop (max 10 iterations, 60s apart):
-  1. Run: gh pr checks <pr-url>
-  2. If all checks pass → done, return "ci_passed"
-  3. If any check fails → read failure output, return "ci_failed" with details
-  4. If checks still pending → wait 60s, retry
-```
+If `watch_repo("auto")` hasn't been called for this repo yet, call it once now. (Idempotent — safe to re-call.)
 
-**On CI failure:**
-- Read the failure details
-- Attempt to fix (max 3 attempts)
-- Push fix, restart CI monitoring
-- After 3 failed attempts: report to user, stop
+Then await channel events for this PR:
+- **✅ CI pass event** → proceed to step 5
+- **❌ CI fail event** → read failure output via one `gh pr checks <pr-url>` call (not a loop), diagnose, fix, push, await the next CI event
+- After 3 fix attempts: report to user, stop
 
-**On CI pass:** proceed to step 5.
+**Timeout fallback:** if no CI event arrives after 30 minutes, fall back to a single `gh pr checks <pr-url>` to confirm state (channel could miss occasionally; one explicit check is cheap).
 
-**No CI configured:** proceed to step 5 immediately.
+**No CI configured** (no event ever arrives, no checks configured) → proceed to step 5 after the timeout fallback confirms there are no checks.
 
-### 5. Monitor Copilot Review (background agent)
+### 5. Monitor Copilot Review (channel-driven, no polling)
 
-Launch a **background agent** to check for Copilot review:
+Same channel — wait for **👀 Review-requested events** on this PR. Copilot / github-advanced-security reviews surface as channel events from `github-claude-channel`.
 
-```
-Loop (max 5 iterations, 90s apart):
-  1. Run: gh pr view <pr-url> --json reviews --jq '.reviews[]'
-  2. Look for reviews from "copilot" or "github-advanced-security"
-  3. If approved or no Copilot review after all retries → done
-  4. If changes requested → return review comments
-  5. If pending → wait 90s, retry
-```
+- 👀 Review event from copilot/github-advanced-security → read via `gh pr view <pr-url> --json reviews --jq '.reviews[]'`
+- If approved → proceed to step 6
+- If changes requested → address comments, push, await the next review event (1 retry max)
 
-**On Copilot change request:**
-- Read the feedback
-- Address the comments
-- Push fixes
-- Restart Copilot monitoring (1 retry)
-
-**On approval or timeout:** proceed to step 6.
+**Timeout fallback:** if no review event arrives after 5 minutes, treat as "no Copilot review configured for this repo" and proceed to step 6.
 
 ### 6. Report & Merge Decision
 
@@ -126,6 +108,6 @@ Tell the user the PR is ready. Include the PR URL and status.
 ## Principles
 
 - **Don't ask, just do.** The pipeline runs end-to-end automatically. Only stop for failures or items needing human judgment.
-- **Background agents for waiting.** CI and Copilot monitoring run in the background. Don't block the user.
+- **Channel events over polling.** GitHub events (CI, reviews, merges, deploys) arrive as `<channel source="github" ...>` notifications via the `github-claude-channel` plugin. Don't write polling loops; await events. Polling wastes turns and stays expensive even when nothing's happening.
 - **Fix forward.** When CI or Copilot finds issues, fix them rather than asking the user. Escalate only after 3 failed fix attempts.
 - **Batch notifications.** Don't report "still pending." Report once when the pipeline completes or fails.
