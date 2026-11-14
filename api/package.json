@@ -13,7 +13,11 @@
     "@andersmyrmel/vard": "^1.2.0",
     "@cloudflare/containers": "^0.1.1",
     "@sentry/cloudflare": "^10.40.0",
-    "hono": "^4.12.25"
+    "hono": "^4.13.16"
+  },
+  "overrides": {
+    "undici": "7.30.1",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241205.0",
