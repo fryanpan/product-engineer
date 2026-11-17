@@ -40,7 +40,7 @@ bucket_name = "product-engineer-transcripts"
 
 [[kv_namespaces]]
 binding = "SESSIONS"
-id = "5b4f4cc3f3b342c59eead588a5446ca8"
+id = "bd3020f1d4b64960aaf6ff8ad25db419"
 
 [vars]
 # WORKER_URL must be set via `wrangler secret put WORKER_URL` before deploying.
